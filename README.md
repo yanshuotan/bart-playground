@@ -1,3 +1,3 @@
-# better-bart
+# BART Playground
 
-This is designed to be a more flexible and better implementation of BART.
+This is meant to be a modular implementation of BART that allows for easier experimentation.
