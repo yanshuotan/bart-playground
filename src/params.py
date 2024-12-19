@@ -1,6 +1,9 @@
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 
+from priors import BARTPrior
+from moves import Move
+
 class TreeParams:
     """
     Represents the parameters of a single tree in the BART model, combining both
@@ -257,7 +260,7 @@ class BARTParams:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, n_trees: int, sigma2: float):
+    def __init__(self, trees: list, sigma2: float, prior: BARTPrior, X : np.ndarray, y : np.ndarray):
         """
         Initialize the BART parameters.
 
@@ -269,9 +272,17 @@ class BARTParams:
         - sigma2: float
             Noise variance.
         """
-        self.trees = trees
-        self.n_trees = n_trees
+        self.X = X
+        self.y = y
+        self.prior = prior
+        self.n, self.p = X.shape
+        self.trees = copy.deepcopy(trees)
+        self.n_trees = len(self.trees)
         self.sigma2 = sigma2
+        self.noise_ratio = None
+
+    def copy(self):
+        return BARTParams(X=self.X, y=self.y, prior=self.prior, trees=self.trees, sigma2=self.sigma2)
 
     def evaluate(self, X: np.ndarray, holdout: list = None) -> float:
         """
@@ -295,3 +306,60 @@ class BARTParams:
                 total_output += tree.evaluate(X)  # Add the tree's output to the total
 
         return total_output
+    
+    def get_leaf_indicators(self, tree_ids):
+        ordinal_encoding = np.zeros((self.n, len(tree_ids)), dtype=int)
+        for col, tree_id in enumerate(tree_ids):
+            ordinal_encoding[:, col] = self.trees[tree_id].traverse_tree(self.X)
+        one_hot_encoder = OneHotEncoder(sparse_output=False)
+        leaf_indicators = one_hot_encoder.fit_transform(ordinal_encoding)
+        return leaf_indicators
+
+    def get_log_prior(self, tree_ids):
+        """
+        Compute the ratio of priors for a given move.
+
+        Parameters:
+        - move: Move
+            The move to compute the prior ratio for.
+
+        Returns:
+        - float
+            Prior ratio.
+        """
+        return np.sum([self.prior.tree_log_prior(self.trees[tree_id]) 
+                       for tree_id in tree_ids])
+
+    def get_log_marginal_lkhd(self, tree_ids):
+        leaf_indicators = self.get_leaf_indicators(tree_ids)
+        U, S, _ = svd(leaf_indicators)
+        logdet = np.sum(np.log(S ** 2 / self.noise_ratio + 1))
+        r_U_coefs = U.T @ resids
+        r_U = U @ y_U_coefs
+        ls_resids = np.sum((resids - r_U) ** 2)
+        ridge_bias = np.sum(r_U_coefs ** 2 / (S ** 2 / self.noise_ratio + 1))
+        return - (logdet + (ls_resids + ridge_bias) / self.params.sigma2) / 2
+
+    def sample_sigma2(self):
+        """
+        Sample the noise variance.
+
+        Returns:
+        - float
+            Sampled noise variance.
+        """
+        pass
+
+    def sample_leaf_params(self, tree_index: int):
+        """
+        Sample the leaf parameters for a given tree.
+
+        Parameters:
+        - tree_index: int
+            Index of the tree.
+
+        Returns:
+        - np.ndarray
+            Sampled leaf parameters.
+        """
+        pass
