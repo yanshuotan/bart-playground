@@ -25,7 +25,7 @@ class BART:
         self.y_preprocessor = y_preprocessor
         self.trace = []
 
-    def fit(self):
+    def fit(self, X, y):
         """
         Fit the BART model.
         """

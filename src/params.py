@@ -1,4 +1,5 @@
 import numpy as np
+from sklearn.preprocessing import OneHotEncoder
 
 class TreeParams:
     """
@@ -12,7 +13,7 @@ class TreeParams:
         Parameters:
         - var: np.ndarray
             Array of variables used for splitting at each node.
-        - split: np.ndarray
+        - thresholds: np.ndarray
             Array of split values at each node.
         - leaf_vals: np.ndarray
             Values at the leaf nodes.
@@ -22,7 +23,25 @@ class TreeParams:
         self.thresholds = np.full(3, np.nan, dtype=float)
         self.leaf_vals = np.full(3, np.nan, dtype=float)
 
-    def traverse_tree(self, x: np.ndarray) -> int:
+    def traverse_tree(self, X: np.ndarray) -> int:
+        """
+        Traverse the tree to find the leaf nodes for a given input data matrix.
+
+        Parameters:
+        - X: np.ndarray
+            Input data (2D array).
+
+        Returns:
+        - int
+            Index of the leaf node.
+        """
+        n = X.shape[0]
+        node_ids = np.zeros(n, dtype=int)
+        for i in range(n):
+            node_ids[i] = self._traverse_tree(X[i,:])
+        return node_ids
+
+    def _traverse_tree(self, x: np.ndarray) -> int:
         """
         Traverse the tree to find the leaf node for a given input.
 
@@ -49,20 +68,36 @@ class TreeParams:
             else:
                 node_id = node_id * 2 + 2  # Move to the right child
 
-    def evaluate(self, x: np.ndarray) -> float:
+    def evaluate(self, X: np.ndarray) -> float:
         """
-        Evaluate the tree for a given input.
+        Evaluate the tree for a given input data matrix.
+
 
         Parameters:
         - x: np.ndarray
-            Input data point (1D array).
+            Input data (2D array).
 
         Returns:
         - float
-            Output value of the tree.
+            Output values of the tree.
         """
-        leaf_index = self.traverse_tree(x)  # Find the leaf node for the input
-        return self.leaf_vals[leaf_index]  # Return the value at the leaf node
+        leaf_ids = self.traverse_tree(X)  # Find the leaf node for the input
+        return self.leaf_vals[leaf_ids]  # Return the value at the leaf node
+
+    # def _evaluate(self, x: np.ndarray) -> float:
+    #     """
+    #     Evaluate the tree for a given input.
+
+    #     Parameters:
+    #     - x: np.ndarray
+    #         Input data point (1D array).
+
+    #     Returns:
+    #     - float
+    #         Output value of the tree.
+    #     """
+    #     leaf_index = self.traverse_tree(x)  # Find the leaf node for the input
+    #     return self.leaf_vals[leaf_index]  # Return the value at the leaf node
 
     def _resize_arrays(self):
         """
@@ -208,14 +243,21 @@ class TreeParams:
         # Return a random split node
         return generator.choice(split_nodes)
     
-    def depth(self):
-        return 
+    def __str__(self):
+        return f"TreeParams(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals})"
+        
+    def __repr__(self):
+        """
+        Return a string representation of the TreeParams object.
+        """
+        return f"TreeParams(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals})"
+
 
 class BARTParams:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, n_trees: int, sigma_sq: float):
+    def __init__(self, trees: list, n_trees: int, sigma2: float):
         """
         Initialize the BART parameters.
 
@@ -224,20 +266,20 @@ class BARTParams:
             List of trees in the model.
         - n_trees: int
             Number of trees.
-        - sigma_sq: float
+        - sigma2: float
             Noise variance.
         """
         self.trees = trees
         self.n_trees = n_trees
-        self.sigma_sq = sigma_sq
+        self.sigma2 = sigma2
 
-    def evaluate(self, x: np.ndarray, holdout: list = None) -> float:
+    def evaluate(self, X: np.ndarray, holdout: list = None) -> float:
         """
         Evaluate the BART model for a given input by summing the outputs of all trees.
 
         Parameters:
         - x: np.ndarray
-            Input data point (1D array).
+            Input data points (2D array).
         - holdout: list<int>
             Indices of trees to exclude from evaluation (optional).
 
@@ -245,11 +287,11 @@ class BARTParams:
         - float
             Sum of the outputs of all trees.
         """
-        total_output = 0.0  # Initialize the total output
+        total_output = np.zeros(X.shape[0])
 
         # Iterate over all trees
         for i, tree in enumerate(self.trees):
             if holdout is None or i not in holdout:  # Skip trees in the holdout list
-                total_output += tree.evaluate(x)  # Add the tree's output to the total
+                total_output += tree.evaluate(X)  # Add the tree's output to the total
 
         return total_output

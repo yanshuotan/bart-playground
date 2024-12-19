@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.linalg import svd
 
 from params import BARTParams, TreeParams
 from moves import Move
@@ -22,19 +23,16 @@ class BARTPosterior:
         self.prior = prior
         self.X = X
         self.y = y
+        self.n = X.shape[0]
+        self.noise_ratio = None
 
     def get_leaf_indicators(self, tree_ids):
-        for tree_id in tree_ids:
-            pass
-
-
-    def get_log_marginal_likelihood(self, tree_ids, ):
-        """
-        Compute the log marginal likelihood for the tree structures with indices in tree_ids, 
-        conditioned on the tree parameters with indices not in tree_ids
-        """
-        residuals = self.y - self.params.evaluate([id for id in range(self.params.ntrees) if id not in tree_ids])
-
+        ordinal_encoding = np.zeros((self.n, len(tree_ids)), dtype=int)
+        for col, tree_id in enumerate(tree_ids):
+            ordinal_encoding[:, col] = self.params[tree_id].traverse_tree(self.X)
+        one_hot_encoder = OneHotEncoder(sparse_output=False)
+        leaf_indicators = one_hot_encoder.fit_transform(ordinal_encoding)
+        return leaf_indicators
 
     def get_log_prior_ratio(self, move : Move):
         """
@@ -70,9 +68,23 @@ class BARTPosterior:
             Marginal likelihood ratio.
         """
         self._validate_move(move)
-        current_marginal_lkhd = None
-        proposed_marginal_lkhd = None
+        if not marginalize:
+            resids = self.y - self.params.evaluate(holdout = move.trees_changed)
+        leaf_indicators_current = self.get_leaf_indicators(move.trees_changed)
+        leaf_indicators_proposed = self.get_leaf_indicators
+        
+        current_marginal_lkhd = self.get_log_marginal_lkhd(leaf_indicators_current)
+        proposed_marginal_lkhd = self.get_log_marginal_lkhd(leaf_indicators_proposed)
         return proposed_marginal_lkhd - current_marginal_lkhd
+
+    def get_log_marginal_lkhd(leaf_indicators):
+        U, S, _ = svd(leaf_indicators)
+        logdet = np.sum(np.log(S ** 2 / self.noise_ratio + 1))
+        r_U_coefs = U.T @ resids
+        r_U = U @ y_U_coefs
+        ls_resids = np.sum((resids - r_U) ** 2)
+        ridge_bias = np.sum(r_U_coefs ** 2 / (S ** 2 / self.noise_ratio + 1))
+        return - (logdet + (ls_resids + ridge_bias) / self.params.sigma2) / 2
 
     def _validate_move(self, move):
         if move.proposed is None:
