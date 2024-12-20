@@ -25,6 +25,7 @@ class TreeParams:
         self.vars[0] = -1
         self.thresholds = np.full(3, np.nan, dtype=float)
         self.leaf_vals = np.full(3, np.nan, dtype=float)
+        self.n_vals = np.full(3, np.nan, dtype=int)
 
     def traverse_tree(self, X: np.ndarray) -> int:
         """
@@ -122,6 +123,11 @@ class TreeParams:
         new_leaf_vals = np.zeros(new_length, dtype=float)
         new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
         self.leaf_vals = new_leaf_vals
+
+        # Resize n_vals array
+        new_n_vals = np.zeros(new_length, dtype=float)
+        new_n_vals[:len(self.n_vals)] = self.n_vals
+        self.n_vals = new_n_vals
 
 
     def split_leaf(self, leaf_index: int, var: int, split_threshold: float, left_val: float=np.nan, right_val: float=np.nan):
@@ -247,13 +253,36 @@ class TreeParams:
         return generator.choice(split_nodes)
     
     def __str__(self):
-        return f"TreeParams(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals})"
-        
-    def __repr__(self):
         """
         Return a string representation of the TreeParams object.
         """
+        return self._print_tree()
+        
+    def __repr__(self):
         return f"TreeParams(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals})"
+    
+    def _print_tree(self, node_id=0, prefix=""):
+        pprefix = prefix + "\t"
+        if self.vars[node_id] == -1: # Leaf node
+            return prefix + self._print_node(node_id)
+        else:
+            left_idx = node_idx * 2 + 1
+            right_idx = node_idx * 2 + 2
+            return (
+                prefix
+                + self._print_node(node_id)
+                + "\n"
+                + self._print_tree(left_idx, pprefix)
+                + "\n"
+                + self._print_tree(right_idx, pprefix)
+            )
+        
+    def _print_node(self, node_id):
+        if self.vars[node_id] == -1:
+            return f"Val: {self.leaf_vals[node_id]:0.3f} (leaf, n = {self.n_vals[node_id]})"
+        else:
+            return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
+                f" (split, n = {self.n_vals[node_id]})"
 
 
 class BARTParams:
@@ -272,10 +301,13 @@ class BARTParams:
         - sigma2: float
             Noise variance.
         """
+        # Fixed params
         self.X = X
         self.y = y
-        self.prior = prior
         self.n, self.p = X.shape
+        self.prior = prior
+
+        # Mutable params
         self.trees = copy.deepcopy(trees)
         self.n_trees = len(self.trees)
         self.sigma2 = sigma2
@@ -320,8 +352,7 @@ class BARTParams:
         Compute the ratio of priors for a given move.
 
         Parameters:
-        - move: Move
-            The move to compute the prior ratio for.
+        - tree_ids: 
 
         Returns:
         - float
@@ -331,14 +362,39 @@ class BARTParams:
                        for tree_id in tree_ids])
 
     def get_log_marginal_lkhd(self, tree_ids):
+        """
+        Calculate the log marginal likelihood for the given tree IDs.
+
+        Parameters:
+        -----------
+        tree_ids : array-like
+            The IDs of the trees to hold out for evaluation.
+
+        Returns:
+        --------
+        float
+            The log marginal likelihood value.
+
+        Notes:
+        ------
+        This function computes the log marginal likelihood by performing the following steps:
+        1. Calculate the residuals by subtracting the evaluated predictions from the actual values.
+        2. Obtain the leaf indicators for the given tree IDs.
+        3. Perform Singular Value Decomposition (SVD) on the leaf indicators.
+        4. Compute the log determinant using the singular values and noise ratio.
+        5. Calculate the coefficients and projections of the residuals onto the left singular vectors.
+        6. Compute the least squares residuals and ridge bias.
+        7. Return the negative half of the sum of the log determinant and the normalized residuals and bias.
+        """
+        resids = self.y - self.evaluate(self.X, holdout=tree_ids)
         leaf_indicators = self.get_leaf_indicators(tree_ids)
-        U, S, _ = svd(leaf_indicators)
+        U, S, _ = np.linalg.svd(leaf_indicators)
         logdet = np.sum(np.log(S ** 2 / self.noise_ratio + 1))
-        r_U_coefs = U.T @ resids
-        r_U = U @ y_U_coefs
-        ls_resids = np.sum((resids - r_U) ** 2)
-        ridge_bias = np.sum(r_U_coefs ** 2 / (S ** 2 / self.noise_ratio + 1))
-        return - (logdet + (ls_resids + ridge_bias) / self.params.sigma2) / 2
+        resid_u_coefs = U.T @ resids
+        resids_u = U @ resid_u_coefs
+        ls_resids = np.sum((resids - resids_u) ** 2)
+        ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / self.noise_ratio + 1))
+        return - (logdet + (ls_resids + ridge_bias) / self.sigma2) / 2
 
     def sample_sigma2(self):
         """

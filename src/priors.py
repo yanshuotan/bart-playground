@@ -65,8 +65,8 @@ class DefaultBARTPrior(BARTPrior):
         self.lambda_noise = lambda_noise
         self.nu_noise = nu_noise
 
-        def tree_log_prior(self, tree_params: TreeParams):
-            d = np.ceil(np.log2(np.arange(len(tree_params.vars)) + 2)) - 1
-            log_p_split = np.log(self.alpha) - self.beta * np.log(1 + d)
-            log_probs = np.where(self.var == -1, np.log(1 - np.exp(log_p_split)), log_p_split)
-            return np.sum(log_probs[~np.isnan(tree_params.var)])
+    def tree_log_prior(self, tree_params: TreeParams):
+        d = np.ceil(np.log2(np.arange(len(tree_params.vars)) + 2)) - 1
+        log_p_split = np.log(self.alpha) - self.beta * np.log(1 + d)
+        log_probs = np.where(self.var == -1, np.log(1 - np.exp(log_p_split)), log_p_split)
+        return np.sum(log_probs[~np.isnan(tree_params.var)])
