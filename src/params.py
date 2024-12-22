@@ -284,7 +284,6 @@ class TreeParams:
             return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
                 f" (split, n = {self.n_vals[node_id]})"
 
-
 class BARTParams:
     """
     Represents the parameters of the BART model.
@@ -352,7 +351,8 @@ class BARTParams:
         Compute the ratio of priors for a given move.
 
         Parameters:
-        - tree_ids: 
+        tree_ids : array-like
+            The IDs of the trees to hold out for evaluation.
 
         Returns:
         - float
@@ -396,7 +396,7 @@ class BARTParams:
         ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / self.noise_ratio + 1))
         return - (logdet + (ls_resids + ridge_bias) / self.sigma2) / 2
 
-    def sample_sigma2(self):
+    def resample_sigma2(self):
         """
         Sample the noise variance.
 
@@ -406,13 +406,13 @@ class BARTParams:
         """
         pass
 
-    def sample_leaf_params(self, tree_index: int):
+    def resample_leaf_params(self, tree_ids):
         """
-        Sample the leaf parameters for a given tree.
+        Sample the leaf parameters for the given tree IDs.
 
         Parameters:
-        - tree_index: int
-            Index of the tree.
+        tree_ids : array-like
+            The IDs of the trees to hold out for evaluation.
 
         Returns:
         - np.ndarray

@@ -39,7 +39,7 @@ class Move:
         log_prior_proposed = self.proposed.get_log_prior(self.trees_changed)
         return log_prior_proposed - log_prior_current
 
-    def get_log_marginal_lkhd_ratio(self, marginalize: bool = False):
+    def get_log_marginal_lkhd_ratio(self, marginalize: bool=False):
         """
         Compute the ratio of marginal likelihoods for a given move.
 
@@ -60,6 +60,9 @@ class Move:
             marginal_lkhd_current = self.get_log_marginal_lkhd(np.arange(self.current.n_trees))
             marginal_lkhd_proposed = self.get_log_marginal_lkhd(np.arange(self.current.n_trees))
         return marginal_lkhd_proposed - marginal_lkhd_current
+    
+    def get_log_MH_ratio(self, marginalize : bool=False):
+         return self.get_log_prior_ratio() + self.get_log_marginal_lkhd_ratio(marginalize)
 
 
 class Grow(Move):

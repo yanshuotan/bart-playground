@@ -2,7 +2,7 @@ class BART:
     """
     API for the BART model.
     """
-    def __init__(self, prior, posterior, sampler, x_preprocessor, y_preprocessor):
+    def __init__(self, prior, sampler, x_preprocessor, y_preprocessor):
         """
         Initialize the BART model.
 
@@ -19,7 +19,6 @@ class BART:
             Preprocessor for the output data.
         """
         self.prior = prior
-        self.posterior = posterior
         self.sampler = sampler
         self.x_preprocessor = x_preprocessor
         self.y_preprocessor = y_preprocessor
@@ -29,7 +28,7 @@ class BART:
         """
         Fit the BART model.
         """
-        pass
+        self.sampler
 
     def predict(self):
         """

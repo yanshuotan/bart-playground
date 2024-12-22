@@ -1,6 +1,6 @@
 import numpy as np
 
-from params import TreeStructure, TreeParams
+from params import TreeParams
 
 class BARTPrior:
     """
@@ -30,7 +30,7 @@ class BARTPrior:
         """
         pass
 
-    def noise_prior(self):
+    def sigma2_posterior_icdf(self, **kwargs):
         """
         Compute the prior for the noise variance.
         """
@@ -70,3 +70,9 @@ class DefaultBARTPrior(BARTPrior):
         log_p_split = np.log(self.alpha) - self.beta * np.log(1 + d)
         log_probs = np.where(self.var == -1, np.log(1 - np.exp(log_p_split)), log_p_split)
         return np.sum(log_probs[~np.isnan(tree_params.var)])
+    
+    def sigma2_posterior_icdf(self, **kwargs): # Change to add hyperparameters
+        """
+        Compute the prior for the noise variance.
+        """
+        pass
