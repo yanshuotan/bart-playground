@@ -2,8 +2,7 @@ import numpy as np
 from tqdm import tqdm
 
 from params import TreeParams, BARTParams
-from moves import all_moves, Move, Grow, Prune, Change, Swap
-
+from moves import all_moves
 
 class Sampler:
     """
@@ -62,6 +61,9 @@ class DefaultSampler(Sampler):
     def __init__(self, X, y, prior, n_iter: int, proposal_probs: dict,
                  generator : np.random.Generator, n_trees):
         self.n_trees = n_trees
+        if proposal_probs is None:
+            proposal_probs = {"grow" : 0.5,
+                              "prune" : 0.5}
         super().__init__(X, y, prior, n_iter, proposal_probs, None, generator)
 
     def get_init_state(self):
@@ -89,3 +91,5 @@ class DefaultSampler(Sampler):
                 iter_trace.append(move.current)
         self.iter_current.resample_sigma2()
         return self.iter_current
+    
+all_samplers = {"default" : DefaultSampler}

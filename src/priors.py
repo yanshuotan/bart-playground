@@ -76,3 +76,5 @@ class DefaultBARTPrior(BARTPrior):
         Compute the prior for the noise variance.
         """
         pass
+
+all_priors = {"default" : DefaultBARTPrior}

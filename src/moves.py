@@ -2,11 +2,6 @@ import numpy as np
 
 from params import BARTParams
 
-all_moves = {"grow" : Grow,
-            "prune" : Prune,
-            "change" : Change,
-            "swap" : Swap}
-
 class Move:
     """
     Base class for moves in the BART sampler.
@@ -118,3 +113,8 @@ class Swap(Move):
     Move to swap two trees.
     """
     pass
+
+all_moves = {"grow" : Grow,
+            "prune" : Prune,
+            "change" : Change,
+            "swap" : Swap}
