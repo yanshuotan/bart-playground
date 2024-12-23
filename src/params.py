@@ -1,8 +1,6 @@
 import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 
-from priors import BARTPrior
-from moves import Move
 
 class TreeParams:
     """
