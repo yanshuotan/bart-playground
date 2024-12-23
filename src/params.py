@@ -1,4 +1,5 @@
 import numpy as np
+import copy
 from sklearn.preprocessing import OneHotEncoder
 
 
@@ -183,8 +184,8 @@ class TreeParams:
         self.vars[split_index] = -1
         self.thresholds[split_index] = np.nan
 
-        left_child = leaf_index * 2 + 1
-        right_child = leaf_index * 2 + 2
+        left_child = split_index * 2 + 1
+        right_child = split_index * 2 + 2
         self.vars[left_child] = np.nan
         self.vars[right_child] = np.nan
 
@@ -264,8 +265,8 @@ class TreeParams:
         if self.vars[node_id] == -1: # Leaf node
             return prefix + self._print_node(node_id)
         else:
-            left_idx = node_idx * 2 + 1
-            right_idx = node_idx * 2 + 2
+            left_idx = node_id * 2 + 1
+            right_idx = node_id * 2 + 2
             return (
                 prefix
                 + self._print_node(node_id)
@@ -286,7 +287,7 @@ class BARTParams:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, sigma2: float, prior: BARTPrior, X : np.ndarray, y : np.ndarray):
+    def __init__(self, trees: list, sigma2: float, prior, X : np.ndarray, y : np.ndarray):
         """
         Initialize the BART parameters.
 
