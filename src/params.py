@@ -20,11 +20,11 @@ class TreeParams:
         - leaf_vals: np.ndarray
             Values at the leaf nodes.
         """
-        self.vars = np.full(3, np.nan, dtype=int)
+        self.vars = np.full(8, -2, dtype=int)
         self.vars[0] = -1
-        self.thresholds = np.full(3, np.nan, dtype=float)
-        self.leaf_vals = np.full(3, np.nan, dtype=float)
-        self.n_vals = np.full(3, np.nan, dtype=int)
+        self.thresholds = np.full(8, np.nan, dtype=float)
+        self.leaf_vals = np.full(8, np.nan, dtype=float)
+        self.n_vals = np.full(8, -2, dtype=int)
 
     def traverse_tree(self, X: np.ndarray) -> int:
         """
@@ -106,35 +106,36 @@ class TreeParams:
         """
         Resize the vars, split, and leaf_vals arrays by doubling their length.
         """
-        new_length = len(self.var) * 2
+        new_length = len(self.vars) * 2
 
         # Resize vars array
-        new_var = np.full(new_length, np.nan, dtype=int)
-        new_var[:len(self.var)] = self.var
-        self.var = new_var
+        new_vars = np.full(new_length, -2, dtype=int)
+        new_vars[:len(self.vars)] = self.vars
+        self.vars = new_vars
 
         # Resize split array
-        new_split = np.full(new_length, np.nan, dtype=float)
-        new_split[:len(self.split)] = self.split
-        self.split = new_split
+        new_thresholds = np.full(new_length, np.nan, dtype=float)
+        new_thresholds[:len(self.thresholds)] = self.thresholds
+        self.thresholds = new_thresholds
 
         # Resize leaf_vals array
-        new_leaf_vals = np.zeros(new_length, dtype=float)
+        new_leaf_vals = np.full(new_length, np.nan, dtype=float)
         new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
         self.leaf_vals = new_leaf_vals
 
         # Resize n_vals array
-        new_n_vals = np.zeros(new_length, dtype=float)
+        new_n_vals = np.full(new_length, -2, dtype=int)
         new_n_vals[:len(self.n_vals)] = self.n_vals
         self.n_vals = new_n_vals
 
 
-    def split_leaf(self, leaf_index: int, var: int, split_threshold: float, left_val: float=np.nan, right_val: float=np.nan):
+    def split_leaf(self, leaf_id: int, var: int, split_threshold: float, left_val: float=np.nan, 
+                   right_val: float=np.nan, left_n: int=-2, right_n: int=-2):
         """
         Split a leaf node into two child nodes.
 
         Parameters:
-        - leaf_index: int
+        - leaf_id: int
             Index of the leaf node to split.
         - var: int
             Variable to use for the split.
@@ -146,19 +147,19 @@ class TreeParams:
             Value to assign to the right child node.
         """
         # Check if the node is already a leaf
-        if self.vars[leaf_index] != -1:
+        if self.vars[leaf_id] != -1:
             raise ValueError("Node is not a leaf and cannot be split.")
 
         # Check if the index overflows and resize arrays if necessary
-        left_child = leaf_index * 2 + 1
-        right_child = leaf_index * 2 + 2
+        left_child = leaf_id * 2 + 1
+        right_child = leaf_id * 2 + 2
 
-        if left_child >= len(self.var) or right_child >= len(self.var):
+        if left_child >= len(self.vars) or right_child >= len(self.vars):
             self._resize_arrays()
 
         # Assign the split variable and threshold to the leaf node
-        self.vars[leaf_index] = var
-        self.thresholds[leaf_index] = split_threshold
+        self.vars[leaf_id] = var
+        self.thresholds[leaf_id] = split_threshold
 
         # Initialize the new leaf nodes
         self.vars[left_child] = -1
@@ -168,26 +169,49 @@ class TreeParams:
         self.leaf_vals[left_child] = left_val
         self.leaf_vals[right_child] = right_val
 
-    def prune_split(self, split_index: int):
+        self.n_vals[left_child] = left_n
+        self.n_vals[right_child] = right_n
+
+    def prune_split(self, node_id: int):
         """
         Prune a terminal split node, turning it back into a leaf.
 
         Parameters:
-        - split_index: int
+        - node_id: int
             Index of the split node to prune.
         """
         # Check if the node is a split node
-        if self.vars[split_index] == -1:
-            raise ValueError("Node is already a leaf and cannot be pruned.")
+        if not self.is_terminal_split_node(node_id):
+            raise ValueError("Node is not a terminal split node and cannot be pruned.")
 
         # Turn the split node into a leaf
-        self.vars[split_index] = -1
-        self.thresholds[split_index] = np.nan
+        self.vars[node_id] = -1
+        self.thresholds[node_id] = np.nan
 
-        left_child = split_index * 2 + 1
-        right_child = split_index * 2 + 2
-        self.vars[left_child] = np.nan
-        self.vars[right_child] = np.nan
+        left_child = node_id * 2 + 1
+        right_child = node_id * 2 + 2
+        self.vars[left_child] = -2
+        self.vars[right_child] = -2
+
+    def set_leaf_value(self, node_id, leaf_val):
+        if self.is_leaf(node_id):
+            self.leaf_vals[node_id] = leaf_val
+        else:
+            raise ValueError("Not a leaf")
+
+    def is_leaf(self, node_id):
+        return self.vars[node_id] == -1
+
+    def is_split_node(self, node_id):
+        return self.vars[node_id] not in [-1, -2]
+    
+    def is_terminal_split_node(self, node_id):
+        return self.is_split_node(node_id) \
+            and self.is_leaf(node_id * 2 + 1) \
+            and self.is_leaf(node_id * 2 + 2)
+    
+    def get_n_leaves(self):
+        return len([i for i in range(len(self.vars)) if self.is_leaf(i)])
 
     def get_random_terminal_split(self, generator: np.random.Generator) -> int:
         """
@@ -200,9 +224,7 @@ class TreeParams:
         # Find all terminal split nodes (nodes with two leaf children)
         terminal_splits = [
             i for i in range(len(self.vars))
-            if self.vars[i] != -1  # It's a split node
-            and self.vars[i * 2 + 1] == -1  # Left child is a leaf
-            and self.vars[i * 2 + 2] == -1  # Right child is a leaf
+            if self.is_terminal_split_node(i)
         ]
 
         if not terminal_splits:
@@ -222,7 +244,7 @@ class TreeParams:
         # Find all leaf nodes
         leaf_nodes = [
             i for i in range(len(self.vars))
-            if self.vars[i] == -1  # It's a leaf node
+            if self.is_leaf(i)  # It's a leaf node
         ]
 
         if not leaf_nodes:
@@ -242,7 +264,7 @@ class TreeParams:
         # Find all split nodes
         split_nodes = [
             i for i in range(len(self.vars))
-            if self.vars[i] is not None  # It's a split node
+            if self.is_split_node(i)  # It's a split node
         ]
 
         if not split_nodes:
@@ -258,7 +280,7 @@ class TreeParams:
         return self._print_tree()
         
     def __repr__(self):
-        return f"TreeParams(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals})"
+        return f"TreeParams(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals}, n_vals={self.n_vals})"
     
     def _print_tree(self, node_id=0, prefix=""):
         pprefix = prefix + "\t"
