@@ -1,6 +1,7 @@
 import numpy as np
 
 from params import BARTParams
+from params import TreeParams
 
 class Move:
     """
@@ -107,6 +108,51 @@ class Change(Move):
         tree.thresholds[node_id] = threshold
         return self.proposed
 
+class Split:
+    """
+    Move to Split a tree into two trees
+    """
+    # Assume that the input is defined in TreeParams Class
+
+    def collect_values(tree, start_index):
+        if start_index >= len(tree.thresholds):
+            return []
+        values = []
+        queue = [start_index]  
+        while queue:
+            current_index = queue.pop(0)  
+            if current_index < len(tree.thresholds): 
+                values.append(tree.thresholds[current_index])  
+            
+                left_index = 2 * current_index + 1
+                right_index = 2 * current_index + 2
+                if left_index < len(tree.thresholds):
+                    queue.append(left_index)
+                if right_index < len(tree.thresholds):
+                    queue.append(right_index)
+        return values
+    
+    def set_subtree_zero(tree, index):
+    
+        if index >= tree.thresholds.size + 1:
+            return tree
+        tree.thresholds[index] = 0
+    
+        left_index = 2 * index + 1
+        tree = Split.set_subtree_zero(tree, left_index)
+    
+        right_index = 2 * index + 2
+        tree = Split.set_subtree_zero(tree, right_index)
+        return tree
+    def split_move(tree):
+        node = tree.get_random_split
+        value = Split.collect_values(tree,node)
+        tree.thresholds = Split.set_subtree_zero(tree.thresholds,node)
+        tree_new = TreeParams()
+        tree_new.thresholds[:len(value)]=value # Here I assume the length of our original tree is larger than the subtree we split
+        return tree, tree_new
+    
+    
 
 class Swap(Move):
     """
