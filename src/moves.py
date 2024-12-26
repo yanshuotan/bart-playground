@@ -1,7 +1,7 @@
 import numpy as np
 
-from params import BARTParams
-from params import TreeParams
+from src.params import BARTParams
+from src.params import TreeParams
 
 class Move:
     """
@@ -132,28 +132,27 @@ class Split:
                     queue.append(right_index)
         return values
     
-    def set_subtree_zero(tree, index):
-    
-        if index >= tree.thresholds.size:
-            return tree
-        tree.thresholds[index] = 0
+    def set_subtree_zero(split_tree, index):
+        local_tree = np.copy(split_tree)
+        if index >= local_tree.size:
+            return local_tree
+        local_tree[index] = np.nan
     
         left_index = 2 * index + 1
-        tree = Split.set_subtree_zero(tree, left_index)
+        local_tree = Split.set_subtree_zero(split_tree, left_index)
     
         right_index = 2 * index + 2
-        tree = Split.set_subtree_zero(tree, right_index)
-        return tree
-    def split_move(tree):
-        node = tree.get_random_split
+        local_tree = Split.set_subtree_zero(local_tree, right_index)
+        return local_tree
+    def split_move(tree, generator: np.random.Generator):
+        node = tree.get_random_split(generator)
         value = Split.collect_values(tree,node)
-        tree.thresholds = Split.set_subtree_zero(tree.thresholds,node)
+        
         tree_new = TreeParams()
         tree_new.thresholds[:len(value)]=value # Here I assume the length of our original tree is larger than the subtree we split
-        return tree, tree_new
+        tree.thresholds = Split.set_subtree_zero(tree.thresholds,node)
+        return node,value,tree, tree_new
     
-    
-
 class Swap(Move):
     """
     Move to swap two trees.
