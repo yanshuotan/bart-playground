@@ -134,7 +134,7 @@ class Split:
     
     def set_subtree_zero(tree, index):
     
-        if index >= tree.thresholds.size + 1:
+        if index >= tree.thresholds.size:
             return tree
         tree.thresholds[index] = 0
     
