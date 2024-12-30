@@ -333,6 +333,10 @@ class BARTParams:
         self.sigma2 = sigma2
         self.noise_ratio = None
 
+    @property
+    def residuals(self):
+        return self.y - self.evaluate(self.X)
+
     def copy(self):
         return BARTParams(X=self.X, y=self.y, prior=self.prior, trees=self.trees, sigma2=self.sigma2)
 
@@ -407,7 +411,7 @@ class BARTParams:
         6. Compute the least squares residuals and ridge bias.
         7. Return the negative half of the sum of the log determinant and the normalized residuals and bias.
         """
-        resids = self.y - self.evaluate(self.X, holdout=tree_ids)
+        resids = self.residuals
         leaf_indicators = self.get_leaf_indicators(tree_ids)
         U, S, _ = np.linalg.svd(leaf_indicators)
         logdet = np.sum(np.log(S ** 2 / self.noise_ratio + 1))
@@ -425,7 +429,14 @@ class BARTParams:
         - float
             Sampled noise variance.
         """
-        pass
+        alpha, beta = self.prior.sigma2_prior_icdf(self.X, self.y, "linear")
+        resids = self.residuals
+        posterior_alpha = alpha + (self.n / 2.)
+        posterior_beta = beta + (0.5 * (np.sum(np.square(resids))))
+        posterior_theta = 1/posterior_beta
+        # here np uses the scale (theta parameterization) instead of the rate (beta parameterization)
+        sigma_2_posterior = np.power(np.random.gamma(posterior_alpha, posterior_theta), -0.5)
+        return sigma_2_posterior
 
     def resample_leaf_params(self, tree_ids):
         """
@@ -439,4 +450,14 @@ class BARTParams:
         - np.ndarray
             Sampled leaf parameters.
         """
-        pass
+        residuals = self.y - self.evaluate(self.X, tree_ids)
+        leaf_indicators = self.get_leaf_indicators(tree_ids)
+        leaf_averages = np.linalg.lstsq(leaf_indicators, residuals, rcond=None)[0]
+        likihood_mean = leaf_indicators @ leaf_averages
+        k = 2 # default value recommended in the BART paper
+        prior_var = 0.5 * (1 / k * np.sqrt(self.n_trees))
+        n = self.n
+        likihood_var = (self.resample_sigma2() ** 2) / n
+        posterior_variance = 1. / (1. / prior_var + 1. / likihood_var)
+        posterior_mean = likihood_mean * (prior_var / (likihood_var + prior_var))
+        return posterior_mean + (np.random.normal(size=len(self.y)) * np.power(posterior_variance / self.n_trees, 0.5))

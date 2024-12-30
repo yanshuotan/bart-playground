@@ -1,5 +1,9 @@
 import numpy as np
 
+from scipy.stats import gamma
+from scipy.optimize import minimize_scalar
+from sklearn.linear_model import LinearRegression
+
 from params import TreeParams
 
 class BARTPrior:
@@ -30,11 +34,33 @@ class BARTPrior:
         """
         pass
 
-    def sigma2_posterior_icdf(self, **kwargs):
+    def sigma2_prior_icdf(self, **kwargs):
         """
         Compute the prior for the noise variance.
         """
         pass
+
+def _get_lambda(nu, sigma_hat, q):
+    """
+    Compute the lambda parameter for the noise variance prior.
+    Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.
+
+    Parameters:
+    - nu: float
+        Shape parameter for the noise variance prior.
+    - sigma_hat: float
+        Variance of the noise.
+    - q: float
+        Quantile to compute.
+
+    """
+
+    def objective(l):
+        return np.abs(gamma.cdf(q, nu/2, scale=nu/(2*l)) - sigma_hat)
+
+    res = minimize_scalar(objective)
+    return res.x
+
 
 class DefaultBARTPrior(BARTPrior):
     """
@@ -71,10 +97,36 @@ class DefaultBARTPrior(BARTPrior):
         log_probs = np.where(self.var == -1, np.log(1 - np.exp(log_p_split)), log_p_split)
         return np.sum(log_probs[~np.isnan(tree_params.var)])
     
-    def sigma2_posterior_icdf(self, **kwargs): # Change to add hyperparameters
+    def sigma2_prior_icdf(self, X, y,specification, q=0.9, nu=3): # Change to add hyperparameters
         """
         Compute the prior for the noise variance.
+
+        According to the BART paper, the noise variance is drawn from an inverse chi-squared distribution.
+        We select the parameters of the gamma distribution: alpha and beta in a data dependent way.
+
+
         """
-        pass
+        # sigma hat is the variance of y under the naive specification and the variance of the residuals under the "linear" specification
+        if specification == "naive":
+            sigma_hat = np.std(y)
+        elif specification == "linear":
+            # Fit a linear model to the data
+            model = LinearRegression().fit(X, y)
+            y_hat = model.predict(X)
+            residuals = y - y_hat
+            sigma_hat = np.std(residuals)
+        else:
+            raise ValueError("Invalid specification for the noise variance prior.")
+        
+        lambda_prior = _get_lambda(nu, sigma_hat, q)
+
+        alpha = nu / 2
+        beta = nu / (2 * lambda_prior)
+        return alpha, beta
+
+        
+
+
+        
 
 all_priors = {"default" : DefaultBARTPrior}
