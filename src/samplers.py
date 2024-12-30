@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm import tqdm
 
-from params import TreeParams, BARTParams
+from params import Tree, BARTParams
 from moves import all_moves
 
 class Sampler:
@@ -48,7 +48,7 @@ class Sampler:
     def get_init_state(self):
         pass
 
-    def one_iter(self, temp):
+    def one_iter(self, temp=1, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
@@ -67,13 +67,12 @@ class DefaultSampler(Sampler):
         super().__init__(X, y, prior, n_iter, proposal_probs, None, generator)
 
     def get_init_state(self):
-        trees = [TreeParams() for _ in range(self.n_trees)]
-        Z = self.generator.uniform(0, 1)
-        sigma2 = self.prior.sigma2_icdf(Z) # Change to add hyperparameters
-        init_state = BARTParams(trees, sigma2, self.prior, self.X, self.y)
+        trees = [Tree() for _ in range(self.n_trees)]
+        global_params = prior.init_global_params(self.X, self.y)
+        init_state = BARTParams(trees, global_params, self.X, self.y)
         return init_state
 
-    def one_iter(self, temp=1):
+    def one_iter(self, temp=1, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
@@ -84,12 +83,15 @@ class DefaultSampler(Sampler):
             move.propose(self.generator)
             Z = self.generator.uniform(0, 1)
             if Z < np.exp(temp * move.get_log_MH_ratio()):
-                move.proposed.resample_leaf_params([k])
+                self.prior.resample_leaf_params(move.proposed, [k])
                 iter_trace.append(move.proposed)
                 self.iter_current = move.proposed
             else:
                 iter_trace.append(move.current)
-        self.iter_current.resample_sigma2()
-        return self.iter_current
+        self.prior.resample_global_params(self.iter_current)
+        if return_trace:
+            return iter_trace
+        else:
+            return self.iter_current
     
 all_samplers = {"default" : DefaultSampler}

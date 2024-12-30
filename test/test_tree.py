@@ -3,13 +3,13 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.params import TreeParams
+from src.params import Tree
 import numpy as np
 
 # Test tree traversal functionality
 def test_traverse_tree():
     """Test that traverse_tree correctly assigns nodes."""
-    tree = TreeParams()
+    tree = Tree()
     tree.vars = np.array([0, -1, -1], dtype=int)
     tree.thresholds = np.array([0.5, np.nan, np.nan])
     tree.leaf_vals = np.array([np.nan, 1.0, -1.0])
@@ -27,7 +27,7 @@ def test_traverse_tree():
 # Test tree evaluation functionality
 def test_evaluate():
     """Test that evaluate returns correct leaf values."""
-    tree = TreeParams()
+    tree = Tree()
     tree.vars = np.array([0, -1, -1], dtype=int)
     tree.thresholds = np.array([0.5, np.nan, np.nan])
     tree.leaf_vals = np.array([np.nan, 1.0, -1.0])
@@ -45,7 +45,7 @@ def test_evaluate():
 # Test split_leaf functionality
 def test_split_leaf():
     """Test that split_leaf correctly updates the tree structure."""
-    tree = TreeParams()
+    tree = Tree()
     split_index = 0  # Root node index
     var = 0  # Variable to split on
     threshold = 0.5  # Split threshold
@@ -65,7 +65,7 @@ def test_split_leaf():
 # Test prune_split functionality
 def test_prune_split():
     """Test that prune_split correctly prunes a split node into a leaf."""
-    tree = TreeParams()
+    tree = Tree()
     tree.vars = np.array([0, -1, -1, -2, -2, -2, -2, -2], dtype=int)
     tree.thresholds = np.array([0.5, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
     tree.leaf_vals = np.array([np.nan, 1.0, -1.0, np.nan, np.nan, np.nan, np.nan, np.nan])
@@ -83,7 +83,7 @@ def test_prune_split():
 # Test set_leaf_value functionality
 def test_set_leaf_value():
     """Test that set_leaf_value updates the leaf value correctly."""
-    tree = TreeParams()
+    tree = Tree()
     split_index = 0  # Root node index
     var = 0  # Variable to split on
     threshold = 0.5  # Split threshold
@@ -103,7 +103,7 @@ def test_set_leaf_value():
 # Test is_leaf functionality
 def test_is_leaf():
     """Test that is_leaf correctly identifies leaf nodes."""
-    tree = TreeParams()
+    tree = Tree()
     tree.split_leaf(0, var=0, split_threshold=0.5, left_val=1.0, right_val=np.nan)
     tree.split_leaf(2, var=1, split_threshold=0.7, left_val=2.0, right_val=-2.0)
 
@@ -117,7 +117,7 @@ def test_is_leaf():
 # Test is_split_node functionality
 def test_is_split_node():
     """Test that is_split_node correctly identifies split nodes."""
-    tree = TreeParams()
+    tree = Tree()
     tree.split_leaf(0, var=0, split_threshold=0.5, left_val=1.0, right_val=np.nan)
     tree.split_leaf(2, var=1, split_threshold=0.7, left_val=2.0, right_val=-2.0)
 
@@ -130,7 +130,7 @@ def test_is_split_node():
 # Test is_terminal_split_node functionality
 def test_is_terminal_split_node():
     """Test that is_terminal_split_node correctly identifies terminal split nodes."""
-    tree = TreeParams()
+    tree = Tree()
     tree.split_leaf(0, var=0, split_threshold=0.5, left_val=1.0, right_val=np.nan)
     tree.split_leaf(2, var=1, split_threshold=0.7, left_val=2.0, right_val=-2.0)
 
@@ -141,7 +141,7 @@ def test_is_terminal_split_node():
 # Test get_n_leaves functionality
 def test_get_n_leaves():
     """Test that get_n_leaves returns the correct number of leaf nodes."""
-    tree = TreeParams()
+    tree = Tree()
     tree.split_leaf(0, var=0, split_threshold=0.5, left_val=1.0, right_val=np.nan)
     tree.split_leaf(2, var=1, split_threshold=0.7, left_val=2.0, right_val=-2.0)
 
@@ -154,7 +154,7 @@ def test_get_n_leaves():
 # Test get_random_terminal_split functionality
 def test_get_random_terminal_split():
     """Test that get_random_terminal_split correctly selects a terminal split node."""
-    tree = TreeParams()
+    tree = Tree()
     tree.vars = np.array([0, 1, 1, -1, -1, -1, -1], dtype=int)
     tree.thresholds = np.array([0.5, 0.3, 0.7, np.nan, np.nan, np.nan, np.nan])
     tree.leaf_vals = np.array([np.nan, np.nan, np.nan, 1.0, -1.0, 2.0, -2.0])
@@ -173,7 +173,7 @@ def test_get_random_terminal_split():
 # Test get_random_leaf functionality
 def test_get_random_leaf():
     """Test that get_random_leaf correctly selects a leaf node."""
-    tree = TreeParams()
+    tree = Tree()
     tree.vars = np.array([0, -1, -1], dtype=int)
     tree.thresholds = np.array([0.5, np.nan, np.nan])
     tree.leaf_vals = np.array([np.nan, 1.0, -1.0])
@@ -186,7 +186,7 @@ def test_get_random_leaf():
 # Test get_random_split functionality
 def test_get_random_split():
     """Test that get_random_split correctly selects a split node."""
-    tree = TreeParams()
+    tree = Tree()
     tree.vars = np.array([0, -1, 1, -2, -2, -1, -1, -2], dtype=int)
     tree.thresholds = np.array([0.5, np.nan, 0.7, np.nan, np.nan, np.nan, np.nan, np.nan])
     tree.leaf_vals = np.array([np.nan, 1.0, np.nan, np.nan, np.nan, 2.0, -2.0, np.nan])

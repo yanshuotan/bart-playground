@@ -1,10 +1,11 @@
 import numpy as np
 
-from scipy.stats import gamma
+from scipy.stats import invgamma
+from scipy.linalg import sqrtm
 from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
 
-from params import TreeParams
+from params import Tree
 
 class BARTPrior:
     """
@@ -34,39 +35,19 @@ class BARTPrior:
         """
         pass
 
-    def sigma2_prior_icdf(self, **kwargs):
+    def resample_global_params(self, bart_params):
         """
-        Compute the prior for the noise variance.
+        Resample the global parameters of the BART model conditioned on the tree parameters
         """
         pass
-
-def _get_lambda(nu, sigma_hat, q):
-    """
-    Compute the lambda parameter for the noise variance prior.
-    Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.
-
-    Parameters:
-    - nu: float
-        Shape parameter for the noise variance prior.
-    - sigma_hat: float
-        Variance of the noise.
-    - q: float
-        Quantile to compute.
-
-    """
-
-    def objective(l):
-        return np.abs(gamma.cdf(q, nu/2, scale=nu/(2*l)) - sigma_hat)
-
-    res = minimize_scalar(objective)
-    return res.x
 
 
 class DefaultBARTPrior(BARTPrior):
     """
     Default implementation of the BART priors.
     """
-    def __init__(self, alpha: float, beta: float, mu_func, sigma2_func, lambda_noise: float, nu_noise: float):
+    def __init__(self, X, y, n_trees, tree_alpha: float, tree_beta: float, f_k=2.0, 
+                 eps_q: float=0.9, eps_nu: float=3, specification="linear"):
         """
         Initialize the default BART priors.
 
@@ -84,49 +65,81 @@ class DefaultBARTPrior(BARTPrior):
         - nu_noise: float
             Shape parameter for the noise prior.
         """
-        self.alpha = alpha
-        self.beta = beta
-        self.mu_func = mu_func
-        self.sigma2_func = sigma2_func
-        self.lambda_noise = lambda_noise
-        self.nu_noise = nu_noise
+        self.tree_alpha = tree_alpha
+        self.tree_beta = tree_beta
+        self.f_k = f_k
+        self.f_sigma2 = 0.25 / (self.k ** 2 * n_trees)
+        self.eps_q = eps_q
+        self.eps_nu = eps_nu
+        self.eps_lambda = self._fit_eps_lambda(X, y, specification)
 
-    def tree_log_prior(self, tree_params: TreeParams):
-        d = np.ceil(np.log2(np.arange(len(tree_params.vars)) + 2)) - 1
-        log_p_split = np.log(self.alpha) - self.beta * np.log(1 + d)
-        log_probs = np.where(self.var == -1, np.log(1 - np.exp(log_p_split)), log_p_split)
-        return np.sum(log_probs[~np.isnan(tree_params.var)])
-    
-    def sigma2_prior_icdf(self, X, y,specification, q=0.9, nu=3): # Change to add hyperparameters
+    def _fit_eps_lambda(self, X, y, specification="linear"):
         """
-        Compute the prior for the noise variance.
-
-        According to the BART paper, the noise variance is drawn from an inverse chi-squared distribution.
-        We select the parameters of the gamma distribution: alpha and beta in a data dependent way.
-
-
+        Compute the lambda parameter for the noise variance prior.
+        Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.
         """
-        # sigma hat is the variance of y under the naive specification and the variance of the residuals under the "linear" specification
         if specification == "naive":
             sigma_hat = np.std(y)
         elif specification == "linear":
             # Fit a linear model to the data
             model = LinearRegression().fit(X, y)
             y_hat = model.predict(X)
-            residuals = y - y_hat
-            sigma_hat = np.std(residuals)
+            resids = y - y_hat
+            sigma_hat = np.std(resids)
         else:
             raise ValueError("Invalid specification for the noise variance prior.")
-        
-        lambda_prior = _get_lambda(nu, sigma_hat, q)
+        def objective(l):
+            return np.abs(invgamma.cdf(self.eps_q, a=self.eps_nu/2, scale=self.eps_nu * l / 2) - sigma_hat)
+        result = minimize_scalar(objective)
+        return result.x
 
-        alpha = nu / 2
-        beta = nu / (2 * lambda_prior)
-        return alpha, beta
+    def tree_log_prior(self, bart_params, tree_ids):
+        log_prior = 0
+        for tree_id in tree_ids:
+            tree = bart_params.trees[tree_id]
+            d = np.ceil(np.log2(np.arange(len(tree.vars)) + 2)) - 1
+            log_p_split = np.log(self.alpha) - self.tree_beta * np.log(1 + d)
+            log_probs = np.where(self.var == -1, np.log(1 - np.exp(log_p_split)), log_p_split)
+            log_prior += np.sum(log_probs[~np.isnan(tree.var)])
+        return log_prior
 
-        
+    def tree_log_marginal_lkhd(self, bart_params, tree_ids):
+        resids = self.y - self.evaluate(self.X, all_except=tree_ids)
+        leaf_indicators, _, _ = bart_params.get_leaf_indicators(tree_ids)
+        U, S, _ = np.linalg.svd(leaf_indicators)
+        noise_ratio = bart_params.global_params["eps_sigma2"] / self.f_sigma2
+        logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
+        resid_u_coefs = U.T @ resids
+        resids_u = U @ resid_u_coefs
+        ls_resids = np.sum((resids - resids_u) ** 2)
+        ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / noise_ratio + 1))
+        return - (logdet + (ls_resids + ridge_bias) / bart_params.global_params["eps_sigma2"]) / 2
+    
+    def resample_global_params(self, bart_params):
+        eps_sigma2 = self.resample_eps_sigma2(bart_params.n, bart_params.residuals())
+        bart_params.global_params = {"eps_sigma2" : eps_sigma2}
+        return bart_params.global_params
+    
+    def init_global_params(self, X, y):
+        eps_sigma2 = self.resample_eps_sigma2(X.shape[1], y)
+        return {"eps_sigma2" : eps_sigma2}
+    
+    def sample_eps_sigma2(self, n, residuals):
+        # Convert to inverse gamma params
+        prior_alpha = self.eps_nu / 2
+        prior_beta = self.eps_nu * self.eps_lambda / 2
+        post_alpha = prior_alpha + n / 2
+        post_beta = prior_beta + np.sum(residuals ** 2) / 2
+        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1)[0]
+        return eps_sigma2
 
-
-        
+    def resample_leaf_params(self, bart_params, tree_ids):
+        residuals = bart_params.y - bart_params.evaluate(all_except=tree_ids)
+        leaf_indicators, col_ids_dict, leaf_ids = bart_params.get_leaf_indicators(tree_ids)
+        p = leaf_indicators.shape[1]
+        post_cov = np.linalg.inv(leaf_indicators.T @ leaf_indicators / bart_params.global_params["eps_sigma2"] + np.eye(p) / self.f_sigma2)
+        post_mean = post_cov @ leaf_indicators.T @ residuals / bart_params.global_params["eps_sigma2"]
+        leaf_params_new = sqrtm(post_cov) @ np.np.random.randn(p) + post_mean
+        bart_params.update_leaf_params(col_ids_dict, leaf_ids, leaf_params_new)
 
 all_priors = {"default" : DefaultBARTPrior}
