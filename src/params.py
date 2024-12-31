@@ -1,14 +1,21 @@
 import numpy as np
 import copy
-from sklearn.preprocessing import OneHotEncoder
 
+class Dataset:
+
+    def __init__(self, X, y):
+        self.X = X
+        self.y = y
+        self.n, self.p = X.shape
+        self.thresholds = dict({k : np.unique(X[:, k]) for k in range(self.p)})
 
 class Tree:
     """
     Represents the parameters of a single tree in the BART model, combining both
     the tree structure and leaf values into a single object.
     """
-    def __init__(self):
+    def __init__(self, data, vars=None, thresholds=None, leaf_vals=None, n=None, 
+                 node_indicators=None):
         """
         Initialize the tree parameters.
 
@@ -20,11 +27,26 @@ class Tree:
         - leaf_vals: np.ndarray
             Values at the leaf nodes.
         """
-        self.vars = np.full(8, -2, dtype=int)
-        self.vars[0] = -1
-        self.thresholds = np.full(8, np.nan, dtype=float)
-        self.leaf_vals = np.full(8, np.nan, dtype=float)
-        self.n_vals = np.full(8, -2, dtype=int)
+        self.data = data
+        if vars is None:
+            self.vars = np.full(8, -2, dtype=int) # -2 represents an inexistant node
+            self.vars[0] = -1 # -1 represents a leaf node
+            self.thresholds = np.full(8, np.nan, dtype=float)
+            self.leaf_vals = np.full(8, np.nan, dtype=float)
+            self.node_indicators = np.full((X.shape[0], 8), 0, dtype=bool)
+            self.node_indicators[:, 0] = True
+            self.n = np.full(8, -2, dtype=int)
+            self.n[0] = X.shape[0]
+        else:
+            self.vars = copy.deepcopy(vars)
+            self.thresholds = copy.deepcopy(thresholds)
+            self.leaf_vals = copy.deepcopy(leaf_vals)
+            self.n = copy.deepcopy(n)
+            self.node_indicators = copy.deepcopy(node_indicators)
+
+    def copy(self):
+        return Tree(self.data, self.vars, self.thresholds, self.leaf_vals, self.n, 
+                    self.node_indicators)
 
     def traverse_tree(self, X: np.ndarray) -> int:
         """
@@ -124,13 +146,17 @@ class Tree:
         self.leaf_vals = new_leaf_vals
 
         # Resize n_vals array
-        new_n_vals = np.full(new_length, -2, dtype=int)
-        new_n_vals[:len(self.n_vals)] = self.n_vals
-        self.n_vals = new_n_vals
+        new_n = np.full(new_length, -2, dtype=int)
+        new_n[:len(self.n)] = self.n
+        self.n = new_n
 
+        # Resize node_indicators array
+        new_node_indicators = np.full((self.node_indicators.shape[0], new_length), 0, dtype=bool)
+        new_node_indicators[:len(self.node_indicators.shape[1])] = self.n
+        self.node_indicators = new_node_indicators
 
-    def split_leaf(self, leaf_id: int, var: int, split_threshold: float, left_val: float=np.nan, 
-                   right_val: float=np.nan, left_n: int=-2, right_n: int=-2):
+    def split_leaf(self, node_id: int, var: int, threshold: float, left_val: float=np.nan, 
+                   right_val: float=np.nan):
         """
         Split a leaf node into two child nodes.
 
@@ -147,30 +173,47 @@ class Tree:
             Value to assign to the right child node.
         """
         # Check if the node is already a leaf
-        if self.vars[leaf_id] != -1:
+        if self.vars[node_id] != -1:
             raise ValueError("Node is not a leaf and cannot be split.")
 
         # Check if the index overflows and resize arrays if necessary
-        left_child = leaf_id * 2 + 1
-        right_child = leaf_id * 2 + 2
+        left_child = node_id * 2 + 1
+        right_child = node_id * 2 + 2
 
         if left_child >= len(self.vars) or right_child >= len(self.vars):
             self._resize_arrays()
 
         # Assign the split variable and threshold to the leaf node
-        self.vars[leaf_id] = var
-        self.thresholds[leaf_id] = split_threshold
+        self.vars[node_id] = var
+        self.thresholds[node_id] = threshold
 
         # Initialize the new leaf nodes
         self.vars[left_child] = -1
         self.vars[right_child] = -1
+        self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
+        self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
+        self.n[left_child] = np.sum(self.node_indicators[:, left_child])
+        self.n[right_child] = np.sum(self.node_indicators[:, right_child])
 
         # Assign the provided values to the new leaf nodes
         self.leaf_vals[left_child] = left_val
         self.leaf_vals[right_child] = right_val
-
-        self.n_vals[left_child] = left_n
-        self.n_vals[right_child] = right_n
+        
+        return self.n[left_child] > 0 and self.n[right_child] > 0
+    
+    def update_n(self, node_id=0):
+        if self.is_leaf(node_id):
+            return self.n[node_id] > 0
+        else:
+            var = self.vars[node_id]
+            threshold = self.thresholds[node_id]
+            left_child = node_id * 2 + 1
+            right_child = node_id * 2 + 2
+            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
+            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
+            self.n[left_child] = np.sum(self.node_indicators[:, left_child])
+            self.n[right_child] = np.sum(self.node_indicators[:, right_child])
+            return self.update_n(left_child) and self.update_n(right_child)
 
     def prune_split(self, node_id: int):
         """
@@ -188,6 +231,7 @@ class Tree:
         self.vars[node_id] = -1
         self.thresholds[node_id] = np.nan
 
+        # Delete previous leaf nodes
         left_child = node_id * 2 + 1
         right_child = node_id * 2 + 2
         self.vars[left_child] = -2
@@ -209,70 +253,31 @@ class Tree:
         return self.is_split_node(node_id) \
             and self.is_leaf(node_id * 2 + 1) \
             and self.is_leaf(node_id * 2 + 2)
-    
+
+    @property
+    def leaves(self):
+        return [i for i in range(len(self.vars)) if self.is_leaf(i)]
+
     @property
     def n_leaves(self):
-        return len([i for i in range(len(self.vars)) if self.is_leaf(i)])
+        return len(self.leaves)
+    
+    @property
+    def split_nodes(self):
+        return [i for i in range(len(self.vars)) if self.is_split_node(i)]
+    
+    @property
+    def terminal_split_nodes(self):
+        return [i for i in range(len(self.vars)) if self.is_terminal_split_node(i)]
+    
+    @property
+    def nonterminal_split_nodes(self):
+        return [i for i in range(len(self.vars)) if self.is_split_node(i) 
+                and not self.is_terminal_split_node(i)]
 
-    def get_random_terminal_split(self, generator: np.random.Generator) -> int:
-        """
-        Get a random terminal split node.
-
-        Returns:
-        - int
-            Index of the random terminal split node.
-        """
-        # Find all terminal split nodes (nodes with two leaf children)
-        terminal_splits = [
-            i for i in range(len(self.vars))
-            if self.is_terminal_split_node(i)
-        ]
-
-        if not terminal_splits:
-            raise ValueError("No terminal split nodes found.")
-
-        # Return a random terminal split node
-        return generator.choice(terminal_splits)
-
-    def get_random_leaf(self, generator: np.random.Generator) -> int:
-        """
-        Get a random leaf node.
-
-        Returns:
-        - int
-            Index of the random leaf node.
-        """
-        # Find all leaf nodes
-        leaf_nodes = [
-            i for i in range(len(self.vars))
-            if self.is_leaf(i)  # It's a leaf node
-        ]
-
-        if not leaf_nodes:
-            raise ValueError("No leaf nodes found.")
-
-        # Return a random leaf node
-        return generator.choice(leaf_nodes)
-
-    def get_random_split(self, generator: np.random.Generator) -> int:
-        """
-        Get a random split node.
-
-        Returns:
-        - int
-            Index of the random split node.
-        """
-        # Find all split nodes
-        split_nodes = [
-            i for i in range(len(self.vars))
-            if self.is_split_node(i)  # It's a split node
-        ]
-
-        if not split_nodes:
-            raise ValueError("No split nodes found.")
-
-        # Return a random split node
-        return generator.choice(split_nodes)
+    @property
+    def leaf_basis(self):
+        return self.node_indicators[:, self.leaves]
     
     def __str__(self):
         """
@@ -282,7 +287,7 @@ class Tree:
         
     def __repr__(self):
         return f"TreeParams(vars={self.vars}, thresholds={self.thresholds}, 
-        leaf_vals={self.leaf_vals}, n_vals={self.n_vals})"
+        leaf_vals={self.leaf_vals}, n_vals={self.n})"
     
     def _print_tree(self, node_id=0, prefix=""):
         pprefix = prefix + "\t"
@@ -302,16 +307,16 @@ class Tree:
         
     def _print_node(self, node_id):
         if self.vars[node_id] == -1:
-            return f"Val: {self.leaf_vals[node_id]:0.3f} (leaf, n = {self.n_vals[node_id]})"
+            return f"Val: {self.leaf_vals[node_id]:0.3f} (leaf, n = {self.n[node_id]})"
         else:
             return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
-                f" (split, n = {self.n_vals[node_id]})"
+                f" (split, n = {self.n[node_id]})"
 
 class BARTParams:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, global_params, X : np.ndarray, y : np.ndarray):
+    def __init__(self, trees: list, global_params, data : Dataset):
         """
         Initialize the BART parameters.
 
@@ -323,18 +328,17 @@ class BARTParams:
         - sigma2: float
             Noise variance.
         """
-        # Fixed params
-        self.X = X
-        self.y = y
-        self.n, self.p = X.shape
-
-        # Mutable params
-        self.trees = copy.deepcopy(trees)
+        self.data = data
+        self.trees = trees
         self.n_trees = len(self.trees)
-        self.global_params = copy.deepcopy(global_params)
+        self.global_params = global_params
 
-    def copy(self):
-        return BARTParams(trees=self.trees, global_params=self.global_params, X=self.X, y=self.y)
+    def copy(self, modified_tree_ids):
+        copied_trees = self.trees
+        for tree_id in modified_tree_ids:
+            copied_trees[tree_id] = self.trees.copy()
+        return BARTParams(trees=copied_trees, global_params=copy.deepcopy(self.global_params), 
+                          data=self.data)
 
     def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
         """
@@ -351,34 +355,26 @@ class BARTParams:
             Sum of the outputs of all trees.
         """
         if X is None:
-            X = self.X
-        if all_except is not None:
+            X = self.data.X
+        if tree_ids is not None:
+            pass
+        elif all_except is not None:
             tree_ids = [i for i in np.arange(self.n_trees) if i not in tree_ids]
+        else:
+            tree_ids = np.arange(self.n_trees)
         total_output = np.zeros(X.shape[0])
         # Iterate over all trees
         for i, tree in enumerate(self.trees):
             if i in tree_ids:  # Skip trees in the holdout list
                 total_output += tree.evaluate(X)  # Add the tree's output to the total
         return total_output
-    
-    def residuals(self, tree_ids="all"):
-        if tree_ids == "all":
-            tree_ids = np.arange(self.n_trees)
-        return self.y - self.evaluate(self.X, tree_ids)
 
-    def get_leaf_indicators(self, tree_ids):
-        ordinal_encoding = np.zeros((self.n, len(tree_ids)), dtype=int)
-        col_ids_dict = dict({})
-        col_id_counter = 0
-        for col, tree_id in enumerate(tree_ids):
-            ordinal_encoding[:, col] = self.trees[tree_id].traverse_tree(self.X)
-            col_ids_dict[tree_id] = np.arange(col_id_counter, col_id_counter + self.trees[tree_id].n_leaves)
-            col_id_counter += self.trees[tree_id].n_leaves
-        one_hot_encoder = OneHotEncoder(sparse_output=False)
-        leaf_indicators = one_hot_encoder.fit_transform(ordinal_encoding)
-        leaf_ids = one_hot_encoder.categories_
-        return leaf_indicators, col_ids_dict, leaf_ids
-    
-    def update_leaf_params(self, col_ids_dict, leaf_ids, leaf_params):
-        for i, (tree_id, col_ids) in enumerate(col_ids_dict):
-            self.trees[tree_id].leaf_vals[leaf_ids[i]] = leaf_params[col_ids]
+    def leaf_basis(self, tree_ids):
+        return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
+
+    def update_leaf_params(self, tree_ids, leaf_params):
+        leaf_counter = 0
+        for tree_id in tree_ids:
+            tree = self.trees[tree_id]
+            tree.leaf_vals[tree.leaves] = leaf_params[range(leaf_counter, leaf_counter + tree.n_leaves)]
+            leaf_counter += tree.n_leaves

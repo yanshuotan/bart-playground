@@ -5,7 +5,7 @@ from scipy.linalg import sqrtm
 from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
 
-from params import Tree
+from params import Tree, BARTParams
 
 class BARTPrior:
     """
@@ -105,8 +105,8 @@ class DefaultBARTPrior(BARTPrior):
 
     def tree_log_marginal_lkhd(self, bart_params, tree_ids):
         resids = self.y - self.evaluate(self.X, all_except=tree_ids)
-        leaf_indicators, _, _ = bart_params.get_leaf_indicators(tree_ids)
-        U, S, _ = np.linalg.svd(leaf_indicators)
+        leaf_basis = bart_params.leaf_basis(tree_ids)
+        U, S, _ = np.linalg.svd(leaf_basis)
         noise_ratio = bart_params.global_params["eps_sigma2"] / self.f_sigma2
         logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
         resid_u_coefs = U.T @ resids
@@ -116,15 +116,15 @@ class DefaultBARTPrior(BARTPrior):
         return - (logdet + (ls_resids + ridge_bias) / bart_params.global_params["eps_sigma2"]) / 2
     
     def resample_global_params(self, bart_params):
-        eps_sigma2 = self.resample_eps_sigma2(bart_params.n, bart_params.residuals())
+        eps_sigma2 = self._sample_eps_sigma2(bart_params.n, bart_params.y - bart_params.evaluate())
         bart_params.global_params = {"eps_sigma2" : eps_sigma2}
         return bart_params.global_params
     
     def init_global_params(self, X, y):
-        eps_sigma2 = self.resample_eps_sigma2(X.shape[1], y)
+        eps_sigma2 = self._sample_eps_sigma2(X.shape[1], y)
         return {"eps_sigma2" : eps_sigma2}
     
-    def sample_eps_sigma2(self, n, residuals):
+    def _sample_eps_sigma2(self, n, residuals):
         # Convert to inverse gamma params
         prior_alpha = self.eps_nu / 2
         prior_beta = self.eps_nu * self.eps_lambda / 2
@@ -135,11 +135,11 @@ class DefaultBARTPrior(BARTPrior):
 
     def resample_leaf_params(self, bart_params, tree_ids):
         residuals = bart_params.y - bart_params.evaluate(all_except=tree_ids)
-        leaf_indicators, col_ids_dict, leaf_ids = bart_params.get_leaf_indicators(tree_ids)
-        p = leaf_indicators.shape[1]
-        post_cov = np.linalg.inv(leaf_indicators.T @ leaf_indicators / bart_params.global_params["eps_sigma2"] + np.eye(p) / self.f_sigma2)
-        post_mean = post_cov @ leaf_indicators.T @ residuals / bart_params.global_params["eps_sigma2"]
+        leaf_basis = bart_params.leaf_basis(tree_ids)
+        p = leaf_basis.shape[1]
+        post_cov = np.linalg.inv(leaf_basis.T @ leaf_basis / bart_params.global_params["eps_sigma2"] + np.eye(p) / self.f_sigma2)
+        post_mean = post_cov @ leaf_basis.T @ residuals / bart_params.global_params["eps_sigma2"]
         leaf_params_new = sqrtm(post_cov) @ np.np.random.randn(p) + post_mean
-        bart_params.update_leaf_params(col_ids_dict, leaf_ids, leaf_params_new)
+        bart_params.update_leaf_params(tree_ids, leaf_params_new)
 
 all_priors = {"default" : DefaultBARTPrior}

@@ -1,10 +1,11 @@
 import numpy as np
 from tqdm import tqdm
+from abc import ABC, abstractmethod
 
 from params import Tree, BARTParams
 from moves import all_moves
 
-class Sampler:
+class Sampler(ABC):
     """
     Base class for the BART sampler.
     """
@@ -45,9 +46,11 @@ class Sampler:
         move_probs = list(self.proposals.values())
         return all_moves[self.generator.choice(moves, p=move_probs)]
     
+    @abstractmethod
     def get_init_state(self):
         pass
 
+    @abstractmethod
     def one_iter(self, temp=1, return_trace=False):
         """
         Perform one iteration of the sampler.

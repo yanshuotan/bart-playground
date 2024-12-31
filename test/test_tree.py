@@ -69,7 +69,7 @@ def test_prune_split():
     tree.vars = np.array([0, -1, -1, -2, -2, -2, -2, -2], dtype=int)
     tree.thresholds = np.array([0.5, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
     tree.leaf_vals = np.array([np.nan, 1.0, -1.0, np.nan, np.nan, np.nan, np.nan, np.nan])
-    tree.n_vals = np.array([-2, 100, 50, -2, -2, -2, -2, -2], dtype=int)
+    tree.n = np.array([-2, 100, 50, -2, -2, -2, -2, -2], dtype=int)
 
     prune_index = 0
     tree.prune_split(prune_index)
@@ -104,8 +104,8 @@ def test_set_leaf_value():
 def test_is_leaf():
     """Test that is_leaf correctly identifies leaf nodes."""
     tree = Tree()
-    tree.split_leaf(0, var=0, split_threshold=0.5, left_val=1.0, right_val=np.nan)
-    tree.split_leaf(2, var=1, split_threshold=0.7, left_val=2.0, right_val=-2.0)
+    tree.split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=np.nan)
+    tree.split_leaf(2, var=1, threshold=0.7, left_val=2.0, right_val=-2.0)
 
     assert tree.is_leaf(1), "Node 1 should be a leaf but is not!"
     assert tree.is_leaf(5), "Node 5 should be a leaf but is not!"
@@ -118,8 +118,8 @@ def test_is_leaf():
 def test_is_split_node():
     """Test that is_split_node correctly identifies split nodes."""
     tree = Tree()
-    tree.split_leaf(0, var=0, split_threshold=0.5, left_val=1.0, right_val=np.nan)
-    tree.split_leaf(2, var=1, split_threshold=0.7, left_val=2.0, right_val=-2.0)
+    tree.split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=np.nan)
+    tree.split_leaf(2, var=1, threshold=0.7, left_val=2.0, right_val=-2.0)
 
     assert tree.is_split_node(0), "Node 0 should be a split node but is not!"
     assert tree.is_split_node(2), "Node 2 should be a split node but is not!"
@@ -131,8 +131,8 @@ def test_is_split_node():
 def test_is_terminal_split_node():
     """Test that is_terminal_split_node correctly identifies terminal split nodes."""
     tree = Tree()
-    tree.split_leaf(0, var=0, split_threshold=0.5, left_val=1.0, right_val=np.nan)
-    tree.split_leaf(2, var=1, split_threshold=0.7, left_val=2.0, right_val=-2.0)
+    tree.split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=np.nan)
+    tree.split_leaf(2, var=1, threshold=0.7, left_val=2.0, right_val=-2.0)
 
     assert not tree.is_terminal_split_node(0), "Node 0 should not be a terminal split node but is incorrectly marked as one!"
     assert tree.is_terminal_split_node(2), "Node 2 should be a terminal split node but is not!"
@@ -142,8 +142,8 @@ def test_is_terminal_split_node():
 def test_get_n_leaves():
     """Test that get_n_leaves returns the correct number of leaf nodes."""
     tree = Tree()
-    tree.split_leaf(0, var=0, split_threshold=0.5, left_val=1.0, right_val=np.nan)
-    tree.split_leaf(2, var=1, split_threshold=0.7, left_val=2.0, right_val=-2.0)
+    tree.split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=np.nan)
+    tree.split_leaf(2, var=1, threshold=0.7, left_val=2.0, right_val=-2.0)
 
     expected_n_leaves = 3  # Nodes 1, 5, and 6 are leaves
     actual_n_leaves = tree.get_n_leaves()
@@ -161,7 +161,7 @@ def test_get_random_terminal_split():
     rng = np.random.default_rng(seed=42)
 
     try:
-        random_terminal_split = tree.get_random_terminal_split(rng)
+        random_terminal_split = tree.rand_terminal_split_node(rng)
         assert tree.vars[random_terminal_split] != -1, "Selected node is not a split!"
         assert tree.vars[random_terminal_split * 2 + 1] == -1, "Left child is not a leaf!"
         assert tree.vars[random_terminal_split * 2 + 2] == -1, "Right child is not a leaf!"
@@ -179,7 +179,7 @@ def test_get_random_leaf():
     tree.leaf_vals = np.array([np.nan, 1.0, -1.0])
     rng = np.random.default_rng(seed=0)
 
-    random_leaf = tree.get_random_leaf(rng)
+    random_leaf = tree.rand_leaf_node(rng)
     assert tree.vars[random_leaf] == -1, "Selected node is not a leaf!"
     print("test_get_random_leaf passed!")
 
@@ -193,7 +193,7 @@ def test_get_random_split():
     rng = np.random.default_rng(seed=42)
 
     try:
-        random_split = tree.get_random_split(rng)
+        random_split = tree.rand_split_node(rng)
         assert tree.is_split_node(random_split), f"Node {random_split} is not a split node!"
         print("test_get_random_split passed!")
     except ValueError as e:
