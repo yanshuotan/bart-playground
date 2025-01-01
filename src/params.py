@@ -14,12 +14,18 @@ class Tree:
         Initialize the tree parameters.
 
         Parameters:
-        - var: np.ndarray
-            Array of variables used for splitting at each node.
-        - thresholds: np.ndarray
-            Array of split values at each node.
-        - leaf_vals: np.ndarray
-            Values at the leaf nodes.
+        - data : Dataset
+            The dataset object containing the data.
+        - vars : np.ndarray, optional
+            Array of variables used for splitting at each node. Default is None.
+        - thresholds : np.ndarray, optional
+            Array of split values at each node. Default is None.
+        - leaf_vals : np.ndarray, optional
+            Values at the leaf nodes. Default is None.
+        - n : np.ndarray, optional
+            Array representing the number of data points at each node. Default is None.
+        - node_indicators : np.ndarray, optional
+            Boolean array indicating which data examples lie within each node. Default is None.
         """
         self.data = data
         if vars is None:
@@ -105,7 +111,16 @@ class Tree:
 
     def _resize_arrays(self):
         """
-        Resize the vars, split, and leaf_vals arrays by doubling their length.
+        Resize the internal arrays of the class by doubling their length.
+
+        This method resizes the following arrays:
+        - `vars`: An array of integers, resized to double its current length, with new elements initialized to -2.
+        - `thresholds`: An array of floats, resized to double its current length, with new elements initialized to NaN.
+        - `leaf_vals`: An array of floats, resized to double its current length, with new elements initialized to NaN.
+        - `n`: An array of integers, resized to double its current length, with new elements initialized to -2.
+        - `node_indicators`: A 2D boolean array, resized to double its current length along the second dimension, with new elements initialized to 0.
+
+        The existing elements of each array are preserved, and the new elements are initialized as specified.
         """
         new_length = len(self.vars) * 2
 
@@ -140,16 +155,18 @@ class Tree:
         Split a leaf node into two child nodes.
 
         Parameters:
-        - leaf_id: int
-            Index of the leaf node to split.
-        - var: int
-            Variable to use for the split.
-        - split_threshold: float
-            Threshold value for the split.
-        - left_val: float
-            Value to assign to the left child node.
-        - right_val: float
-            Value to assign to the right child node.
+        - node_id: int
+        - threshold: float
+        - left_val: float, optional
+            Value to assign to the left child node (default is np.nan).
+        - right_val: float, optional
+            Value to assign to the right child node (default is np.nan).
+        Returns:
+        - bool
+            True if both child nodes have more than 0 samples, False otherwise.
+        Raises:
+        - ValueError
+            If the node is not a leaf and cannot be split.
         """
         # Check if the node is already a leaf
         if self.vars[node_id] != -1:
@@ -181,6 +198,21 @@ class Tree:
         return self.n[left_child] > 0 and self.n[right_child] > 0
     
     def update_n(self, node_id=0):
+        """
+        Updates the counts of samples reaching each node in the decision tree.
+
+        This method recursively updates the counts of samples (`self.n`) for each node in the decision tree,
+        starting from the specified `node_id`. If the node is a leaf, it checks if the count of samples
+        reaching that node is greater than 0. If the node is not a leaf, it updates the counts for its
+        left and right children based on the splitting criterion defined by the variable and threshold
+        at the current node.
+
+        Parameters:
+        - node_id (int, optional): The ID of the node to start updating from. Defaults to 0 (the root node).
+
+        Returns:
+        - bool: True if the counts of samples reaching all nodes are greater than 0, False otherwise.
+        """
         if self.is_leaf(node_id):
             return self.n[node_id] > 0
         else:
@@ -297,15 +329,18 @@ class Parameters:
     """
     def __init__(self, trees: list, global_params, data : Dataset):
         """
-        Initialize the BART parameters.
+        Initializes the parameters for the model.
 
         Parameters:
-        - trees: list<Tree>
-            List of trees in the model.
-        - n_trees: int
-            Number of trees.
-        - sigma2: float
-            Noise variance.
+        - trees (list): A list of trees used in the model.
+        - global_params: Global parameters for the model.
+        - data (Dataset): The dataset to be used.
+
+        Attributes:
+        - data (Dataset): The dataset to be used.
+        - trees (list): A list of trees used in the model.
+        - n_trees (int): The number of trees in the model.
+        - global_params: Global parameters for the model.
         """
         self.data = data
         self.trees = trees
@@ -321,18 +356,23 @@ class Parameters:
 
     def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
         """
-        Evaluate the BART model for a given input by summing the outputs of all trees.
+        Evaluate the model on the given data.
 
         Parameters:
-        - x: np.ndarray
-            Input data points (2D array).
-        - holdout: list<int>
-            Indices of trees to exclude from evaluation (optional).
+        -----------
+        X : np.ndarray, optional
+            The input data to evaluate. If None, the model's internal data will be used.
+        tree_ids : list of int, optional
+            Specific tree indices to evaluate. If provided, only these trees will be used.
+        all_except : list of int, optional
+            Tree indices to exclude from evaluation. If provided, all trees except these will be used.
 
         Returns:
-        - float
-            Sum of the outputs of all trees.
+        --------
+        float
+            The total output of the evaluated trees on the input data.
         """
+
         if X is None:
             X = self.data.X
         if tree_ids is not None:
@@ -349,9 +389,28 @@ class Parameters:
         return total_output
 
     def leaf_basis(self, tree_ids):
+        """
+        Generate a horizontal stack of leaf basis arrays for the specified tree IDs.
+
+        Parameters:
+        - tree_ids (list of int): List of tree IDs for which to generate the leaf basis.
+
+        Returns:
+        - numpy.ndarray: A horizontally stacked array of leaf basis arrays corresponding to the given tree IDs.
+        """
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
     def update_leaf_vals(self, tree_ids, leaf_vals):
+        """
+        Update the leaf values of specified trees.
+
+        Parameters:
+        - tree_ids (list of int): List of tree IDs whose leaf values need to be updated.
+        - leaf_vals (list of float): List of new leaf values to be assigned to the trees.
+
+        Returns:
+        - None
+        """
         leaf_counter = 0
         for tree_id in tree_ids:
             tree = self.trees[tree_id]

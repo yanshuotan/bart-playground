@@ -43,8 +43,6 @@ class DefaultPreprocessor(Preprocessor):
         Parameters:
         - max_bins: int
             Maximum number of bins.
-        - quantile: bool
-            Whether to use quantiles for binning.
         """
         self.max_bins = max_bins
         self.splits = None

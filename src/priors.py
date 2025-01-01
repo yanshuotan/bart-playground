@@ -8,29 +8,110 @@ from sklearn.linear_model import LinearRegression
 
 from params import Tree, Parameters
 from moves import Move
+from util import Dataset
 
 class Prior:
     """
-    Represents the priors for the BART model.
+    Represents the prior for the BART model.
     """
     @abstractmethod
-    def init_global_params(self, data):
+    def fit(self, data : Dataset):
+        """
+        Fits the prior's hyperparameters to the provided dataset.
+        """
         pass
 
     @abstractmethod
-    def resample_global_params(self, bart_params):
+    def init_global_params(self, data : Dataset):
+        """
+        Initialize global parameters for the model.
+
+        Args:
+            data (object): An object containing the data with attributes:
+                - X (numpy.ndarray): The input features matrix.
+                - y (numpy.ndarray): The target values array.
+
+        Returns:
+            dict: A dictionary containing the initialized global parameters
+        """
+        pass
+
+    @abstractmethod
+    def resample_global_params(self, bart_params : Parameters):
+        """
+        Resamples the global parameters for the BART model.
+
+        This function resamples the global parameters based on the provided BART parameters.
+
+        Args:
+            bart_params (Parameters): An instance of the Parameters class containing 
+                                      the data and model parameters for BART.
+
+        Returns:
+            dict: A dictionary containing the resampled global parameters.
+        """
         pass
     
     @abstractmethod
-    def resample_leaf_vals(self, bart_params, tree_ids):
+    def resample_leaf_vals(self, bart_params : Parameters, tree_ids):
+        """
+        Resample the values of the leaf nodes for the specified trees.
+
+        This function updates the leaf parameters by resampling from the posterior
+        distribution given the current residuals and leaf basis.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters.
+        tree_ids : list or array-like
+            A list or array of tree indices for which the leaf values are to be resampled.
+
+        Returns:
+        --------
+        leaf_params_new : numpy.ndarray
+            The resampled leaf parameters.
+        """
         pass
 
     @abstractmethod
-    def trees_log_prior(self, bart_params, tree_ids):
+    def trees_log_prior(self, bart_params : Parameters, tree_ids):
+        """
+        Calculate the log prior probability of a set of trees.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters, 
+            including the list of trees.
+        tree_ids : list of int
+            A list of tree indices for which the log prior is to be calculated.
+
+        Returns:
+        --------
+        float
+            The log prior probability of the specified trees.
+        """
         pass
 
     @abstractmethod
-    def trees_log_marginal_lkhd(self, bart_params, tree_ids):
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, tree_ids):
+        """
+        Calculate the log marginal likelihood of the trees in a BART model.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters,
+            including data, global parameters, and methods for evaluation and leaf basis computation.
+        tree_ids : list or array-like
+            A list or array of tree identifiers for which the log marginal likelihood is to be computed.
+
+        Returns:
+        --------
+        float
+            The log marginal likelihood of the specified trees.
+        """
         pass
 
     def trees_log_prior_ratio(self, move : Move):
@@ -73,22 +154,29 @@ class DefaultPrior(Prior):
     def __init__(self, n_trees=200, tree_alpha: float=0.95, tree_beta: float=2.0, f_k=2.0, 
                  eps_q: float=0.9, eps_nu: float=3, specification="linear"):
         """
-        Initialize the default BART priors.
+        Initializes the parameters for the prior distribution.
 
-        Parameters:
-        - alpha: float
-            Parameter for the tree prior.
-        - beta: float
-            Parameter for the tree prior.
-        - mu_func: callable
-            Function for the mean of the leaf parameters.
-        - sigma2_func: callable
-            Function for the variance of the leaf parameters.
-        - lambda_noise: float
-            Scale parameter for the noise prior.
-        - nu_noise: float
-            Shape parameter for the noise prior.
+        Args:
+            n_trees (int, optional): Number of trees. Defaults to 200.
+            tree_alpha (float, optional): Alpha parameter for the tree prior. Defaults to 0.95.
+            tree_beta (float, optional): Beta parameter for the tree prior. Defaults to 2.0.
+            f_k (float, optional): Scaling factor for the variance of the leaf parameters. Defaults to 2.0.
+            eps_q (float, optional): Quantile used for setting the hyperprior for noise sigma2. Defaults to 0.9.
+            eps_nu (float, optional): Inverse chi-squared nu hyperparameter for noise sigma2. Defaults to 3.
+            specification (str, optional): Specification for a data-driven initial estimate for noise sigma2. Defaults to "linear".
+
+        Attributes:
+            n_trees (int): Number of trees.
+            tree_alpha (float): Alpha parameter for the tree prior.
+            tree_beta (float): Beta parameter for the tree prior.
+            f_k (float): Scaling factor for the variance of the leaf parameters.
+            f_sigma2 (float): Variance of the leaf parameters.
+            eps_q (float): Parameter for the epsilon prior.
+            eps_nu (float): Parameter for the epsilon prior.
+            eps_lambda (None): Placeholder for epsilon lambda parameter.
+            specification (str): Model specification.
         """
+
         self.n_trees = n_trees
         self.tree_alpha = tree_alpha
         self.tree_beta = tree_beta
@@ -99,19 +187,68 @@ class DefaultPrior(Prior):
         self.eps_lambda = None
         self.specification = specification
 
-    def fit(self, data):
+    def fit(self, data : Dataset):
+        """
+        Fits the prior's hyperparameters to the provided dataset.
+        """
         self.eps_lambda = self._fit_eps_lambda(data, self.specification)
 
     def init_global_params(self, data):
+        """
+        Initialize global parameters for the model.
+
+        This method samples the epsilon sigma squared (eps_sigma2) parameter 
+        based on the provided data and returns it in a dictionary.
+
+        Args:
+            data (object): An object containing the data with attributes:
+                - X (numpy.ndarray): The input features matrix.
+                - y (numpy.ndarray): The target values array.
+
+        Returns:
+            dict: A dictionary containing the initialized global parameter:
+                - eps_sigma2 (float): The sampled epsilon sigma squared value.
+        """
         eps_sigma2 = self._sample_eps_sigma2(data.X.shape[1], data.y)
         return {"eps_sigma2" : eps_sigma2}
 
-    def resample_global_params(self, bart_params):
+    def resample_global_params(self, bart_params : Parameters):
+        """
+        Resamples the global parameters for the BART model.
+
+        This function resamples the global parameters, specifically `eps_sigma2`, 
+        based on the provided BART parameters.
+
+        Args:
+            bart_params (Parameters): An instance of the Parameters class containing 
+                                      the data and model parameters for BART.
+
+        Returns:
+            dict: A dictionary containing the resampled global parameters.
+        """
         eps_sigma2 = self._sample_eps_sigma2(bart_params.data.n, 
                                              bart_params.data.y - bart_params.evaluate())
         return {"eps_sigma2" : eps_sigma2}
 
-    def resample_leaf_vals(self, bart_params, tree_ids):
+    def resample_leaf_vals(self, bart_params : Parameters, tree_ids):
+        """
+        Resample the values of the leaf nodes for the specified trees.
+
+        This function updates the leaf parameters by resampling from the posterior
+        distribution given the current residuals and leaf basis.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters.
+        tree_ids : list or array-like
+            A list or array of tree indices for which the leaf values are to be resampled.
+
+        Returns:
+        --------
+        leaf_params_new : numpy.ndarray
+            The resampled leaf parameters.
+        """
         residuals = bart_params.y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
         p = leaf_basis.shape[1]
@@ -123,7 +260,23 @@ class DefaultPrior(Prior):
         leaf_params_new = sqrtm(post_cov) @ np.np.random.randn(p) + post_mean
         return leaf_params_new
 
-    def trees_log_prior(self, bart_params, tree_ids):
+    def trees_log_prior(self, bart_params : Parameters, tree_ids):
+        """
+        Calculate the log prior probability of a set of trees.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters, 
+            including the list of trees.
+        tree_ids : list of int
+            A list of tree indices for which the log prior is to be calculated.
+
+        Returns:
+        --------
+        float
+            The log prior probability of the specified trees.
+        """
         log_prior = 0
         for tree_id in tree_ids:
             tree = bart_params.trees[tree_id]
@@ -134,7 +287,35 @@ class DefaultPrior(Prior):
             log_prior += np.sum(log_probs[~np.isnan(tree.var)])
         return log_prior
 
-    def trees_log_marginal_lkhd(self, bart_params, tree_ids):
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, tree_ids):
+        """
+        Calculate the log marginal likelihood of the trees in a BART model.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters,
+            including data, global parameters, and methods for evaluation and leaf basis computation.
+        tree_ids : list or array-like
+            A list or array of tree identifiers for which the log marginal likelihood is to be computed.
+
+        Returns:
+        --------
+        float
+            The log marginal likelihood of the specified trees.
+
+        Notes:
+        ------
+        This method computes the log marginal likelihood by performing the following steps:
+        1. Compute the residuals by subtracting the evaluated values of all trees except the specified ones from the observed data.
+        2. Compute the leaf basis for the specified trees.
+        3. Perform Singular Value Decomposition (SVD) on the leaf basis.
+        4. Calculate the noise ratio using the global parameters.
+        5. Compute the log determinant of the modified singular values.
+        6. Project the residuals onto the left singular vectors.
+        7. Compute the least squares residuals and ridge bias.
+        8. Combine the log determinant, least squares residuals, and ridge bias to obtain the log marginal likelihood.
+        """
         resids = bart_params.data.y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
         U, S, _ = np.linalg.svd(leaf_basis)

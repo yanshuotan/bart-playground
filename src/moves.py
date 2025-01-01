@@ -12,8 +12,6 @@ class Move(ABC):
         Initialize the move.
 
         Parameters:
-        - random_state: int
-            Random state for reproducibility.
         - current: BARTParams
             Current state of the BART model.
         - trees_changed: np.ndarray
@@ -32,7 +30,7 @@ class Move(ABC):
 
 class Grow(Move):
     """
-    Move to grow a tree.
+    Move to grow a new split.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
         super().__init__(current, trees_changed)
@@ -53,7 +51,7 @@ class Grow(Move):
 
 class Prune(Move):
     """
-    Move to prune a tree.
+    Move to prune a terminal split.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
         super().__init__(current, trees_changed)
@@ -69,7 +67,7 @@ class Prune(Move):
 
 class Change(Move):
     """
-    Move to change a tree.
+    Move to change the split variable and threshold for an internal node.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
         super().__init__(current, trees_changed)
@@ -92,7 +90,7 @@ class Change(Move):
 
 class Swap(Move):
     """
-    Move to swap two trees.
+    Move to swap the split variables and thresholds for a pair of parent-child nodes.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
         super().__init__(current, trees_changed)
