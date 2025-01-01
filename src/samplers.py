@@ -9,7 +9,7 @@ class Sampler(ABC):
     """
     Base class for the BART sampler.
     """
-    def __init__(self, data, prior, n_iter: int, proposal_probs: dict,  
+    def __init__(self, prior, proposal_probs: dict,  
                  generator : np.random.Generator, temp_schedule: np.ndarray):
         """
         Initialize the sampler.
@@ -24,9 +24,9 @@ class Sampler(ABC):
         - temperature_schedule: np.ndarray
             Schedule of temperatures for annealing.
         """
-        self.data = data
+        self.data = None
         self.prior = prior
-        self.n_iter = n_iter
+        self.n_iter = None
         self.proposals = proposal_probs
         if temp_schedule is None:
             temp_schedule = np.ones(n_iter)
@@ -34,9 +34,15 @@ class Sampler(ABC):
         self.trace = []
         self.generator = generator
 
-    def run(self):
+    def add_data(self, data):
+        self.data = data
+
+    def run(self, n_iter):
+        self.n_iter = n_iter
+        if self.data is None:
+            raise AttributeError("Data has not been added yet.")
         self.current = self.get_init_state()
-        for iter in tqdm(range(self.n_iter)):
+        for iter in tqdm(range(n_iter)):
             self.current = self.one_iter(self.temp_schedule[iter])
             self.trace.append(self.current)
     
@@ -60,14 +66,13 @@ class DefaultSampler(Sampler):
     """
     Default implementation of the BART sampler.
     """
-    def __init__(self, data, prior, n_iter: int, proposal_probs: dict,
-                 generator : np.random.Generator, n_trees, tol=100):
-        self.n_trees = n_trees
+    def __init__(self, prior, proposal_probs: dict,
+                 generator : np.random.Generator, tol=100):
         self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
-        super().__init__(data, prior, n_iter, proposal_probs, None, generator)
+        super().__init__(prior, proposal_probs, None, generator)
 
     def get_init_state(self):
         trees = [Tree() for _ in range(self.n_trees)]
@@ -81,7 +86,7 @@ class DefaultSampler(Sampler):
         """
         iter_trace = [self.current]
         iter_current = self.current
-        for k in range(self.n_trees):
+        for k in range(self.prior.n_trees):
             move = self.sample_move()(self.current, [k], self.tol)
             move.propose(self.generator)
             Z = self.generator.uniform(0, 1)
@@ -99,3 +104,8 @@ class DefaultSampler(Sampler):
             return iter_current
     
 all_samplers = {"default" : DefaultSampler}
+
+default_proposal_probs = {"grow" : 0.25,
+                          "prune" : 0.25,
+                          "change" : 0.4,
+                          "swap" : 0.1}

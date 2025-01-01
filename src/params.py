@@ -27,10 +27,10 @@ class Tree:
             self.vars[0] = -1 # -1 represents a leaf node
             self.thresholds = np.full(8, np.nan, dtype=float)
             self.leaf_vals = np.full(8, np.nan, dtype=float)
-            self.node_indicators = np.full((X.shape[0], 8), 0, dtype=bool)
+            self.node_indicators = np.full((data.X.shape[0], 8), 0, dtype=bool)
             self.node_indicators[:, 0] = True
             self.n = np.full(8, -2, dtype=int)
-            self.n[0] = X.shape[0]
+            self.n[0] = data.X.shape[0]
         else:
             self.vars = copy.deepcopy(vars)
             self.thresholds = copy.deepcopy(thresholds)
@@ -102,21 +102,6 @@ class Tree:
         """
         leaf_ids = self.traverse_tree(X)  # Find the leaf node for the input
         return self.leaf_vals[leaf_ids]  # Return the value at the leaf node
-
-    # def _evaluate(self, x: np.ndarray) -> float:
-    #     """
-    #     Evaluate the tree for a given input.
-
-    #     Parameters:
-    #     - x: np.ndarray
-    #         Input data point (1D array).
-
-    #     Returns:
-    #     - float
-    #         Output value of the tree.
-    #     """
-    #     leaf_index = self.traverse_tree(x)  # Find the leaf node for the input
-    #     return self.leaf_vals[leaf_index]  # Return the value at the leaf node
 
     def _resize_arrays(self):
         """

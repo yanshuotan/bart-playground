@@ -70,7 +70,7 @@ class DefaultPrior(Prior):
     """
     Default implementation of the BART priors.
     """
-    def __init__(self, data, n_trees, tree_alpha: float, tree_beta: float, f_k=2.0, 
+    def __init__(self, n_trees=200, tree_alpha: float=0.95, tree_beta: float=2.0, f_k=2.0, 
                  eps_q: float=0.9, eps_nu: float=3, specification="linear"):
         """
         Initialize the default BART priors.
@@ -89,13 +89,18 @@ class DefaultPrior(Prior):
         - nu_noise: float
             Shape parameter for the noise prior.
         """
+        self.n_trees = n_trees
         self.tree_alpha = tree_alpha
         self.tree_beta = tree_beta
         self.f_k = f_k
         self.f_sigma2 = 0.25 / (self.k ** 2 * n_trees)
         self.eps_q = eps_q
         self.eps_nu = eps_nu
-        self.eps_lambda = self._fit_eps_lambda(data, specification)
+        self.eps_lambda = None
+        self.specification = specification
+
+    def fit(self, data):
+        self.eps_lambda = self._fit_eps_lambda(data, self.specification)
 
     def init_global_params(self, data):
         eps_sigma2 = self._sample_eps_sigma2(data.X.shape[1], data.y)
@@ -148,7 +153,7 @@ class DefaultPrior(Prior):
         Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.
         """
         if specification == "naive":
-            sigma_hat = np.std(y)
+            sigma_hat = np.std(data.y)
         elif specification == "linear":
             # Fit a linear model to the data
             model = LinearRegression().fit(data.X, data.y)
