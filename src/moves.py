@@ -1,13 +1,13 @@
 import numpy as np
 from abc import ABC, abstractmethod
 
-from params import BARTParams
+from params import Parameters
 
 class Move(ABC):
     """
     Base class for moves in the BART sampler.
     """
-    def __init__(self, current : BARTParams, trees_changed: np.ndarray):
+    def __init__(self, current : Parameters, trees_changed: np.ndarray):
         """
         Initialize the move.
 
@@ -30,42 +30,11 @@ class Move(ABC):
         """
         pass
 
-    def get_log_prior_ratio(self):
-        log_prior_current = self.current.get_log_prior(self.trees_changed)
-        log_prior_proposed = self.proposed.get_log_prior(self.trees_changed)
-        return log_prior_proposed - log_prior_current
-
-    def get_log_marginal_lkhd_ratio(self, marginalize: bool=False):
-        """
-        Compute the ratio of marginal likelihoods for a given move.
-
-        Parameters:
-        - move: Move
-            The move to compute the marginal likelihood ratio for.
-        - marginalize: bool
-            Whether to marginalize over the ensemble.
-
-        Returns:
-        - float
-            Marginal likelihood ratio.
-        """
-        if not marginalize:
-            marginal_lkhd_current = self.get_log_marginal_lkhd(self.trees_changed)
-            marginal_lkhd_proposed = self.get_log_marginal_lkhd(self.trees_changed)
-        else:
-            marginal_lkhd_current = self.get_log_marginal_lkhd(np.arange(self.current.n_trees))
-            marginal_lkhd_proposed = self.get_log_marginal_lkhd(np.arange(self.current.n_trees))
-        return marginal_lkhd_proposed - marginal_lkhd_current
-    
-    def get_log_MH_ratio(self, marginalize : bool=False):
-         return self.get_log_prior_ratio() + self.get_log_marginal_lkhd_ratio(marginalize)
-
-
 class Grow(Move):
     """
     Move to grow a tree.
     """
-    def __init__(self, current : BARTParams, trees_changed: np.ndarray, tol=1000):
+    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
         super().__init__(current, trees_changed)
         assert len(trees_changed) == 1
         self.tol = tol
@@ -86,9 +55,10 @@ class Prune(Move):
     """
     Move to prune a tree.
     """
-    def __init__(self, current : BARTParams, trees_changed: np.ndarray):
+    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
         super().__init__(current, trees_changed)
         assert len(trees_changed) == 1
+        self.tol = tol
 
     def propose(self, generator):
         self.proposed = self.curent.copy(self.trees_changed)
@@ -101,7 +71,7 @@ class Change(Move):
     """
     Move to change a tree.
     """
-    def __init__(self, current : BARTParams, trees_changed: np.ndarray, tol=1000):
+    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
         super().__init__(current, trees_changed)
         assert len(trees_changed) == 1
         self.tol = tol
@@ -124,7 +94,7 @@ class Swap(Move):
     """
     Move to swap two trees.
     """
-    def __init__(self, current : BARTParams, trees_changed: np.ndarray, tol=1000):
+    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
         super().__init__(current, trees_changed)
         assert len(trees_changed) == 1
         self.tol = tol

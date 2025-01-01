@@ -1,20 +1,14 @@
 import numpy as np
 import copy
 
-class Dataset:
-
-    def __init__(self, X, y):
-        self.X = X
-        self.y = y
-        self.n, self.p = X.shape
-        self.thresholds = dict({k : np.unique(X[:, k]) for k in range(self.p)})
+from util import Dataset
 
 class Tree:
     """
     Represents the parameters of a single tree in the BART model, combining both
     the tree structure and leaf values into a single object.
     """
-    def __init__(self, data, vars=None, thresholds=None, leaf_vals=None, n=None, 
+    def __init__(self, data : Dataset, vars=None, thresholds=None, leaf_vals=None, n=None, 
                  node_indicators=None):
         """
         Initialize the tree parameters.
@@ -312,7 +306,7 @@ class Tree:
             return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
                 f" (split, n = {self.n[node_id]})"
 
-class BARTParams:
+class Parameters:
     """
     Represents the parameters of the BART model.
     """
@@ -337,7 +331,7 @@ class BARTParams:
         copied_trees = self.trees
         for tree_id in modified_tree_ids:
             copied_trees[tree_id] = self.trees.copy()
-        return BARTParams(trees=copied_trees, global_params=copy.deepcopy(self.global_params), 
+        return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), 
                           data=self.data)
 
     def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
@@ -372,9 +366,10 @@ class BARTParams:
     def leaf_basis(self, tree_ids):
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
-    def update_leaf_params(self, tree_ids, leaf_params):
+    def update_leaf_vals(self, tree_ids, leaf_vals):
         leaf_counter = 0
         for tree_id in tree_ids:
             tree = self.trees[tree_id]
-            tree.leaf_vals[tree.leaves] = leaf_params[range(leaf_counter, leaf_counter + tree.n_leaves)]
+            tree.leaf_vals[tree.leaves] = \
+                leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
             leaf_counter += tree.n_leaves
