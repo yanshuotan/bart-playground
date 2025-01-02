@@ -1,30 +1,52 @@
 import numpy as np
 import copy
-from sklearn.preprocessing import OneHotEncoder
 
+from src.util import Dataset
 
-class TreeParams:
+class Tree:
     """
     Represents the parameters of a single tree in the BART model, combining both
     the tree structure and leaf values into a single object.
     """
-    def __init__(self):
+    def __init__(self, data : Dataset, vars=None, thresholds=None, leaf_vals=None, n=None, 
+                 node_indicators=None):
         """
         Initialize the tree parameters.
 
         Parameters:
-        - var: np.ndarray
-            Array of variables used for splitting at each node.
-        - thresholds: np.ndarray
-            Array of split values at each node.
-        - leaf_vals: np.ndarray
-            Values at the leaf nodes.
+        - data : Dataset
+            The dataset object containing the data.
+        - vars : np.ndarray, optional
+            Array of variables used for splitting at each node. Default is None.
+        - thresholds : np.ndarray, optional
+            Array of split values at each node. Default is None.
+        - leaf_vals : np.ndarray, optional
+            Values at the leaf nodes. Default is None.
+        - n : np.ndarray, optional
+            Array representing the number of data points at each node. Default is None.
+        - node_indicators : np.ndarray, optional
+            Boolean array indicating which data examples lie within each node. Default is None.
         """
-        self.vars = np.full(8, -2, dtype=int)
-        self.vars[0] = -1
-        self.thresholds = np.full(8, np.nan, dtype=float)
-        self.leaf_vals = np.full(8, np.nan, dtype=float)
-        self.n_vals = np.full(8, -2, dtype=int)
+        self.data = data
+        if vars is None:
+            self.vars = np.full(8, -2, dtype=int) # -2 represents an inexistant node
+            self.vars[0] = -1 # -1 represents a leaf node
+            self.thresholds = np.full(8, np.nan, dtype=float)
+            self.leaf_vals = np.full(8, np.nan, dtype=float)
+            self.node_indicators = np.full((data.X.shape[0], 8), 0, dtype=bool)
+            self.node_indicators[:, 0] = True
+            self.n = np.full(8, -2, dtype=int)
+            self.n[0] = data.X.shape[0]
+        else:
+            self.vars = copy.deepcopy(vars)
+            self.thresholds = copy.deepcopy(thresholds)
+            self.leaf_vals = copy.deepcopy(leaf_vals)
+            self.n = copy.deepcopy(n)
+            self.node_indicators = copy.deepcopy(node_indicators)
+
+    def copy(self):
+        return Tree(self.data, self.vars, self.thresholds, self.leaf_vals, self.n, 
+                    self.node_indicators)
 
     def traverse_tree(self, X: np.ndarray) -> int:
         """
@@ -87,24 +109,18 @@ class TreeParams:
         leaf_ids = self.traverse_tree(X)  # Find the leaf node for the input
         return self.leaf_vals[leaf_ids]  # Return the value at the leaf node
 
-    # def _evaluate(self, x: np.ndarray) -> float:
-    #     """
-    #     Evaluate the tree for a given input.
-
-    #     Parameters:
-    #     - x: np.ndarray
-    #         Input data point (1D array).
-
-    #     Returns:
-    #     - float
-    #         Output value of the tree.
-    #     """
-    #     leaf_index = self.traverse_tree(x)  # Find the leaf node for the input
-    #     return self.leaf_vals[leaf_index]  # Return the value at the leaf node
-
     def _resize_arrays(self):
         """
-        Resize the vars, split, and leaf_vals arrays by doubling their length.
+        Resize the internal arrays of the class by doubling their length.
+
+        This method resizes the following arrays:
+        - `vars`: An array of integers, resized to double its current length, with new elements initialized to -2.
+        - `thresholds`: An array of floats, resized to double its current length, with new elements initialized to NaN.
+        - `leaf_vals`: An array of floats, resized to double its current length, with new elements initialized to NaN.
+        - `n`: An array of integers, resized to double its current length, with new elements initialized to -2.
+        - `node_indicators`: A 2D boolean array, resized to double its current length along the second dimension, with new elements initialized to 0.
+
+        The existing elements of each array are preserved, and the new elements are initialized as specified.
         """
         new_length = len(self.vars) * 2
 
@@ -124,53 +140,91 @@ class TreeParams:
         self.leaf_vals = new_leaf_vals
 
         # Resize n_vals array
-        new_n_vals = np.full(new_length, -2, dtype=int)
-        new_n_vals[:len(self.n_vals)] = self.n_vals
-        self.n_vals = new_n_vals
+        new_n = np.full(new_length, -2, dtype=int)
+        new_n[:len(self.n)] = self.n
+        self.n = new_n
 
+        # Resize node_indicators array
+        new_node_indicators = np.full((self.node_indicators.shape[0], new_length), 0, dtype=bool)
+        new_node_indicators[:len(self.node_indicators.shape[1])] = self.n
+        self.node_indicators = new_node_indicators
 
-    def split_leaf(self, leaf_id: int, var: int, split_threshold: float, left_val: float=np.nan, 
-                   right_val: float=np.nan, left_n: int=-2, right_n: int=-2):
+    def split_leaf(self, node_id: int, var: int, threshold: float, left_val: float=np.nan, 
+                   right_val: float=np.nan):
         """
         Split a leaf node into two child nodes.
 
         Parameters:
-        - leaf_id: int
-            Index of the leaf node to split.
-        - var: int
-            Variable to use for the split.
-        - split_threshold: float
-            Threshold value for the split.
-        - left_val: float
-            Value to assign to the left child node.
-        - right_val: float
-            Value to assign to the right child node.
+        - node_id: int
+        - threshold: float
+        - left_val: float, optional
+            Value to assign to the left child node (default is np.nan).
+        - right_val: float, optional
+            Value to assign to the right child node (default is np.nan).
+        Returns:
+        - bool
+            True if both child nodes have more than 0 samples, False otherwise.
+        Raises:
+        - ValueError
+            If the node is not a leaf and cannot be split.
         """
         # Check if the node is already a leaf
-        if self.vars[leaf_id] != -1:
+        if self.vars[node_id] != -1:
             raise ValueError("Node is not a leaf and cannot be split.")
 
         # Check if the index overflows and resize arrays if necessary
-        left_child = leaf_id * 2 + 1
-        right_child = leaf_id * 2 + 2
+        left_child = node_id * 2 + 1
+        right_child = node_id * 2 + 2
 
         if left_child >= len(self.vars) or right_child >= len(self.vars):
             self._resize_arrays()
 
         # Assign the split variable and threshold to the leaf node
-        self.vars[leaf_id] = var
-        self.thresholds[leaf_id] = split_threshold
+        self.vars[node_id] = var
+        self.thresholds[node_id] = threshold
 
         # Initialize the new leaf nodes
         self.vars[left_child] = -1
         self.vars[right_child] = -1
+        self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
+        self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
+        self.n[left_child] = np.sum(self.node_indicators[:, left_child])
+        self.n[right_child] = np.sum(self.node_indicators[:, right_child])
 
         # Assign the provided values to the new leaf nodes
         self.leaf_vals[left_child] = left_val
         self.leaf_vals[right_child] = right_val
+        
+        return self.n[left_child] > 0 and self.n[right_child] > 0
+    
+    def update_n(self, node_id=0):
+        """
+        Updates the counts of samples reaching each node in the decision tree.
 
-        self.n_vals[left_child] = left_n
-        self.n_vals[right_child] = right_n
+        This method recursively updates the counts of samples (`self.n`) for each node in the decision tree,
+        starting from the specified `node_id`. If the node is a leaf, it checks if the count of samples
+        reaching that node is greater than 0. If the node is not a leaf, it updates the counts for its
+        left and right children based on the splitting criterion defined by the variable and threshold
+        at the current node.
+
+        Parameters:
+        - node_id (int, optional): The ID of the node to start updating from. Defaults to 0 (the root node).
+
+        Returns:
+        - bool: True if the counts of samples reaching all nodes are greater than 0, False otherwise.
+        """
+        if self.is_leaf(node_id):
+            return self.n[node_id] > 0
+        else:
+            var = self.vars[node_id]
+            threshold = self.thresholds[node_id]
+            left_child = node_id * 2 + 1
+            right_child = node_id * 2 + 2
+            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
+            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
+            self.n[left_child] = np.sum(self.node_indicators[:, left_child])
+            self.n[right_child] = np.sum(self.node_indicators[:, right_child])
+            return self.update_n(left_child) and self.update_n(right_child)
 
     def prune_split(self, node_id: int):
         """
@@ -188,6 +242,7 @@ class TreeParams:
         self.vars[node_id] = -1
         self.thresholds[node_id] = np.nan
 
+        # Delete previous leaf nodes
         left_child = node_id * 2 + 1
         right_child = node_id * 2 + 2
         self.vars[left_child] = -2
@@ -209,69 +264,31 @@ class TreeParams:
         return self.is_split_node(node_id) \
             and self.is_leaf(node_id * 2 + 1) \
             and self.is_leaf(node_id * 2 + 2)
+
+    @property
+    def leaves(self):
+        return [i for i in range(len(self.vars)) if self.is_leaf(i)]
+
+    @property
+    def n_leaves(self):
+        return len(self.leaves)
     
-    def get_n_leaves(self):
-        return len([i for i in range(len(self.vars)) if self.is_leaf(i)])
+    @property
+    def split_nodes(self):
+        return [i for i in range(len(self.vars)) if self.is_split_node(i)]
+    
+    @property
+    def terminal_split_nodes(self):
+        return [i for i in range(len(self.vars)) if self.is_terminal_split_node(i)]
+    
+    @property
+    def nonterminal_split_nodes(self):
+        return [i for i in range(len(self.vars)) if self.is_split_node(i) 
+                and not self.is_terminal_split_node(i)]
 
-    def get_random_terminal_split(self, generator: np.random.Generator) -> int:
-        """
-        Get a random terminal split node.
-
-        Returns:
-        - int
-            Index of the random terminal split node.
-        """
-        # Find all terminal split nodes (nodes with two leaf children)
-        terminal_splits = [
-            i for i in range(len(self.vars))
-            if self.is_terminal_split_node(i)
-        ]
-
-        if not terminal_splits:
-            raise ValueError("No terminal split nodes found.")
-
-        # Return a random terminal split node
-        return generator.choice(terminal_splits)
-
-    def get_random_leaf(self, generator: np.random.Generator) -> int:
-        """
-        Get a random leaf node.
-
-        Returns:
-        - int
-            Index of the random leaf node.
-        """
-        # Find all leaf nodes
-        leaf_nodes = [
-            i for i in range(len(self.vars))
-            if self.is_leaf(i)  # It's a leaf node
-        ]
-
-        if not leaf_nodes:
-            raise ValueError("No leaf nodes found.")
-
-        # Return a random leaf node
-        return generator.choice(leaf_nodes)
-
-    def get_random_split(self, generator: np.random.Generator) -> int:
-        """
-        Get a random split node.
-
-        Returns:
-        - int
-            Index of the random split node.
-        """
-        # Find all split nodes
-        split_nodes = [
-            i for i in range(len(self.vars))
-            if self.is_split_node(i)  # It's a split node
-        ]
-
-        if not split_nodes:
-            raise ValueError("No split nodes found.")
-
-        # Return a random split node
-        return generator.choice(split_nodes)
+    @property
+    def leaf_basis(self):
+        return self.node_indicators[:, self.leaves]
     
     def __str__(self):
         """
@@ -280,7 +297,7 @@ class TreeParams:
         return self._print_tree()
         
     def __repr__(self):
-        return f"TreeParams(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals}, n_vals={self.n_vals})"
+        return f"Tree(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals}, n_vals={self.n})"
     
     def _print_tree(self, node_id=0, prefix=""):
         pprefix = prefix + "\t"
@@ -300,143 +317,102 @@ class TreeParams:
         
     def _print_node(self, node_id):
         if self.vars[node_id] == -1:
-            return f"Val: {self.leaf_vals[node_id]:0.3f} (leaf, n = {self.n_vals[node_id]})"
+            return f"Val: {self.leaf_vals[node_id]:0.3f} (leaf, n = {self.n[node_id]})"
         else:
             return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
-                f" (split, n = {self.n_vals[node_id]})"
+                f" (split, n = {self.n[node_id]})"
 
-class BARTParams:
+class Parameters:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, sigma2: float, prior, X : np.ndarray, y : np.ndarray):
+    def __init__(self, trees: list, global_params, data : Dataset):
         """
-        Initialize the BART parameters.
+        Initializes the parameters for the model.
 
         Parameters:
-        - trees: list<TreeParams>
-            List of trees in the model.
-        - n_trees: int
-            Number of trees.
-        - sigma2: float
-            Noise variance.
-        """
-        # Fixed params
-        self.X = X
-        self.y = y
-        self.n, self.p = X.shape
-        self.prior = prior
+        - trees (list): A list of trees used in the model.
+        - global_params: Global parameters for the model.
+        - data (Dataset): The dataset to be used.
 
-        # Mutable params
-        self.trees = copy.deepcopy(trees)
+        Attributes:
+        - data (Dataset): The dataset to be used.
+        - trees (list): A list of trees used in the model.
+        - n_trees (int): The number of trees in the model.
+        - global_params: Global parameters for the model.
+        """
+        self.data = data
+        self.trees = trees
         self.n_trees = len(self.trees)
-        self.sigma2 = sigma2
-        self.noise_ratio = None
+        self.global_params = global_params
 
-    def copy(self):
-        return BARTParams(X=self.X, y=self.y, prior=self.prior, trees=self.trees, sigma2=self.sigma2)
+    def copy(self, modified_tree_ids):
+        copied_trees = self.trees
+        for tree_id in modified_tree_ids:
+            copied_trees[tree_id] = self.trees.copy()
+        return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), 
+                          data=self.data)
 
-    def evaluate(self, X: np.ndarray, holdout: list = None) -> float:
+    def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
         """
-        Evaluate the BART model for a given input by summing the outputs of all trees.
-
-        Parameters:
-        - x: np.ndarray
-            Input data points (2D array).
-        - holdout: list<int>
-            Indices of trees to exclude from evaluation (optional).
-
-        Returns:
-        - float
-            Sum of the outputs of all trees.
-        """
-        total_output = np.zeros(X.shape[0])
-
-        # Iterate over all trees
-        for i, tree in enumerate(self.trees):
-            if holdout is None or i not in holdout:  # Skip trees in the holdout list
-                total_output += tree.evaluate(X)  # Add the tree's output to the total
-
-        return total_output
-    
-    def get_leaf_indicators(self, tree_ids):
-        ordinal_encoding = np.zeros((self.n, len(tree_ids)), dtype=int)
-        for col, tree_id in enumerate(tree_ids):
-            ordinal_encoding[:, col] = self.trees[tree_id].traverse_tree(self.X)
-        one_hot_encoder = OneHotEncoder(sparse_output=False)
-        leaf_indicators = one_hot_encoder.fit_transform(ordinal_encoding)
-        return leaf_indicators
-
-    def get_log_prior(self, tree_ids):
-        """
-        Compute the ratio of priors for a given move.
-
-        Parameters:
-        tree_ids : array-like
-            The IDs of the trees to hold out for evaluation.
-
-        Returns:
-        - float
-            Prior ratio.
-        """
-        return np.sum([self.prior.tree_log_prior(self.trees[tree_id]) 
-                       for tree_id in tree_ids])
-
-    def get_log_marginal_lkhd(self, tree_ids):
-        """
-        Calculate the log marginal likelihood for the given tree IDs.
+        Evaluate the model on the given data.
 
         Parameters:
         -----------
-        tree_ids : array-like
-            The IDs of the trees to hold out for evaluation.
+        X : np.ndarray, optional
+            The input data to evaluate. If None, the model's internal data will be used.
+        tree_ids : list of int, optional
+            Specific tree indices to evaluate. If provided, only these trees will be used.
+        all_except : list of int, optional
+            Tree indices to exclude from evaluation. If provided, all trees except these will be used.
 
         Returns:
         --------
         float
-            The log marginal likelihood value.
-
-        Notes:
-        ------
-        This function computes the log marginal likelihood by performing the following steps:
-        1. Calculate the residuals by subtracting the evaluated predictions from the actual values.
-        2. Obtain the leaf indicators for the given tree IDs.
-        3. Perform Singular Value Decomposition (SVD) on the leaf indicators.
-        4. Compute the log determinant using the singular values and noise ratio.
-        5. Calculate the coefficients and projections of the residuals onto the left singular vectors.
-        6. Compute the least squares residuals and ridge bias.
-        7. Return the negative half of the sum of the log determinant and the normalized residuals and bias.
+            The total output of the evaluated trees on the input data.
         """
-        resids = self.y - self.evaluate(self.X, holdout=tree_ids)
-        leaf_indicators = self.get_leaf_indicators(tree_ids)
-        U, S, _ = np.linalg.svd(leaf_indicators)
-        logdet = np.sum(np.log(S ** 2 / self.noise_ratio + 1))
-        resid_u_coefs = U.T @ resids
-        resids_u = U @ resid_u_coefs
-        ls_resids = np.sum((resids - resids_u) ** 2)
-        ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / self.noise_ratio + 1))
-        return - (logdet + (ls_resids + ridge_bias) / self.sigma2) / 2
 
-    def resample_sigma2(self):
-        """
-        Sample the noise variance.
+        if X is None:
+            X = self.data.X
+        if tree_ids is not None:
+            pass
+        elif all_except is not None:
+            tree_ids = [i for i in np.arange(self.n_trees) if i not in tree_ids]
+        else:
+            tree_ids = np.arange(self.n_trees)
+        total_output = np.zeros(X.shape[0])
+        # Iterate over all trees
+        for i, tree in enumerate(self.trees):
+            if i in tree_ids:  # Skip trees in the holdout list
+                total_output += tree.evaluate(X)  # Add the tree's output to the total
+        return total_output
 
-        Returns:
-        - float
-            Sampled noise variance.
+    def leaf_basis(self, tree_ids):
         """
-        pass
-
-    def resample_leaf_params(self, tree_ids):
-        """
-        Sample the leaf parameters for the given tree IDs.
+        Generate a horizontal stack of leaf basis arrays for the specified tree IDs.
 
         Parameters:
-        tree_ids : array-like
-            The IDs of the trees to hold out for evaluation.
+        - tree_ids (list of int): List of tree IDs for which to generate the leaf basis.
 
         Returns:
-        - np.ndarray
-            Sampled leaf parameters.
+        - numpy.ndarray: A horizontally stacked array of leaf basis arrays corresponding to the given tree IDs.
         """
-        pass
+        return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
+
+    def update_leaf_vals(self, tree_ids, leaf_vals):
+        """
+        Update the leaf values of specified trees.
+
+        Parameters:
+        - tree_ids (list of int): List of tree IDs whose leaf values need to be updated.
+        - leaf_vals (list of float): List of new leaf values to be assigned to the trees.
+
+        Returns:
+        - None
+        """
+        leaf_counter = 0
+        for tree_id in tree_ids:
+            tree = self.trees[tree_id]
+            tree.leaf_vals[tree.leaves] = \
+                leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
+            leaf_counter += tree.n_leaves
