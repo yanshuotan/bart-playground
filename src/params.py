@@ -333,14 +333,14 @@ class Parameters:
 
         Parameters:
         - trees (list): A list of trees used in the model.
-        - global_params: Global parameters for the model.
+        - global_params (dict): Global parameters for the model.
         - data (Dataset): The dataset to be used.
 
         Attributes:
         - data (Dataset): The dataset to be used.
         - trees (list): A list of trees used in the model.
         - n_trees (int): The number of trees in the model.
-        - global_params: Global parameters for the model.
+        - global_params (dict): Global parameters for the model.
         """
         self.data = data
         self.trees = trees

@@ -10,7 +10,7 @@ from params import Tree, Parameters
 from moves import Move
 from util import Dataset
 
-class Prior:
+class Prior(ABC):
     """
     Represents the prior for the BART model.
     """

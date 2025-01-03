@@ -59,7 +59,7 @@ class Prune(Move):
         self.tol = tol
 
     def propose(self, generator):
-        self.proposed = self.curent.copy(self.trees_changed)
+        self.proposed = self.current.copy(self.trees_changed)
         tree = self.proposed.trees[self.trees_changed[0]]
         node_id = generator.choice(tree.terminal_split_nodes)
         tree.prune_split(node_id)
@@ -76,7 +76,7 @@ class Change(Move):
 
     def propose(self, generator):
         for _ in range(self.tol):
-            self.proposed = self.curent.copy(self.trees_changed)
+            self.proposed = self.current.copy(self.trees_changed)
             tree = self.proposed.trees[self.trees_changed[0]]
             node_id = generator.choice(tree.split_nodes)
             var = generator.integers(tree.data.p)
@@ -99,7 +99,7 @@ class Swap(Move):
 
     def propose(self, generator):
         for _ in range(self.tol):
-            self.proposed = self.curent.copy(self.trees_changed)
+            self.proposed = self.current.copy(self.trees_changed)
             tree = self.proposed.trees[self.trees_changed[0]]
             parent_id = generator.choice(tree.nonterminal_split_nodes)
             child_id = 2 * parent_id + generator.integers(1, 3)
