@@ -1,35 +1,21 @@
 import numpy as np
 
-from samplers import DefaultSampler
-from priors import DefaultBARTPrior
+from samplers import Sampler, DefaultSampler, default_proposal_probs
+from priors import Prior, DefaultPrior
+from util import Preprocessor, DefaultPreprocessor
 
 
 class BART:
     """
     API for the BART model.
     """
-    def __init__(self, prior="default", sampler="default", x_preprocessor="default", y_preprocessor="default", 
-                 generator=np.random.Generator, ndpost=1000, nskip=100):
+    def __init__(self, preprocessor : Preprocessor, sampler : Sampler, 
+                 ndpost=1000, nskip=100):
         """
         Initialize the BART model.
-
-        Parameters:
-        - prior: BARTPrior
-            Priors for the BART model.
-        - posterior: BARTPosterior
-            Posterior for the BART model.
-        - sampler: Sampler
-            Sampler for the BART model.
-        - x_preprocessor: XPreprocessor
-            Preprocessor for the input data.
-        - y_preprocessor: YPreprocessor
-            Preprocessor for the output data.
         """
-        self.prior = DefaultBARTPrior()
+        self.preprocessor = preprocessor
         self.sampler = sampler
-        self.x_preprocessor = x_preprocessor
-        self.y_preprocessor = y_preprocessor
-        self.generator = generator
         self.ndpost = ndpost
         self.nskip = nskip
         self.trace = []
@@ -38,23 +24,37 @@ class BART:
         """
         Fit the BART model.
         """
-        X_tf = self.x_preprocessor.fit_transform(X)
-        y_tf = self.y_preprocessor.fit_transform(y)
-        self.sampler = DefaultSampler(X_tf, y_tf, self.prior, self.nskip+self.ndpost, self.generator, 200)
-        self.sampler.run()
+        data = self.preprocessor.fit_transform(X, y)
+        self.sampler.prior.fit(data)
+        self.sampler.add_data(data)
+        self.sampler.run(self.ndpost + self.nskip)
 
     def posterior_f(self, X):
         """
         Get the posterior distribution of f(x) for each row in X.
         """
         preds = np.zeros((X.shape[0], self.ndpost))
-        X_tf = self.x_preprocessor.transform(X)
-        for k in range(self.nskip, self.nskip + self.ndpost):
-            preds[:, k] = self.y_preprocessor.inverse_transform(self.sampler.trace[k].evaluate(X_tf))
+        for k in range(self.ndpost):
+            preds[:, k] = self.preprocessor.backtransform_y(
+                self.sampler.trace[self.nskip + k].evaluate(X))
         return preds
     
     def predict(self, X):
         """
         Predict using the BART model.
         """
-        return np.mean(self.predict_distribution(X), axis=1)
+        return np.mean(self.posterior_f(X), axis=1)
+    
+class DefaultBART(BART):
+
+    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
+                 tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
+                 eps_nu: float=3, specification="linear", 
+                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
+                 random_state=42):
+        preprocessor = DefaultPreprocessor(max_bins=max_bins)
+        prior = DefaultPrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
+                             eps_nu, specification)
+        rng = np.random.default_rng(random_state)
+        sampler = DefaultSampler(prior, proposal_probs, rng, tol)
+        super().__init__(preprocessor, sampler, ndpost, nskip)

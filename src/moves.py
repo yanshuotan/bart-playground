@@ -1,8 +1,8 @@
 import numpy as np
 from abc import ABC, abstractmethod
 
-from src.params import Parameters
-from src.params import Tree
+from params import Parameters
+
 
 class Move(ABC):
     """

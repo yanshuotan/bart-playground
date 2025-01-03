@@ -1,7 +1,7 @@
 import numpy as np
 import copy
 
-from src.util import Dataset
+from util import Dataset
 
 class Tree:
     """
@@ -298,7 +298,7 @@ class Tree:
         
     def __repr__(self):
         return f"Tree(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals}, n_vals={self.n})"
-    
+
     def _print_tree(self, node_id=0, prefix=""):
         pprefix = prefix + "\t"
         if self.vars[node_id] == -1: # Leaf node
@@ -332,14 +332,14 @@ class Parameters:
 
         Parameters:
         - trees (list): A list of trees used in the model.
-        - global_params: Global parameters for the model.
+        - global_params (dict): Global parameters for the model.
         - data (Dataset): The dataset to be used.
 
         Attributes:
         - data (Dataset): The dataset to be used.
         - trees (list): A list of trees used in the model.
         - n_trees (int): The number of trees in the model.
-        - global_params: Global parameters for the model.
+        - global_params (dict): Global parameters for the model.
         """
         self.data = data
         self.trees = trees

@@ -1,111 +1,63 @@
-from sklearn.base import BaseEstimator, TransformerMixin
+from abc import ABC, abstractmethod
 
-class XPreprocessor(BaseEstimator, TransformerMixin):
-    """
-    Base class for preprocessing input data.
-    """
-    pass
+import numpy as np
 
-class YPreprocessor(BaseEstimator, TransformerMixin):
-    """
-    Base class for preprocessing output data.
-    """
-    pass
+class Dataset:
 
-class DefaultXPreprocessor(XPreprocessor):
+    def __init__(self, X, y, thresholds):
+        self.X = X
+        self.y = y
+        self.n, self.p = X.shape
+        self.thresholds = thresholds
+
+class Preprocessor(ABC):
+
+    @abstractmethod
+    def fit(self, X, y):
+        pass
+
+    @abstractmethod
+    def transform(self, X, y):
+        pass
+
+    def fit_transform(self, X, y):
+        self.fit(X, y)
+        return self.transform(X, y)
+
+    @abstractmethod
+    def transform_y(self, y):
+        pass
+
+    @abstractmethod
+    def backtransform_y(self, y):
+        pass
+
+class DefaultPreprocessor(Preprocessor):
     """
     Default implementation for preprocessing input data.
     """
-    def __init__(self, max_bins: int, quantile: bool):
+    def __init__(self, max_bins: int=100):
         """
         Initialize the default X preprocessor.
 
         Parameters:
         - max_bins: int
             Maximum number of bins.
-        - quantile: bool
-            Whether to use quantiles for binning.
         """
         self.max_bins = max_bins
-        self.quantile = quantile
         self.splits = None
 
-    def fit(self, X):
-        """
-        Fit the preprocessor to the input data.
+    def fit(self, X, y):
+        self.y_max = y.max()
+        self.y_min = y.min()
+        q_vals = np.linspace(0, 1, self.max_bins, endpoint=False)
+        self.thresholds = dict({k : np.unique(np.quantile(X[:, k], q_vals)) for k in range(X.shape[1])})
+        
+    def transform(self, X, y):
+        return Dataset(X, self.transform_y(y), self.thresholds)
 
-        Parameters:
-        - X: np.ndarray
-            Input data.
-        """
-        pass
-
-    def transform(self, X):
-        """
-        Transform the input data.
-
-        Parameters:
-        - X: np.ndarray
-            Input data.
-
-        Returns:
-        - np.ndarray
-            Transformed data.
-        """
-        pass
-
-    def fit_transform(self, X):
-        """
-        Fit and transform the input data.
-
-        Parameters:
-        - X: np.ndarray
-            Input data.
-
-        Returns:
-        - np.ndarray
-            Transformed data.
-        """
-        pass
-
-class DefaultYPreprocessor(YPreprocessor):
-    """
-    Default implementation for preprocessing output data.
-    """
-    def fit(self, y):
-        """
-        Fit the preprocessor to the output data.
-
-        Parameters:
-        - y: np.ndarray
-            Output data.
-        """
-        pass
-
-    def transform(self, y):
-        """
-        Transform the output data.
-
-        Parameters:
-        - y: np.ndarray
-            Output data.
-
-        Returns:
-        - np.ndarray
-            Transformed data.
-        """
-        pass
-
-    def fit_transform(self, y):
-        """
-        Fit and transform the output data.
-
-        Parameters:
-        - y: np.ndarray
-            Output data.
-
-        Returns:
-        - np.ndarray
-            Transformed data.
-        """
-        pass
+    def transform_y(self, y):
+        return (y - self.y_min) / (self.y_max - self.y_min) - 0.5
+    
+    def backtransform_y(self, y):
+        return (self.y_max - self.y_min) * (y + 0.5) + self.y_min
