@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 
 from params import Parameters
 
+
 class Move(ABC):
     """
     Base class for moves in the BART sampler.
@@ -115,8 +116,75 @@ class Swap(Move):
                 return self.proposed
         self.proposed = self.current # Exceeded tol tries without finding a valid proposal. Stay at current state
         return self.proposed
+    
+class Split(Move):
+    """
+    Move to Split a tree into two trees
+    """
+    # Assume that the input is defined in TreeParams Class
+    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
+        super().__init__(current, trees_changed)
+        assert len(trees_changed) == 1
+        self.tol = tol
 
+    def collect_values(tree, start_index):
+        # Tree here refers to class Tree
+        if start_index >= len(tree.thresholds):
+            return []
+        thresholds = []
+        vars = []
+        queue = [start_index]  
+        while queue:
+            current_index = queue.pop(0)  
+            if current_index < len(tree.thresholds): 
+                thresholds.append(tree.thresholds[current_index]) 
+                vars.append(tree.vars[current_index]) 
+            
+                left_index = 2 * current_index + 1
+                right_index = 2 * current_index + 2
+                if left_index < len(tree.thresholds):
+                    queue.append(left_index)
+                if right_index < len(tree.thresholds):
+                    queue.append(right_index)
+        return thresholds, vars
+    
+    def set_subtree_zero(tree, index):
+        # Split_tree here refers to np.ndarray
+        local_tree = tree.copy()
+        if index >= local_tree.thresholds.size:
+            return local_tree
+        local_tree.vars[index] = -2
+        local_tree.threshold[index] = np.nan
+    
+        left_index = 2 * index + 1
+        local_tree = Split.set_subtree_zero(local_tree, left_index)
+    
+        right_index = 2 * index + 2
+        local_tree = Split.set_subtree_zero(local_tree, right_index)
+        return local_tree
+
+    def propose(self, generator):
+        # find node and collect thresholds
+        self.proposed = self.current.copy(self.trees_changed)
+        tree = self.proposed.trees[self.trees_changed[0]]
+        node_id = generator.choice(tree.split_nodes)
+        thersholds,vars = self.collect_values(tree,node_id)
+        # update thresholds and vars
+        tree = self.set_subtree_zero(tree,node_id)
+        tree.vars[node_id] = -1
+        # generate new tree 
+        tree_new = Tree(data=tree.data)        
+        # Here I assume the length of our original tree is larger than the subtree we split
+        # give the corresponding value to new tree
+        tree_new.thresholds[:len(thersholds)]=thersholds
+        tree_new.vars[:len(vars)]=vars
+        
+        self.proposed.trees.append(tree_new)
+
+        return self.proposed
+ 
 all_moves = {"grow" : Grow,
             "prune" : Prune,
             "change" : Change,
-            "swap" : Swap}
+            "swap" : Swap,
+            "split": Split}

@@ -297,9 +297,8 @@ class Tree:
         return self._print_tree()
         
     def __repr__(self):
-        return f"TreeParams(vars={self.vars}, thresholds={self.thresholds}, 
-        leaf_vals={self.leaf_vals}, n_vals={self.n})"
-    
+        return f"Tree(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals}, n_vals={self.n})"
+
     def _print_tree(self, node_id=0, prefix=""):
         pprefix = prefix + "\t"
         if self.vars[node_id] == -1: # Leaf node
