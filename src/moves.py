@@ -1,8 +1,8 @@
 import numpy as np
 from abc import ABC, abstractmethod
 
-from params import Parameters
-
+from src.params import Parameters
+from src.params import Tree
 
 class Move(ABC):
     """
@@ -168,17 +168,22 @@ class Split(Move):
         self.proposed = self.current.copy(self.trees_changed)
         tree = self.proposed.trees[self.trees_changed[0]]
         node_id = generator.choice(tree.split_nodes)
-        thersholds,vars = self.collect_values(tree,node_id)
+        thresholds,vars = self.collect_values(tree,node_id)
         # update thresholds and vars
         tree = self.set_subtree_zero(tree,node_id)
         tree.vars[node_id] = -1
-        # generate new tree 
-        tree_new = Tree(data=tree.data)        
-        # Here I assume the length of our original tree is larger than the subtree we split
-        # give the corresponding value to new tree
-        tree_new.thresholds[:len(thersholds)]=thersholds
-        tree_new.vars[:len(vars)]=vars
         
+        new_thresholds = np.full(len(tree.thresholds), np.nan)
+        new_vars = np.full(len(tree.vars), -2)
+        new_leaf_vals = np.fall(len(tree.leaf_vals),np.nan)
+
+        # give the corresponding value to new tree
+        new_thresholds[:len(thresholds)]=thresholds
+        new_vars[:len(vars)]=vars
+        # generate new tree 
+        tree_new = Tree(data=tree.data, thresholds=new_thresholds, vars=new_vars,
+                        leaf_vals=new_leaf_vals, n=np.fall(len(tree.n),-2),
+                        node_indicators=np.full((tree.data.X.shape[0], len(tree.node_indicators)), 0, dtype=bool))      
         self.proposed.trees.append(tree_new)
 
         return self.proposed
