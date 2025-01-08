@@ -186,7 +186,7 @@ class Tree:
         # Initialize the new leaf nodes
         self.vars[left_child] = -1
         self.vars[right_child] = -1
-        x_bigger = np.array(self.data.X[:, var] > threshold, dtype=bool)
+        x_bigger = self.data.X[:, var] > threshold
         self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & ~x_bigger
         self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & x_bigger
         # self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
