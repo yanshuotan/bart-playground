@@ -6,12 +6,20 @@ from params import Tree, Parameters
 from moves import all_moves, Move
 from util import Dataset
 
+class TemperatureSchedule:
+
+    def __init__(self, temp_schedule: callable = lambda x: 1):
+        self.temp_schedule = temp_schedule
+    
+    def __call__(self, t):
+        return self.temp_schedule(t)
+
 class Sampler(ABC):
     """
     Base class for the BART sampler.
     """
     def __init__(self, prior, proposal_probs: dict,  
-                 generator : np.random.Generator, temp_schedule: np.ndarray):
+                 generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule()):
         """
         Initialize the sampler with the given parameters.
 
@@ -19,14 +27,14 @@ class Sampler(ABC):
             prior: The prior distribution.
             proposal_probs (dict): A dictionary containing proposal probabilities.
             generator (np.random.Generator): A random number generator.
-            temp_schedule (np.ndarray): An array representing the temperature schedule. If None, defaults to an array of ones.
+            temp_schedule (TemperatureSchedule): Temperature schedule for the sampler.
 
         Attributes:
             data: Placeholder for data, initially set to None.
             prior: The prior distribution.
             n_iter: Number of iterations, initially set to None.
             proposals (dict): A dictionary containing proposal probabilities.
-            temp_schedule (np.ndarray): An array representing the temperature schedule.
+            temp_schedule (TemperatureSchedule): Temperature schedule for the sampler.
             trace (list): A list to store the trace of the sampling process.
             generator (np.random.Generator): A random number generator.
         """
@@ -34,8 +42,6 @@ class Sampler(ABC):
         self.prior = prior
         self.n_iter = None
         self.proposals = proposal_probs
-        if temp_schedule is None:
-            temp_schedule = np.ones(n_iter)
         self.temp_schedule = temp_schedule
         self.trace = []
         self.generator = generator
@@ -65,7 +71,7 @@ class Sampler(ABC):
             raise AttributeError("Data has not been added yet.")
         self.current = self.get_init_state()
         for iter in tqdm(range(n_iter)):
-            self.current = self.one_iter(self.temp_schedule[iter])
+            self.current = self.one_iter(self.temp_schedule(iter))
             self.trace.append(self.current)
     
     def sample_move(self):
@@ -109,12 +115,12 @@ class DefaultSampler(Sampler):
     Default implementation of the BART sampler.
     """
     def __init__(self, prior, proposal_probs: dict,
-                 generator : np.random.Generator, tol=100):
+                 generator : np.random.Generator,temp_schedule=TemperatureSchedule(),tol=100):
         self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
-        super().__init__(prior, proposal_probs, None, generator)
+        super().__init__(prior, proposal_probs, temp_schedule, generator)
 
     def get_init_state(self):
         """
@@ -128,12 +134,13 @@ class DefaultSampler(Sampler):
         init_state = Parameters(trees, global_params, self.data)
         return init_state
 
-    def one_iter(self, temp=1, return_trace=False):
+    def one_iter(self, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
         iter_trace = [self.current]
         iter_current = self.current
+        temp = self.temp_schedule(iter_current)
         for k in range(self.prior.n_trees):
             move = self.sample_move()(self.current, [k], self.tol)
             move.propose(self.generator)
