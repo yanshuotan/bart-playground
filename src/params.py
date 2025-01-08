@@ -1,7 +1,7 @@
 import numpy as np
 import copy
 
-from util import Dataset
+from .util import Dataset
 
 class Tree:
     """
@@ -186,8 +186,11 @@ class Tree:
         # Initialize the new leaf nodes
         self.vars[left_child] = -1
         self.vars[right_child] = -1
-        self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
-        self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
+        x_bigger = self.data.X[:, var] > threshold
+        self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & ~x_bigger
+        self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & x_bigger
+        # self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
+        # self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
         self.n[left_child] = np.sum(self.node_indicators[:, left_child])
         self.n[right_child] = np.sum(self.node_indicators[:, right_child])
 

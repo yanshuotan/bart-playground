@@ -1,8 +1,8 @@
 import numpy as np
 
-from samplers import Sampler, DefaultSampler, default_proposal_probs
-from priors import Prior, DefaultPrior
-from util import Preprocessor, DefaultPreprocessor
+from .samplers import Sampler, DefaultSampler, default_proposal_probs
+from .priors import Prior, DefaultPrior
+from .util import Preprocessor, DefaultPreprocessor
 
 
 class BART:

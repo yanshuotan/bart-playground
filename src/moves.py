@@ -1,7 +1,7 @@
 import numpy as np
 from abc import ABC, abstractmethod
 
-from params import Parameters
+from .params import Parameters
 
 
 class Move(ABC):

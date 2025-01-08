@@ -2,9 +2,9 @@ import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
 
-from params import Tree, Parameters
-from moves import all_moves, Move
-from util import Dataset
+from .params import Tree, Parameters
+from .moves import all_moves, Move
+from .util import Dataset
 
 class Sampler(ABC):
     """

@@ -6,9 +6,9 @@ from scipy.linalg import sqrtm
 from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
 
-from params import Tree, Parameters
-from moves import Move
-from util import Dataset
+from .params import Tree, Parameters
+from .moves import Move
+from .util import Dataset
 
 class Prior(ABC):
     """
@@ -178,10 +178,10 @@ class DefaultPrior(Prior):
         """
 
         self.n_trees = n_trees
-        self.tree_alpha = tree_alpha
-        self.tree_beta = tree_beta
+        self.alpha = tree_alpha
+        self.beta = tree_beta
         self.f_k = f_k
-        self.f_sigma2 = 0.25 / (self.k ** 2 * n_trees)
+        self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda = None
@@ -281,10 +281,11 @@ class DefaultPrior(Prior):
         for tree_id in tree_ids:
             tree = bart_params.trees[tree_id]
             d = np.ceil(np.log2(np.arange(len(tree.vars)) + 2)) - 1
-            log_p_split = np.log(self.alpha) - self.tree_beta * np.log(1 + d)
-            log_probs = np.where(self.var == -1, np.log(1 - np.exp(log_p_split)), 
+            log_p_split = np.log(self.alpha) - self.beta * np.log(1 + d)
+            log_probs = np.where(tree.vars == -1, np.log(1 - np.exp(log_p_split)), 
                                  log_p_split)
-            log_prior += np.sum(log_probs[~np.isnan(tree.var)])
+            is_non_empty = np.where(tree.vars != -2)[0]
+            log_prior += np.sum(log_probs[is_non_empty])
         return log_prior
 
     def trees_log_marginal_lkhd(self, bart_params : Parameters, tree_ids):
