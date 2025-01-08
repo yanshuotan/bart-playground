@@ -1,32 +1,35 @@
-import sys
+import unittest
 import os
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-# Import necessary libraries
+import numpy as np
 from graphviz import Digraph
 from src.visualization import visualize_tree  # Replace with the correct filename
-import numpy as np
 
-# Define the tree structure and parameters manually
 class TreeStructure:
-    """
-    Mock class to mimic tree structure for visualization.
-    """
     def __init__(self):
-        self.var = np.array([0, -1, 1, -2, -2, -1, -1], dtype=int)  # -1: Leaf, 0/1: Split variables
-        self.split = np.array([0.5, np.nan, 0.7, np.nan, np.nan, np.nan, np.nan])  # Split thresholds
+        self.var = np.array([0, -1, 1, -2, -2, -1, -1], dtype=int)
+        self.split = np.array([0.5, np.nan, 0.7, np.nan, np.nan, np.nan, np.nan])
 
 class TreeParams:
-    """
-    Mock class to mimic tree parameters for visualization.
-    """
     def __init__(self):
-        self.leaf_vals = np.array([np.nan, 1.0, np.nan, np.nan, np.nan, 2.0, -2.0])  # Leaf node values
+        self.leaf_vals = np.array([np.nan, 1.0, np.nan, np.nan, np.nan, 2.0, -2.0])
 
-# Instantiate tree structure and parameters
-tree_structure = TreeStructure()
-tree_params = TreeParams()
+class TestVisualizeTree(unittest.TestCase):
+    def setUp(self):
+        self.tree_structure = TreeStructure()
+        self.tree_params = TreeParams()
+        self.filename = "test/test_tree"
 
-# Test the visualize_tree function
-dot = visualize_tree(tree_structure, tree_params, filename="test/test_tree", format="png")
+    def test_visualize_tree(self):
+        dot = visualize_tree(self.tree_structure, self.tree_params, filename=self.filename, format="png")
+        self.assertIsInstance(dot, Digraph, "The returned object should be a Digraph instance.")
+        expected_filepath = f"{self.filename}.png"
+        dot.render(self.filename, format="png")
+        self.assertTrue(os.path.exists(expected_filepath), "The output image file was not created correctly.")
+
+    def tearDown(self):
+        expected_filepath = f"{self.filename}.png"
+        if os.path.exists(expected_filepath):
+            os.remove(expected_filepath)
+
+if __name__ == "__main__":
+    unittest.main()
