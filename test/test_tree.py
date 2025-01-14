@@ -40,6 +40,28 @@ class TestTree(unittest.TestCase):
         self.assertEqual(self.tree.leaf_vals[1], 1.0)
         self.assertEqual(self.tree.leaf_vals[2], -1.0)
 
+    def test_update_n(self):
+        self.tree.vars = np.array([0, -1, -1], dtype=int)
+        self.tree.thresholds = np.array([0.5, np.nan, np.nan])
+        self.tree.leaf_vals = np.array([np.nan, 1.0, -1.0])
+        self.tree.n = np.zeros(3, dtype=int)
+        self.tree.node_indicators = np.zeros((100, 3), dtype=bool)
+        self.tree.node_indicators[:, 0] = True
+
+        success = self.tree.update_n(0)
+
+        self.assertTrue(success, "All nodes should have counts greater than 0")
+        self.assertEqual(
+            self.tree.n[1], 
+            np.sum(self.tree.data.X[:, 0] <= 0.5), 
+            "Left child count should match number of samples <= 0.5"
+        )
+        self.assertEqual(
+            self.tree.n[2], 
+            np.sum(self.tree.data.X[:, 0] > 0.5), 
+            "Right child count should match number of samples > 0.5"
+        )
+
     def test_prune_split(self):
         self.tree.vars = np.array([0, -1, -1, -2, -2, -2, -2, -2], dtype=int)
         self.tree.thresholds = np.array([0.5, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
