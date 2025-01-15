@@ -118,7 +118,7 @@ class Swap(Move):
         self.proposed = self.current # Exceeded tol tries without finding a valid proposal. Stay at current state
         return self.proposed
     
-class Split(Move):
+class Break(Move):
     """
     Move to Split a tree into two trees
     """
@@ -155,13 +155,13 @@ class Split(Move):
         if index >= local_tree.thresholds.size:
             return local_tree
         local_tree.vars[index] = -2
-        local_tree.threshold[index] = np.nan
+        local_tree.thresholds[index] = np.nan
     
         left_index = 2 * index + 1
-        local_tree = Split.set_subtree_zero(local_tree, left_index)
+        local_tree = Break.set_subtree_zero(local_tree, left_index)
     
         right_index = 2 * index + 2
-        local_tree = Split.set_subtree_zero(local_tree, right_index)
+        local_tree = Break.set_subtree_zero(local_tree, right_index)
         return local_tree
 
     def propose(self, generator):
@@ -170,9 +170,9 @@ class Split(Move):
             self.proposed = self.current.copy(self.trees_changed)
             tree = self.proposed.trees[self.trees_changed[0]]
             node_id = generator.choice(tree.split_nodes)
-            thresholds,vars = Split.collect_values(tree,node_id)
+            thresholds,vars = Break.collect_values(tree,node_id)
             # update thresholds and vars
-            tree = Split.set_subtree_zero(tree,node_id)
+            tree = Break.set_subtree_zero(tree,node_id)
             tree.vars[node_id] = -1
         
             new_thresholds = np.full(len(thresholds), np.nan)
@@ -201,16 +201,6 @@ class Combine(Move):
         super().__init__(current, trees_changed)
         assert len(trees_changed) == 2
         self.tol = tol
-
-    def find_start_index(tree1,tree2):
-        index = 0
-        for i in tree1.leaves:
-            if tree1.thresholds[i]==tree2.thresholds[0]:
-                index = i
-        if index != 0:
-            return index
-        else:
-            raise ValueError("Can not combine these trees")
 
     def create_combined(tree1,tree2):
         d2 = round(math.log2(len(tree2.thresholds)+1))
@@ -259,7 +249,7 @@ class Combine(Move):
             self.proposed = self.current.copy(self.trees_changed)
             tree1 = self.proposed.trees[self.trees_changed[0]]
             tree2 = self.proposed.trees[self.trees_changed[1]]
-            node_id = Combine.find_start_index(tree1,tree2)
+            node_id = generator.choice(tree1.leaves)
             combined_tree = Combine.create_combined(tree1,tree2)
             updated_tree = Combine.update_tree(combined_tree,node_id,tree2.vars,tree2.thresholds)
             if updated_tree.update_n(node_id): 
@@ -274,4 +264,5 @@ all_moves = {"grow" : Grow,
             "prune" : Prune,
             "change" : Change,
             "swap" : Swap,
-            "split": Split}
+            "break": Break,
+            "combine": Combine}
