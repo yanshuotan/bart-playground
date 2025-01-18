@@ -27,6 +27,8 @@ class TestVisualizeTree(unittest.TestCase):
         self.assertTrue(os.path.exists(expected_filepath), "The output image file was not created correctly.")
 
     def tearDown(self):
+        if os.path.exists(self.filename):
+            os.remove(self.filename)
         expected_filepath = f"{self.filename}.png"
         if os.path.exists(expected_filepath):
             os.remove(expected_filepath)
