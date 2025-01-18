@@ -146,7 +146,7 @@ class Tree:
 
         # Resize node_indicators array
         new_node_indicators = np.full((self.node_indicators.shape[0], new_length), 0, dtype=bool)
-        new_node_indicators[:len(self.node_indicators.shape[1])] = self.n
+        new_node_indicators[:self.node_indicators.shape[1]] = self.n
         self.node_indicators = new_node_indicators
 
     def split_leaf(self, node_id: int, var: int, threshold: float, left_val: float=np.nan, 
