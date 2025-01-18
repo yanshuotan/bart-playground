@@ -33,8 +33,8 @@ def visualize_tree(tree_structure, tree_params, filename: str = "tree", format: 
         else:
             # Add split node with variable and split value
             var = tree_structure.vars[node_id]
-            split = tree_structure.split[node_id]
-            dot.node(str(node_id), f"Var: X_{var}\nSplit: {split:.2f}")
+            threshold = tree_structure.thresholds[node_id]
+            dot.node(str(node_id), f"Var: X_{var}\Threshold: {threshold:.2f}")
 
             # Recursively add left and right children
             left_child = node_id * 2 + 1
