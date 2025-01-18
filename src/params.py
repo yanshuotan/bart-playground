@@ -223,8 +223,8 @@ class Tree:
             threshold = self.thresholds[node_id]
             left_child = node_id * 2 + 1
             right_child = node_id * 2 + 2
-            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
-            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
+            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & (self.data.X[:, var] <= threshold)
+            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & (self.data.X[:, var] > threshold)
             self.n[left_child] = np.sum(self.node_indicators[:, left_child])
             self.n[right_child] = np.sum(self.node_indicators[:, right_child])
             return self.update_n(left_child) and self.update_n(right_child)
