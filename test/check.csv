@@ -1,7 +1,7 @@
 ﻿src file,test file,pass,error
 util.py,test_defaultBART.py,No,NameError: name 'DefaultBART' is not defined
 util.py,test_defaultPreprocessor.py,Yes,
-moves.py,test_moves.py,No,NameError: name 'Dataset' is not defined
+moves.py,test_moves.py,Yes,
 priors.py,test_prior.py,Yes,
 params.py,test_params.py,Yes,
 visualization.py,test_visualizaion.py,Yes,
