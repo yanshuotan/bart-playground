@@ -352,7 +352,7 @@ class Parameters:
     def copy(self, modified_tree_ids):
         copied_trees = self.trees
         for tree_id in modified_tree_ids:
-            copied_trees[tree_id] = self.trees.copy()
+            copied_trees[tree_id] = self.trees[tree_id].copy()
         return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), 
                           data=self.data)
 
