@@ -6,7 +6,7 @@ from src.visualization import visualize_tree  # Replace with the correct filenam
 
 class TreeStructure:
     def __init__(self):
-        self.var = np.array([0, -1, 1, -2, -2, -1, -1], dtype=int)
+        self.vars = np.array([0, -1, 1, -2, -2, -1, -1], dtype=int)
         self.split = np.array([0.5, np.nan, 0.7, np.nan, np.nan, np.nan, np.nan])
 
 class TreeParams:
