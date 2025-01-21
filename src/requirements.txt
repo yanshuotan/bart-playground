@@ -1,0 +1,5 @@
+graphviz==0.20.3
+numpy==2.2.2
+scikit_learn==1.6.1
+scipy==1.15.1
+tqdm==4.67.1

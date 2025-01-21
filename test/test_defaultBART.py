@@ -6,6 +6,7 @@ from os.path import abspath, dirname
 sys.path.append(abspath(dirname(dirname(__file__))))
 from src.util import DefaultPreprocessor
 from DataGenerator import *  # Import the updated DataGenerator class
+from src.bart import DefaultBART
 
 class TestDefaultBART(unittest.TestCase):
 
@@ -16,7 +17,7 @@ class TestDefaultBART(unittest.TestCase):
 
         # Initialize the DefaultBART with a preprocessor
         self.preprocessor = DefaultPreprocessor(max_bins=10)
-        self.bart = DefaultBART(preprocessor=self.preprocessor)
+        self.bart = DefaultBART()
 
     def test_initialization(self):
         self.assertIsNotNone(self.bart.preprocessor, "DefaultBART should have a preprocessor.")
@@ -24,6 +25,7 @@ class TestDefaultBART(unittest.TestCase):
 
     def test_fit(self):
         self.bart.fit(self.X, self.y)
+        # AttributeError: 'DefaultSampler' object has no attribute 'n_trees'
         self.assertIsNotNone(self.bart.posterior_samples, "DefaultBART should store posterior samples after fitting.")
 
     def test_predict(self):

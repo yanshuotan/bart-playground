@@ -2,6 +2,11 @@ import unittest
 
 import numpy as np
 
+import sys
+from os.path import abspath, dirname
+# Add the parent directory (module) to the search path
+sys.path.append(abspath(dirname(dirname(__file__))))
+
 from src.params import Parameters, Tree
 from src.priors import DefaultPrior
 from src.util import Dataset
