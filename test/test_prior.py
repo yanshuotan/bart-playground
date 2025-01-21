@@ -2,9 +2,9 @@ import unittest
 
 import numpy as np
 
-from src.params import Parameters, Tree
-from src.priors import DefaultPrior
-from src.util import Dataset
+from bart_playground import Parameters, Tree
+from bart_playground import DefaultPrior
+from bart_playground import Dataset
 
 class TestPrior(unittest.TestCase):
     def setUp(self):

@@ -4,10 +4,10 @@ import sys
 from os.path import abspath, dirname
 # Add the parent directory (module) to the search path
 sys.path.append(abspath(dirname(dirname(__file__))))
-from src.util import Dataset
-from src.moves import Grow, Prune, Change, Swap
-from src.params import Parameters, Tree
-from DataGenerator import *  # Import the updated DataGenerator class
+from bart_playground import Dataset
+from bart_playground import Grow, Prune, Change, Swap
+from bart_playground import Parameters, Tree
+from bart_playground import *  # Import the updated DataGenerator class
 
 class TestMoves(unittest.TestCase):
 

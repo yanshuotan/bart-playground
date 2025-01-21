@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
-from src.params import Tree
-from src.util import Dataset
+from bart_playground import Tree
+from bart_playground import Dataset
 
 class TestTree(unittest.TestCase):
 

@@ -2,7 +2,7 @@ import unittest
 import os
 import numpy as np
 from graphviz import Digraph
-from src.visualization import visualize_tree  # Replace with the correct filename
+from bart_playground import visualize_tree  # Replace with the correct filename
 
 class TreeStructure:
     def __init__(self):
