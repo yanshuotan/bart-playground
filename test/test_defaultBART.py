@@ -1,9 +1,5 @@
 import unittest
 import numpy as np
-import sys
-from os.path import abspath, dirname
-# Add the parent directory (module) to the search path
-sys.path.append(abspath(dirname(dirname(__file__))))
 from bart_playground import DefaultPreprocessor
 from bart_playground import DataGenerator  # Import the updated DataGenerator class
 from bart_playground import DefaultBART
@@ -24,10 +20,11 @@ class TestDefaultBART(unittest.TestCase):
         self.assertIsNotNone(self.bart.sampler, "DefaultBART should have a sampler.")
 
     def test_fit(self):
-        #self.bart.fit(self.X, self.y)
-        #self.assertIsNotNone(self.bart.posterior_samples, "DefaultBART should store posterior samples after fitting.")
+        # self.bart.fit(self.X, self.y)
+        # AttributeError: 'DefaultSampler' object has no attribute 'n_trees'
+        # self.assertIsNotNone(self.bart.posterior_samples, "DefaultBART should store posterior samples after fitting.")
         pass
-    
+      
     def test_predict(self):
         #self.bart.fit(self.X, self.y)
         #predictions = self.bart.predict(self.X)
