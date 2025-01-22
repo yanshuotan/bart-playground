@@ -1,13 +1,7 @@
 import unittest
 import numpy as np
-
-import sys
-from os.path import abspath, dirname
-# Add the parent directory (module) to the search path
-sys.path.append(abspath(dirname(dirname(__file__))))
-
-from src.params import Tree
-from src.util import Dataset
+from bart_playground import Tree
+from bart_playground import Dataset
 
 class TestTree(unittest.TestCase):
 

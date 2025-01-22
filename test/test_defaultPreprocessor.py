@@ -4,8 +4,8 @@ import sys
 from os.path import abspath, dirname
 # Add the parent directory (module) to the search path
 sys.path.append(abspath(dirname(dirname(__file__))))
-from src.util import DefaultPreprocessor
-from DataGenerator import *  # Import the updated DataGenerator class
+from bart_playground import DefaultPreprocessor
+from bart_playground import DataGenerator  # Import the updated DataGenerator class
 
 
 class TestDefaultPreprocessor(unittest.TestCase):

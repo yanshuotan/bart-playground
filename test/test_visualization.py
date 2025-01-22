@@ -2,13 +2,7 @@ import unittest
 import os
 import numpy as np
 from graphviz import Digraph
-
-import sys
-from os.path import abspath, dirname
-# Add the parent directory (module) to the search path
-sys.path.append(abspath(dirname(dirname(__file__))))
-
-from src.visualization import visualize_tree  # Replace with the correct filename
+from bart_playground import visualize_tree  # Replace with the correct filename
 
 class TreeStructure:
     def __init__(self):
