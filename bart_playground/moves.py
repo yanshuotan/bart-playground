@@ -103,7 +103,10 @@ class Swap(Move):
             self.proposed = self.current.copy(self.trees_changed)
             tree = self.proposed.trees[self.trees_changed[0]]
             parent_id = generator.choice(tree.nonterminal_split_nodes)
-            child_id = 2 * parent_id + generator.integers(1, 3)
+            lr = generator.integers(1, 3) # Choice of left/right child
+            child_id = 2 * parent_id + lr
+            if tree.vars[child_id] == -1: # Change to the other child if this is a leaf
+                child_id = 2 * parent_id + 3 - lr
             parent_var = tree.vars[parent_id]
             child_var = tree.vars[child_id]
             parent_threshold = tree.thresholds[parent_id]
