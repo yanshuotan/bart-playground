@@ -36,7 +36,6 @@ class BCFPrior:
         self.tau_prior.fit(data)
 
     def init_global_params(self, data):
-        """Combine parameters from both priors"""
         return {
             **self.mu_prior.init_global_params(data),
             **self.tau_prior.init_global_params(data)

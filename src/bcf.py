@@ -6,29 +6,34 @@ from .bcf_sampler import BCFSampler
 
 import numpy as np
 
-class BCF(BART):
-    """Bayesian Causal Forest implementation"""
-    def __init__(self, ndpost=1000, nskip=100,
-                 n_mu_trees=200, n_tau_trees=50,
-                 mu_alpha=0.95, mu_beta=2.0,
-                 tau_alpha=0.25, tau_beta=3.0,
-                 tau_k=1.0, **kwargs):
+class BCF:
+    def __init__(self, n_mu_trees=200, n_tau_trees=50,
+                 mu_alpha=0.95, mu_beta=2.0, mu_k=2.0,
+                 tau_alpha=0.25, tau_beta=3.0, tau_k=1.0,
+                 ndpost=1000, nskip=100, random_state=42):
         
-        # Initialize specialized BCF components
-        preprocessor = BCFPreprocessor()
-        prior = BCFPrior(n_mu_trees=n_mu_trees, n_tau_trees=n_tau_trees,
-                        mu_alpha=mu_alpha, mu_beta=mu_beta,
-                        tau_alpha=tau_alpha, tau_beta=tau_beta,
-                        tau_k=tau_k)
+        # Initialize priors
+        self.prior = BCFPrior(
+            n_mu_trees=n_mu_trees,
+            n_tau_trees=n_tau_trees,
+            mu_alpha=mu_alpha,
+            mu_beta=mu_beta,
+            mu_k=mu_k,
+            tau_alpha=tau_alpha,
+            tau_beta=tau_beta,
+            tau_k=tau_k
+        )
         
-        rng = np.random.default_rng(kwargs.get('random_state', 42))
-        sampler = BCFSampler(prior, tau_update_prob=0.3, generator=rng)
-        
-        super().__init__(preprocessor, sampler, ndpost, nskip)
+        # Initialize sampler
+        self.sampler = BCFSampler(
+            prior=self.prior,
+            proposal_probs_mu={'grow':0.5, 'prune':0.5},
+            proposal_probs_tau={'grow':0.3, 'prune':0.3, 'change':0.4}
+        )
 
     def fit(self, X, y, z):
         """Extend fit to handle treatment indicator z"""
-        data = self.preprocessor.fit_transform(X, y)
+        data = BCFPreprocessor.fit_transform(X, y)
         data.z = z  # Store treatment vector
         self.sampler.prior.fit(data)
         self.sampler.add_data(data)
@@ -47,9 +52,9 @@ class BCF(BART):
         return post_mu, post_tau
 
 class BCFPreprocessor(DefaultPreprocessor):
-    """Add treatment indicator handling"""
-    def transform(self, X, y):
-        dataset = super().transform(X, y)
-        # Treatment indicator z should be passed separately
+    @staticmethod
+    def fit_transform(X, y):
+        dp = DefaultPreprocessor()
+        dataset = dp.fit_transform(X, y)
         return dataset
     

@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split
 
-# Assuming BCF class is implemented in bcf.py
 from src.bcf import BCF
 
 # 1. Generate Synthetic Data with Heterogeneous Treatment Effects
