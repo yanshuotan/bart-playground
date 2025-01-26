@@ -11,7 +11,10 @@ class BCF:
                  mu_alpha=0.95, mu_beta=2.0, mu_k=2.0,
                  tau_alpha=0.25, tau_beta=3.0, tau_k=1.0,
                  ndpost=1000, nskip=100, random_state=42):
-        
+        self.ndpost = ndpost
+        self.nskip = nskip
+        self.random_state = random_state
+
         # Initialize priors
         self.prior = BCFPrior(
             n_mu_trees=n_mu_trees,
@@ -25,10 +28,12 @@ class BCF:
         )
         
         # Initialize sampler
+        rng = np.random.default_rng(random_state)
         self.sampler = BCFSampler(
             prior=self.prior,
-            proposal_probs_mu={'grow':0.5, 'prune':0.5},
-            proposal_probs_tau={'grow':0.3, 'prune':0.3, 'change':0.4}
+            proposal_probs = {'grow':0.5, 'prune':0.5},
+            generator = rng # ,
+            # proposal_probs_tau={'grow':0.3, 'prune':0.3, 'change':0.4}
         )
 
     def fit(self, X, y, z):

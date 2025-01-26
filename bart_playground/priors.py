@@ -188,7 +188,7 @@ class DefaultPrior(Prior):
         self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.eps_q = eps_q
         self.eps_nu = eps_nu
-        self.eps_lambda = None
+        self.eps_lambda = None                  # TODO
         self.specification = specification
         self.generator = generator
 
