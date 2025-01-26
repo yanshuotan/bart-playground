@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
-from .util import Dataset
+from ..util import Dataset
 import numpy as np
 from .bcf_params import BCFParams
-from .params import Parameters
+from ..params import Parameters
 
 class BCFDataset(Dataset):
     def __init__(self, X, y, z, thresholds):

@@ -1,7 +1,7 @@
 
 # bcf_prior.py
 
-from .priors import DefaultPrior
+from ..priors import DefaultPrior
 from .bcf_util import BCFDataset
 from .bcf_params import BCFParams
 class BCFPrior:

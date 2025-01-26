@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split
 
-from src.bcf import BCF
+from bart_playground.bcf.bcf import BCF
 
 def generate_bcf_data(n=1000, p=10, noise_level=0.5, random_state=42):
     rng = np.random.default_rng(random_state)

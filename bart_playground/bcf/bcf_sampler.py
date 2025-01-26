@@ -1,10 +1,10 @@
 
 # bcf_sampler.py
 
-from .samplers import default_proposal_probs, Sampler, TemperatureSchedule
-from .moves import all_moves
+from ..samplers import default_proposal_probs, Sampler, TemperatureSchedule
+from ..moves import all_moves
 from .bcf_params import BCFParams
-from .params import Tree
+from ..params import Tree
 from .bcf_prior import BCFPrior
 from .bcf_util import BCFDataset, BCFParamSlice
 
