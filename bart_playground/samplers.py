@@ -129,7 +129,9 @@ class DefaultSampler(Sampler):
         Returns:
             The initial state for the sampler.
         """
-        trees = [Tree() for _ in range(self.n_trees)]
+        if self.data is None:
+            raise AttributeError("Need data before running sampler.")
+        trees = [Tree(self.data) for _ in range(self.n_trees)]
         global_params = self.prior.init_global_params(self.data.X, self.data.y)
         init_state = Parameters(trees, global_params, self.data)
         return init_state
@@ -145,9 +147,9 @@ class DefaultSampler(Sampler):
             move = self.sample_move()(self.current, [k], self.tol)
             move.propose(self.generator)
             Z = self.generator.uniform(0, 1)
-            if Z < np.exp(temp * move.get_log_MH_ratio()):
+            if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
                 new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, [k])
-                move.proposed.update_leaf_params([k], new_leaf_vals)
+                move.proposed.update_leaf_vals([k], new_leaf_vals)
                 iter_trace.append(move.proposed)
                 iter_current = move.proposed
             else:
