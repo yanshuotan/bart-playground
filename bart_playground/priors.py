@@ -1,7 +1,7 @@
 import numpy as np
 from abc import ABC, abstractmethod
 
-from scipy.stats import invgamma
+from scipy.stats import invgamma, gamma
 from scipy.linalg import sqrtm
 from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
@@ -334,6 +334,7 @@ class DefaultPrior(Prior):
         Compute the lambda parameter for the noise variance prior.
         Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.
         """
+        print("Running eps lambda calc")
         if specification == "naive":
             sigma_hat = np.std(data.y)
         elif specification == "linear":
@@ -344,10 +345,14 @@ class DefaultPrior(Prior):
             sigma_hat = np.std(resids)
         else:
             raise ValueError("Invalid specification for the noise variance prior.")
+        
+        # Initial guess to spur the optim
+        initial_guess = self.eps_q / gamma.ppf(sigma_hat, a=self.eps_nu/2)
+        
         def objective(l):
-            return np.abs(invgamma.cdf(self.eps_q, a=self.eps_nu/2, 
-                                       scale=self.eps_nu * l / 2) - sigma_hat)
-        result = minimize_scalar(objective)
+            return (invgamma.cdf(self.eps_q, a=self.eps_nu/2, scale=self.eps_nu * l / 2) - sigma_hat)**2
+        # Add bracketing values for the optimization
+        result = minimize_scalar(objective, bracket=(.1*initial_guess, 1*initial_guess, 10*initial_guess))
         return result.x
     
     def _sample_eps_sigma2(self, n, residuals):

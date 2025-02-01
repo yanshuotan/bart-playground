@@ -20,11 +20,11 @@ class BART:
         self.nskip = nskip
         self.trace = []
 
-    def fit(self, X, y):
+    def fit(self, data):
         """
         Fit the BART model.
         """
-        data = self.preprocessor.fit_transform(X, y)
+        data = self.preprocessor.fit_transform(data.X, data.y)
         self.sampler.prior.fit(data)
         self.sampler.add_data(data)
         self.sampler.run(self.ndpost + self.nskip)

@@ -132,7 +132,7 @@ class DefaultSampler(Sampler):
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
         trees = [Tree(self.data) for _ in range(self.prior.n_trees)]
-        global_params = self.prior.init_global_params(self.data.X, self.data.y)
+        global_params = self.prior.init_global_params(self.data)
         init_state = Parameters(trees, global_params, self.data)
         return init_state
 
