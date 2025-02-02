@@ -334,7 +334,7 @@ class DefaultPrior(Prior):
         Compute the lambda parameter for the noise variance prior.
         Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.
         """
-        print("Running eps lambda calc")
+       
         if specification == "naive":
             sigma_hat = np.std(data.y)
         elif specification == "linear":

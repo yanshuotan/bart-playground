@@ -26,7 +26,7 @@ class TestDefaultBART(unittest.TestCase):
         print(self.bart.preprocessor)
         #print(self.preprocessor.thresholds)
         data_use = self.preprocessor.transform(self.X, self.y)
-        print(data_use)
+        #print(data_use)
         self.bart.fit(data_use)
         print("Running the fit test")
         #self.assertIsNotNone(self.bart.posterior_samples, "DefaultBART should store posterior samples after fitting.")

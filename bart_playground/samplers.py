@@ -67,10 +67,13 @@ class Sampler(ABC):
 
         """
         self.n_iter = n_iter
+        print(n_iter)
         if self.data is None:
             raise AttributeError("Data has not been added yet.")
         self.current = self.get_init_state()
         for iter in tqdm(range(n_iter)):
+            print("Running iteration")
+            print(self.temp_schedule)
             self.current = self.one_iter(self.temp_schedule(iter))
             self.trace.append(self.current)
     
