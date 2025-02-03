@@ -209,6 +209,7 @@ class DefaultPrior(Prior):
             dict: A dictionary containing the initialized global parameter:
                 - eps_sigma2 (float): The sampled epsilon sigma squared value.
         """
+        self.fit(data)
         eps_sigma2 = self._sample_eps_sigma2(data.X.shape[1], data.y)
         return {"eps_sigma2" : eps_sigma2}
 
