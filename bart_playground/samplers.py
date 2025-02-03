@@ -79,7 +79,7 @@ class Sampler(ABC):
         for iter in tqdm(range(n_iter)):
             print("Running iteration")
             print(self.temp_schedule)
-            self.current = self.one_iter(self.temp_schedule(iter))
+            self.current = self.one_iter(return_trace=False)
             self.trace.append(self.current)
     
     def sample_move(self):
