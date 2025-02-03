@@ -3,6 +3,7 @@ from ..bart import BART
 from ..util import Dataset, DefaultPreprocessor
 from .bcf_prior import BCFPrior
 from .bcf_sampler import BCFSampler
+from .bcf_util import BCFDataset
 
 import numpy as np
 
@@ -14,6 +15,7 @@ class BCF:
         self.ndpost = ndpost
         self.nskip = nskip
         self.random_state = random_state
+        self.eps_lambda = None
 
         # Initialize priors
         self.prior = BCFPrior(
@@ -38,7 +40,7 @@ class BCF:
 
     def fit(self, X, y, z):
         """Extend fit to handle treatment indicator z"""
-        data = BCFPreprocessor.fit_transform(X, y)
+        data = BCFPreprocessor.fit_transform(X, y, z)
         data.z = z  # Store treatment vector
         self.sampler.prior.fit(data)
         self.sampler.add_data(data)
@@ -58,8 +60,8 @@ class BCF:
 
 class BCFPreprocessor(DefaultPreprocessor):
     @staticmethod
-    def fit_transform(X, y):
+    def fit_transform(X, y, z):
         dp = DefaultPreprocessor()
         dataset = dp.fit_transform(X, y)
-        return dataset
+        return BCFDataset(dataset.X, dataset.y, z, dataset.thresholds)
     

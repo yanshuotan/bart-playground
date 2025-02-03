@@ -8,8 +8,8 @@ from os.path import abspath, dirname
 # Add the parent directory (module) to the search path
 sys.path.append(abspath(dirname(dirname(__file__))))
 
-import matplotlib.pyplot as plt
-import seaborn as sns
+#import matplotlib.pyplot as plt
+#import seaborn as sns
 from sklearn.model_selection import train_test_split
 
 from bart_playground.bcf.bcf import BCF

@@ -28,9 +28,9 @@ class BCFParams:
             modified_tau_ids = []
             
         new_mu = [t.copy() if i in modified_mu_ids else t 
-                 for i, t in enumerate(self.mu_trees.trees)]
+                 for i, t in enumerate(self.mu_trees)]
         new_tau = [t.copy() if i in modified_tau_ids else t 
-                  for i, t in enumerate(self.tau_trees.trees)]
+                  for i, t in enumerate(self.tau_trees)]
         
         return BCFParams(
             new_mu, new_tau,

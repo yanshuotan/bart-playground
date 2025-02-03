@@ -17,7 +17,7 @@ class BCFSampler(Sampler):
         self.proposals_mu = proposal_probs or default_proposal_probs
         self.proposals_tau = proposal_probs or default_proposal_probs
         self.tol = tol
-        super().__init__(prior, proposal_probs, temp_schedule, generator)
+        super().__init__(prior, proposal_probs, generator, temp_schedule)
         
     def get_init_state(self):
         """
@@ -61,9 +61,8 @@ class BCFSampler(Sampler):
 
             # Metropolis–Hastings
             Z = self.generator.uniform(0,1)
-            if Z < np.exp(temp * move.get_log_MH_ratio()):
+            if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
                 new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, 'mu', [k])
-                # TODO: ???
                 move.proposed.update_leaf_vals('mu', [k], new_leaf_vals)
                 iter_current = move.proposed.bcf_params
             else:

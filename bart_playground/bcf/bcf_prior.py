@@ -52,6 +52,7 @@ class BCFPrior:
         This method samples the epsilon sigma squared (eps_sigma2) parameter 
         based on the provided data and returns it in a dictionary.
         """
+        self.mu_prior.fit(data)
         eps_sigma2 = self._sample_eps_sigma2(data.X.shape[1], data.y)
         return {"eps_sigma2" : eps_sigma2}
 
