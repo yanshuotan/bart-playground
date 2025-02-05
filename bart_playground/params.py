@@ -380,7 +380,7 @@ class Parameters:
         if tree_ids is not None:
             pass
         elif all_except is not None:
-            tree_ids = [i for i in np.arange(self.n_trees) if i not in tree_ids]
+            tree_ids = [i for i in np.arange(self.n_trees) if i not in all_except]
         else:
             tree_ids = np.arange(self.n_trees)
         total_output = np.zeros(X.shape[0])

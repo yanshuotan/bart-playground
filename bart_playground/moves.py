@@ -62,6 +62,9 @@ class Prune(Move):
     def propose(self, generator):
         self.proposed = self.current.copy(self.trees_changed)
         tree = self.proposed.trees[self.trees_changed[0]]
+        # If there are no terminal splits, can not prune
+        if not tree.terminal_split_nodes:
+            return self.proposed 
         node_id = generator.choice(tree.terminal_split_nodes)
         tree.prune_split(node_id)
         return self.proposed
@@ -79,6 +82,9 @@ class Change(Move):
         for _ in range(self.tol):
             self.proposed = self.current.copy(self.trees_changed)
             tree = self.proposed.trees[self.trees_changed[0]]
+            # If there are no splits, can not change
+            if not tree.split_nodes:
+                continue
             node_id = generator.choice(tree.split_nodes)
             var = generator.integers(tree.data.p)
             threshold = generator.choice(tree.data.thresholds[var])

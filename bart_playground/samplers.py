@@ -1,10 +1,14 @@
+
+# samplers.py
+
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
 
 from .params import Tree, Parameters
-from .moves import all_moves, Move
+from .moves import all_moves
 from .util import Dataset
+from .priors import Prior
 
 class TemperatureSchedule:
 
@@ -67,11 +71,15 @@ class Sampler(ABC):
 
         """
         self.n_iter = n_iter
+        print(n_iter)
         if self.data is None:
             raise AttributeError("Data has not been added yet.")
         self.current = self.get_init_state()
+        self.trace.append(self.current) # Add initial state to trace
         for iter in tqdm(range(n_iter)):
-            self.current = self.one_iter(self.temp_schedule(iter))
+            print("Running iteration")
+            print(self.temp_schedule)
+            self.current = self.one_iter(return_trace=False)
             self.trace.append(self.current)
     
     def sample_move(self):
@@ -114,7 +122,7 @@ class DefaultSampler(Sampler):
     """
     Default implementation of the BART sampler.
     """
-    def __init__(self, prior, proposal_probs: dict,
+    def __init__(self, prior : Prior, proposal_probs: dict,
                  generator : np.random.Generator,temp_schedule=TemperatureSchedule(),tol=100):
         self.tol = tol
         if proposal_probs is None:
@@ -122,7 +130,7 @@ class DefaultSampler(Sampler):
                               "prune" : 0.5}
         super().__init__(prior, proposal_probs, generator, temp_schedule)
 
-    def get_init_state(self):
+    def get_init_state(self) -> Parameters:
         """
         Retrieve the initial state for the sampler.
 
