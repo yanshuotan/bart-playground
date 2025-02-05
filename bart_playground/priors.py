@@ -250,7 +250,7 @@ class DefaultPrior(Prior):
         leaf_params_new : numpy.ndarray
             The resampled leaf parameters.
         """
-        residuals = bart_params.y - bart_params.evaluate(all_except=tree_ids)
+        residuals = bart_params.data.y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
         p = leaf_basis.shape[1]
         post_cov = np.linalg.inv(leaf_basis.T @ leaf_basis / 
@@ -258,7 +258,7 @@ class DefaultPrior(Prior):
                                  np.eye(p) / self.f_sigma2)
         post_mean = post_cov @ leaf_basis.T @ residuals / \
             bart_params.global_params["eps_sigma2"]
-        leaf_params_new = sqrtm(post_cov) @ np.np.random.randn(p) + post_mean
+        leaf_params_new = sqrtm(post_cov) @ np.random.randn(p) + post_mean
         return leaf_params_new
 
     def trees_log_prior(self, bart_params : Parameters, tree_ids):
@@ -320,7 +320,7 @@ class DefaultPrior(Prior):
         """
         resids = bart_params.data.y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
-        U, S, _ = np.linalg.svd(leaf_basis)
+        U, S, _ = np.linalg.svd(leaf_basis, full_matrices=False) # Fix shape issue
         noise_ratio = bart_params.global_params["eps_sigma2"] / self.f_sigma2
         logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
         resid_u_coefs = U.T @ resids
@@ -347,13 +347,11 @@ class DefaultPrior(Prior):
         else:
             raise ValueError("Invalid specification for the noise variance prior.")
         
-        # Initial guess to spur the optim
-        initial_guess = self.eps_q / gamma.ppf(sigma_hat, a=self.eps_nu/2)
-        
         def objective(l):
-            return (invgamma.cdf(self.eps_q, a=self.eps_nu/2, scale=self.eps_nu * l / 2) - sigma_hat)**2
-        # Add bracketing values for the optimization
-        result = minimize_scalar(objective, bracket=(.1*initial_guess, 1*initial_guess, 10*initial_guess))
+            scale_value = max(self.eps_nu * l / 2, 1e-6)  # Ensure scale is never zero or negative
+            return np.abs(invgamma.cdf(self.eps_q, a=self.eps_nu/2, 
+                                       scale=scale_value) - sigma_hat)
+        result = minimize_scalar(objective)
         return result.x
     
     def _sample_eps_sigma2(self, n, residuals):
