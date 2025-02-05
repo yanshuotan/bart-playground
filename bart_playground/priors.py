@@ -345,8 +345,9 @@ class DefaultPrior(Prior):
         else:
             raise ValueError("Invalid specification for the noise variance prior.")
         def objective(l):
+            scale_value = max(self.eps_nu * l / 2, 1e-6)  # Ensure scale is never zero or negative
             return np.abs(invgamma.cdf(self.eps_q, a=self.eps_nu/2, 
-                                       scale=self.eps_nu * l / 2) - sigma_hat)
+                                       scale=scale_value) - sigma_hat)
         result = minimize_scalar(objective)
         return result.x
     
