@@ -120,7 +120,7 @@ class DefaultSampler(Sampler):
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
-        super().__init__(prior, proposal_probs, temp_schedule, generator)
+        super().__init__(prior, proposal_probs, generator, temp_schedule)
 
     def get_init_state(self):
         """
@@ -132,7 +132,7 @@ class DefaultSampler(Sampler):
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
         trees = [Tree(self.data) for _ in range(self.prior.n_trees)]
-        global_params = self.prior.init_global_params(self.data.X, self.data.y)
+        global_params = self.prior.init_global_params(self.data)
         init_state = Parameters(trees, global_params, self.data)
         return init_state
 
