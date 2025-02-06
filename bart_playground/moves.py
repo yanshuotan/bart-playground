@@ -108,6 +108,8 @@ class Swap(Move):
         for _ in range(self.tol):
             self.proposed = self.current.copy(self.trees_changed)
             tree = self.proposed.trees[self.trees_changed[0]]
+            if not tree.nonterminal_split_nodes:
+                return self.proposed 
             parent_id = generator.choice(tree.nonterminal_split_nodes)
             lr = generator.integers(1, 3) # Choice of left/right child
             child_id = 2 * parent_id + lr

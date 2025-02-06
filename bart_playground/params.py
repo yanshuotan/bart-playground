@@ -33,6 +33,7 @@ class Tree:
             self.vars[0] = -1 # -1 represents a leaf node
             self.thresholds = np.full(8, np.nan, dtype=float)
             self.leaf_vals = np.full(8, np.nan, dtype=float)
+            self.leaf_vals[0] = 0 # Initialize the leaf value
             self.node_indicators = np.full((data.X.shape[0], 8), 0, dtype=bool)
             self.node_indicators[:, 0] = True
             self.n = np.full(8, -2, dtype=int)
