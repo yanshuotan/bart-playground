@@ -74,12 +74,13 @@ class Sampler(ABC):
             raise AttributeError("Data has not been added yet.")
         self.current = self.get_init_state()
         self.trace.append(self.current) # Add initial state to trace
-        for iter in tqdm(range(n_iter)):
+        for iter in range(n_iter):
             if iter % 10 == 0:
                 print(f"Running iteration {iter}")
-            print(self.temp_schedule)
+            # print(self.temp_schedule)
             self.current = self.one_iter(return_trace=False)
             self.trace.append(self.current)
+        return self.trace
     
     def sample_move(self):
         """
@@ -122,7 +123,7 @@ class DefaultSampler(Sampler):
     Default implementation of the BART sampler.
     """
     def __init__(self, prior : Prior, proposal_probs: dict,
-                 generator : np.random.Generator,temp_schedule=TemperatureSchedule(),tol=100):
+                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(),tol=100):
         self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,

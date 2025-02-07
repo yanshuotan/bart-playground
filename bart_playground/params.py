@@ -210,7 +210,7 @@ class Tree:
 
     def change_split(self, node_id, var, threshold, update_n=True):
         self.vars[node_id] = var
-        self.thresholds[threshold] = threshold
+        self.thresholds[node_id] = threshold
         if update_n:
             is_valid = self.update_n(node_id)
             return is_valid
