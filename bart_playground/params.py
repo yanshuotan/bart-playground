@@ -64,38 +64,17 @@ class Tree:
         - int
             Index of the leaf node.
         """
-        n = X.shape[0]
-        node_ids = np.zeros(n, dtype=int)
-        for i in range(n):
-            node_ids[i] = self._traverse_tree(X[i,:])
+        node_ids = np.full(X.shape[0], 0, dtype=int)
+        if not self.split_nodes: # Tree has no splits
+            return node_ids
+        routing = X[:, self.vars[self.split_nodes]] > self.thresholds[self.split_nodes]
+        for k in range(len(self.vars)):
+            split_node_counter = 0
+            if self.is_split_node(k):
+                node_ids[node_ids == k] = node_ids[node_ids == k] * 2 + \
+                    1 + routing[node_ids == k, split_node_counter]
+                split_node_counter += 1
         return node_ids
-
-    def _traverse_tree(self, x: np.ndarray) -> int:
-        """
-        Traverse the tree to find the leaf node for a given input.
-
-        Parameters:
-        - x: np.ndarray
-            Input data point (1D array).
-
-        Returns:
-        - int
-            Index of the leaf node.
-        """
-        node_id = 0  # Start at the root node
-
-        while True:
-            var = self.vars[node_id]
-            threshold = self.thresholds[node_id]
-
-            if var == -1:  # Check if the node is a leaf
-                return node_id  # Return the leaf node index
-
-            # Determine the next node based on the split condition
-            if x[var] <= threshold:
-                node_id = node_id * 2 + 1  # Move to the left child
-            else:
-                node_id = node_id * 2 + 2  # Move to the right child
 
     def evaluate(self, X: np.ndarray=None) -> float:
         """
