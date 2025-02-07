@@ -34,10 +34,12 @@ class Tree:
             self.thresholds = np.full(8, np.nan, dtype=float)
             self.leaf_vals = np.full(8, np.nan, dtype=float)
             self.leaf_vals[0] = 0 # Initialize the leaf value
+            # Cached leaf indicators for each training observation
             self.node_indicators = np.full((data.X.shape[0], 8), 0, dtype=bool)
             self.node_indicators[:, 0] = True
             self.n = np.full(8, -2, dtype=int)
             self.n[0] = data.X.shape[0]
+            self.evals = np.zeros(self.n[0]) # Cached evaluations for each training observation
         else:
             self.vars = copy.deepcopy(vars)
             self.thresholds = copy.deepcopy(thresholds)
@@ -94,7 +96,7 @@ class Tree:
             else:
                 node_id = node_id * 2 + 2  # Move to the right child
 
-    def evaluate(self, X: np.ndarray) -> float:
+    def evaluate(self, X: np.ndarray=None) -> float:
         """
         Evaluate the tree for a given input data matrix.
 
@@ -107,8 +109,11 @@ class Tree:
         - float
             Output values of the tree.
         """
-        leaf_ids = self.traverse_tree(X)  # Find the leaf node for the input
-        return self.leaf_vals[leaf_ids]  # Return the value at the leaf node
+        if X is None:
+            return self.evals
+        else:
+            leaf_ids = self.traverse_tree(X)  # Find the leaf node for the input
+            return self.leaf_vals[leaf_ids]  # Return the value at the leaf node
 
     def _resize_arrays(self):
         """
@@ -200,6 +205,42 @@ class Tree:
         self.leaf_vals[right_child] = right_val
         
         return self.n[left_child] > 0 and self.n[right_child] > 0
+
+    def prune_split(self, node_id: int):
+        """
+        Prune a terminal split node, turning it back into a leaf.
+
+        Parameters:
+        - node_id: int
+            Index of the split node to prune.
+        """
+        # Check if the node is a split node
+        if not self.is_terminal_split_node(node_id):
+            raise ValueError("Node is not a terminal split node and cannot be pruned.")
+
+        # Turn the split node into a leaf
+        self.vars[node_id] = -1
+        self.thresholds[node_id] = np.nan
+
+        # Delete previous leaf nodes
+        left_child = node_id * 2 + 1
+        right_child = node_id * 2 + 2
+        self.vars[left_child] = -2
+        self.vars[right_child] = -2
+
+    def change_split(self, node_id, var, threshold, update_n=True):
+        self.vars[node_id] = var
+        self.thresholds[threshold] = threshold
+        if update_n:
+            is_valid = self.update_n(node_id)
+            return is_valid
+    
+    def swap_split(self, parent_id, child_id):
+        parent_var, parent_threshold = self.vars[parent_id], self.thresholds[parent_id]
+        child_var, child_threshold = self.vars[child_id], self.thresholds[child_id]
+        self.change_split(child_id, parent_var, parent_threshold, update_n=False)
+        is_valid = self.change_split(parent_id, child_var, child_threshold, update_n=True)
+        return is_valid
     
     def update_n(self, node_id=0):
         """
@@ -228,29 +269,11 @@ class Tree:
             self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & (self.data.X[:, var] > threshold)
             self.n[left_child] = np.sum(self.node_indicators[:, left_child])
             self.n[right_child] = np.sum(self.node_indicators[:, right_child])
-            return self.update_n(left_child) and self.update_n(right_child)
-
-    def prune_split(self, node_id: int):
-        """
-        Prune a terminal split node, turning it back into a leaf.
-
-        Parameters:
-        - node_id: int
-            Index of the split node to prune.
-        """
-        # Check if the node is a split node
-        if not self.is_terminal_split_node(node_id):
-            raise ValueError("Node is not a terminal split node and cannot be pruned.")
-
-        # Turn the split node into a leaf
-        self.vars[node_id] = -1
-        self.thresholds[node_id] = np.nan
-
-        # Delete previous leaf nodes
-        left_child = node_id * 2 + 1
-        right_child = node_id * 2 + 2
-        self.vars[left_child] = -2
-        self.vars[right_child] = -2
+            is_valid = self.update_n(left_child) and self.update_n(right_child)
+            return is_valid
+        
+    def update_outputs(self):
+        self.evals = self.leaf_basis @ self.leaf_vals[self.leaves]
 
     def set_leaf_value(self, node_id, leaf_val):
         if self.is_leaf(node_id):
@@ -419,4 +442,5 @@ class Parameters:
             tree = self.trees[tree_id]
             tree.leaf_vals[tree.leaves] = \
                 leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
+            tree.update_outputs()
             leaf_counter += tree.n_leaves

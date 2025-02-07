@@ -1,6 +1,4 @@
 
-# samplers.py
-
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod

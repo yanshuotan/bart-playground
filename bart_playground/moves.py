@@ -47,8 +47,7 @@ class Grow(Move):
             threshold = generator.choice(tree.data.thresholds[var])
             if tree.split_leaf(node_id, var, threshold): # If no empty leaves are created
                 return self.proposed
-        self.proposed = self.current # Exceeded tol tries without finding a valid proposal. Stay at current state
-        return self.proposed
+        return self.current # Exceeded tol tries without finding a valid proposal. Stay at current state
 
 class Prune(Move):
     """
@@ -64,10 +63,11 @@ class Prune(Move):
         tree = self.proposed.trees[self.trees_changed[0]]
         # If there are no terminal splits, can not prune
         if not tree.terminal_split_nodes:
-            return self.proposed 
-        node_id = generator.choice(tree.terminal_split_nodes)
-        tree.prune_split(node_id)
-        return self.proposed
+            return self.current
+        else:
+            node_id = generator.choice(tree.terminal_split_nodes)
+            tree.prune_split(node_id)
+            return self.proposed
 
 class Change(Move):
     """
@@ -84,16 +84,13 @@ class Change(Move):
             tree = self.proposed.trees[self.trees_changed[0]]
             # If there are no splits, can not change
             if not tree.split_nodes:
-                continue
+                break
             node_id = generator.choice(tree.split_nodes)
             var = generator.integers(tree.data.p)
             threshold = generator.choice(tree.data.thresholds[var])
-            tree.vars[node_id] = var
-            tree.thresholds[node_id] = threshold
-            if tree.update_n(node_id): # If no empty leaves are created
+            if tree.change_split(node_id, var, threshold): # If no empty leaves are created
                 return self.proposed
-        self.proposed = self.current # Exceeded tol tries without finding a valid proposal. Stay at current state
-        return self.proposed
+        return self.current # Exceeded tol tries without finding a valid proposal. Stay at current state
 
 class Swap(Move):
     """
@@ -115,18 +112,9 @@ class Swap(Move):
             child_id = 2 * parent_id + lr
             if tree.vars[child_id] == -1: # Change to the other child if this is a leaf
                 child_id = 2 * parent_id + 3 - lr
-            parent_var = tree.vars[parent_id]
-            child_var = tree.vars[child_id]
-            parent_threshold = tree.thresholds[parent_id]
-            child_threshold = tree.thresholds[child_id]
-            tree.vars[parent_id] = child_var
-            tree.vars[child_id] = parent_var
-            tree.thresholds[parent_id] = child_threshold
-            tree.thresholds[child_id] = parent_threshold
-            if tree.update_n(parent_id): # If no empty leaves are created
+            if tree.swap_split(parent_id, child_id): # If no empty leaves are created
                 return self.proposed
-        self.proposed = self.current # Exceeded tol tries without finding a valid proposal. Stay at current state
-        return self.proposed
+        return self.proposed # Exceeded tol tries without finding a valid proposal. Stay at current state
     
  
 all_moves = {"grow" : Grow,
