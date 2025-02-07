@@ -77,7 +77,8 @@ class Sampler(ABC):
         self.current = self.get_init_state()
         self.trace.append(self.current) # Add initial state to trace
         for iter in tqdm(range(n_iter)):
-            print("Running iteration")
+            if iter % 10 == 0:
+                print(f"Running iteration {iter}")
             print(self.temp_schedule)
             self.current = self.one_iter(return_trace=False)
             self.trace.append(self.current)
