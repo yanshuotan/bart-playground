@@ -9,7 +9,7 @@ class Tree:
     the tree structure and leaf values into a single object.
     """
     def __init__(self, data : Dataset, vars=None, thresholds=None, leaf_vals=None, n=None, 
-                 node_indicators=None):
+                 node_indicators=None, evals=None):
         """
         Initialize the tree parameters.
 
@@ -46,10 +46,11 @@ class Tree:
             self.leaf_vals = copy.deepcopy(leaf_vals)
             self.n = copy.deepcopy(n)
             self.node_indicators = copy.deepcopy(node_indicators)
+            self.evals = copy.deepcopy(evals)
 
     def copy(self):
         return Tree(self.data, self.vars, self.thresholds, self.leaf_vals, self.n, 
-                    self.node_indicators)
+                    self.node_indicators, self.evals)
 
     def traverse_tree(self, X: np.ndarray) -> int:
         """
@@ -353,7 +354,7 @@ class Parameters:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, global_params, data : Dataset):
+    def __init__(self, trees: list, global_params, data : Dataset, cache=None):
         """
         Initializes the parameters for the model.
 
@@ -372,13 +373,17 @@ class Parameters:
         self.trees = trees
         self.n_trees = len(self.trees)
         self.global_params = global_params
+        if cache is None:
+            self.cache = np.sum([tree.evaluate() for tree in self.trees], axis=0)
+        else:
+            self.cache = cache
 
     def copy(self, modified_tree_ids):
         copied_trees = self.trees
         for tree_id in modified_tree_ids:
             copied_trees[tree_id] = self.trees[tree_id].copy()
         return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), 
-                          data=self.data)
+                          data=self.data, cache=copy.deepcopy(self.cache))
 
     def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
         """
@@ -399,19 +404,24 @@ class Parameters:
             The total output of the evaluated trees on the input data.
         """
 
-        if X is None:
-            X = self.data.X
+        # Trees to evaluate on
         if tree_ids is not None:
-            pass
+            all_except = [i for i in np.arange(self.n_trees) if i not in tree_ids]
         elif all_except is not None:
             tree_ids = [i for i in np.arange(self.n_trees) if i not in all_except]
         else:
             tree_ids = np.arange(self.n_trees)
-        total_output = np.zeros(X.shape[0])
-        # Iterate over all trees
-        for i, tree in enumerate(self.trees):
-            if i in tree_ids:  # Skip trees in the holdout list
-                total_output += tree.evaluate(X)  # Add the tree's output to the total
+            all_except = []
+
+        if X is None:
+            total_output = self.cache
+            for i in all_except:
+                total_output -= self.trees[i].evals
+        else:
+            total_output = np.zeros(X.shape[0])
+            # Iterate over all trees
+            for i in tree_ids:
+                total_output += self.trees[i].evaluate(X)  # Add the tree's output to the total
         return total_output
 
     def leaf_basis(self, tree_ids):
@@ -440,7 +450,9 @@ class Parameters:
         leaf_counter = 0
         for tree_id in tree_ids:
             tree = self.trees[tree_id]
+            tree_evals_old = tree.evals
             tree.leaf_vals[tree.leaves] = \
                 leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
             tree.update_outputs()
+            self.cache = self.cache + tree.evals - tree_evals_old
             leaf_counter += tree.n_leaves
