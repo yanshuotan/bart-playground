@@ -68,18 +68,19 @@ class Sampler(ABC):
         AttributeError: If data has not been added yet.
 
         """
+        self.trace = []
         self.n_iter = n_iter
-        print(n_iter)
         if self.data is None:
             raise AttributeError("Data has not been added yet.")
-        self.current = self.get_init_state()
-        self.trace.append(self.current) # Add initial state to trace
+        current = self.get_init_state()
+        self.trace.append(current) # Add initial state to trace
         for iter in range(n_iter):
             if iter % 10 == 0:
                 print(f"Running iteration {iter}")
             # print(self.temp_schedule)
-            self.current = self.one_iter(return_trace=False)
-            self.trace.append(self.current)
+            temp = self.temp_schedule(iter)
+            current = self.one_iter(current, temp, return_trace=False)
+            self.trace.append(current)
         return self.trace
     
     def sample_move(self):
@@ -112,7 +113,7 @@ class Sampler(ABC):
         pass
 
     @abstractmethod
-    def one_iter(self, temp=1, return_trace=False):
+    def one_iter(self, current, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
@@ -144,28 +145,26 @@ class DefaultSampler(Sampler):
         init_state = Parameters(trees, global_params, self.data)
         return init_state
 
-    def one_iter(self, return_trace=False):
+    def one_iter(self, current, temp, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
-        iter_trace = [self.current]
-        iter_current = self.current
-        temp = self.temp_schedule(iter_current)
+        iter_current = current.copy() # First make a copy
+        iter_trace = [(0, iter_current)]
         for k in range(self.prior.n_trees):
-            move = self.sample_move()(self.current, [k], self.tol)
-            move.propose(self.generator)
-            Z = self.generator.uniform(0, 1)
-            if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
-                new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, [k])
-                move.proposed.update_leaf_vals([k], new_leaf_vals)
-                iter_trace.append(move.proposed)
-                iter_current = move.proposed
-            else:
-                iter_trace.append(move.current)
+            move = self.sample_move()(iter_current, [k], self.tol)
+            if move.propose(self.generator): # Check if a valid move was proposed
+                Z = self.generator.uniform(0, 1)
+                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
+                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, [k])
+                    move.proposed.update_leaf_vals([k], new_leaf_vals)
+                    iter_current = move.proposed
+                    iter_trace.append((k+1, move.proposed))
         iter_current.global_params = self.prior.resample_global_params(iter_current)
         if return_trace:
             return iter_trace
         else:
+            del iter_trace
             return iter_current
     
 all_samplers = {"default" : DefaultSampler}

@@ -357,12 +357,17 @@ class Parameters:
         else:
             self.cache = cache
 
-    def copy(self, modified_tree_ids):
-        copied_trees = self.trees
+    def copy(self, modified_tree_ids=None):
+        if modified_tree_ids is None:
+            modified_tree_ids = range(self.n_trees)
+        copied_trees = self.trees.copy() # Shallow copy
         for tree_id in modified_tree_ids:
             copied_trees[tree_id] = self.trees[tree_id].copy()
         return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), 
                           data=self.data, cache=copy.deepcopy(self.cache))
+
+    # def copy(self, modified_tree_ids):
+        # return copy.deepcopy(self)
 
     def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
         """
