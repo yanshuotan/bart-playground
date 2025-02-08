@@ -22,10 +22,32 @@ class Move(ABC):
         self.proposed = None
         self.trees_changed = trees_changed
 
-    @abstractmethod
     def propose(self, generator):
         """
         Propose a new state.
+        """
+        if self.is_feasible():
+            for _ in range(self.tol):
+                proposed = self.current.copy(self.trees_changed)
+                success = self.try_propose(proposed, generator)
+                if success:
+                    self.proposed = proposed
+                    return True
+            # If exit loop without returning, have exceeded tol tries without 
+            # finding a valid proposal.
+        return False
+
+    @abstractmethod
+    def is_feasible(self):
+        """
+        Check whether move is feasible.
+        """
+        pass
+
+    @abstractmethod
+    def try_propose(self, proposed, generator):
+        """
+        Try to propose a new state.
         """
         pass
 
@@ -38,16 +60,16 @@ class Grow(Move):
         assert len(trees_changed) == 1
         self.tol = tol
 
-    def propose(self, generator):
-        for _ in range(self.tol):
-            self.proposed = self.current.copy(self.trees_changed)
-            tree = self.proposed.trees[self.trees_changed[0]]
-            node_id = generator.choice(tree.leaves)
-            var = generator.integers(tree.data.p)
-            threshold = generator.choice(tree.data.thresholds[var])
-            if tree.split_leaf(node_id, var, threshold): # If no empty leaves are created
-                return self.proposed
-        return self.current # Exceeded tol tries without finding a valid proposal. Stay at current state
+    def is_feasible(self):
+        return True
+    
+    def try_propose(self, proposed, generator):
+        tree = proposed.trees[self.trees_changed[0]]
+        node_id = generator.choice(tree.leaves)
+        var = generator.integers(tree.data.p)
+        threshold = generator.choice(tree.data.thresholds[var])
+        success = tree.split_leaf(node_id, var, threshold)
+        return success
 
 class Prune(Move):
     """
@@ -58,16 +80,15 @@ class Prune(Move):
         assert len(trees_changed) == 1
         self.tol = tol
 
-    def propose(self, generator):
-        self.proposed = self.current.copy(self.trees_changed)
-        tree = self.proposed.trees[self.trees_changed[0]]
-        # If there are no terminal splits, can not prune
-        if not tree.terminal_split_nodes:
-            return self.current
-        else:
-            node_id = generator.choice(tree.terminal_split_nodes)
-            tree.prune_split(node_id)
-            return self.proposed
+    def is_feasible(self):
+        tree = self.current.trees[self.trees_changed[0]]
+        return len(tree.terminal_split_nodes) > 0
+
+    def try_propose(self, proposed, generator):
+        tree = proposed.trees[self.trees_changed[0]]
+        node_id = generator.choice(tree.terminal_split_nodes)
+        tree.prune_split(node_id)
+        return True
 
 class Change(Move):
     """
@@ -78,19 +99,17 @@ class Change(Move):
         assert len(trees_changed) == 1
         self.tol = tol
 
-    def propose(self, generator):
-        for _ in range(self.tol):
-            self.proposed = self.current.copy(self.trees_changed)
-            tree = self.proposed.trees[self.trees_changed[0]]
-            # If there are no splits, can not change
-            if not tree.split_nodes:
-                break
-            node_id = generator.choice(tree.split_nodes)
-            var = generator.integers(tree.data.p)
-            threshold = generator.choice(tree.data.thresholds[var])
-            if tree.change_split(node_id, var, threshold): # If no empty leaves are created
-                return self.proposed
-        return self.current # Exceeded tol tries without finding a valid proposal. Stay at current state
+    def is_feasible(self):
+        tree = self.current.trees[self.trees_changed[0]]
+        return len(tree.split_nodes) > 0
+    
+    def try_propose(self, proposed, generator):
+        tree = proposed.trees[self.trees_changed[0]]
+        node_id = generator.choice(tree.split_nodes)
+        var = generator.integers(tree.data.p)
+        threshold = generator.choice(tree.data.thresholds[var])
+        success = tree.change_split(node_id, var, threshold)
+        return success
 
 class Swap(Move):
     """
@@ -101,20 +120,19 @@ class Swap(Move):
         assert len(trees_changed) == 1
         self.tol = tol
 
-    def propose(self, generator):
-        for _ in range(self.tol):
-            self.proposed = self.current.copy(self.trees_changed)
-            tree = self.proposed.trees[self.trees_changed[0]]
-            if not tree.nonterminal_split_nodes:
-                return self.proposed 
-            parent_id = generator.choice(tree.nonterminal_split_nodes)
-            lr = generator.integers(1, 3) # Choice of left/right child
-            child_id = 2 * parent_id + lr
-            if tree.vars[child_id] == -1: # Change to the other child if this is a leaf
-                child_id = 2 * parent_id + 3 - lr
-            if tree.swap_split(parent_id, child_id): # If no empty leaves are created
-                return self.proposed
-        return self.proposed # Exceeded tol tries without finding a valid proposal. Stay at current state
+    def is_feasible(self):
+        tree = self.current.trees[self.trees_changed[0]]
+        return len(tree.nonterminal_split_nodes) > 0
+
+    def try_propose(self, proposed, generator):
+        tree = proposed.trees[self.trees_changed[0]]
+        parent_id = generator.choice(tree.nonterminal_split_nodes)
+        lr = generator.integers(1, 3) # Choice of left/right child
+        child_id = 2 * parent_id + lr
+        if tree.vars[child_id] == -1: # Change to the other child if this is a leaf
+            child_id = 2 * parent_id + 3 - lr
+        success = tree.swap_split(parent_id, child_id) # If no empty leaves are created
+        return success
     
  
 all_moves = {"grow" : Grow,
