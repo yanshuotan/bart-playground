@@ -1,9 +1,11 @@
+import cProfile
+import pstats
+import os
 import unittest
 import numpy as np
 from bart_playground import DefaultPreprocessor
 from bart_playground import DataGenerator  # Import the updated DataGenerator class
 from bart_playground import DefaultBART
-from bart_playground import Dataset
 
 class TestDefaultBART(unittest.TestCase):
 
@@ -45,6 +47,13 @@ class TestDefaultBART(unittest.TestCase):
         pass
 
 if __name__ == "__main__":
-    unittest.main()
+    profile_filename = "output.prof"
+    cProfile.run("unittest.main()", profile_filename)
 
+    stats = pstats.Stats(profile_filename)
+    stats.strip_dirs()
+
+    stats.sort_stats("tottime").print_stats(20)
+
+    os.remove(profile_filename)
 
