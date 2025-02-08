@@ -23,11 +23,11 @@ class TestDefaultBART(unittest.TestCase):
         self.assertIsNotNone(self.bart.sampler, "DefaultBART should have a sampler.")
 
     def test_fit(self):
-        print(self.bart.preprocessor)
+        #print(self.bart.preprocessor)
         #print(self.preprocessor.thresholds)
-        data_use = self.preprocessor.transform(self.X, self.y)
+        #data_use = self.preprocessor.transform(self.X, self.y)
         #print(data_use)
-        self.bart.fit(data_use)
+        self.bart.fit(self.X, self.y)
         print("Running the fit test")
         #self.assertIsNotNone(self.bart.posterior_samples, "DefaultBART should store posterior samples after fitting.")
         pass

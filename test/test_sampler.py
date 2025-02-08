@@ -9,6 +9,9 @@ from bart_playground.samplers import DefaultSampler, default_proposal_probs
 from bart_playground.params import Parameters, Tree
 from bart_playground.priors import DefaultPrior
 
+from bart_playground.moves import all_moves
+from bart_playground.util import Dataset
+
 class TestSamplers(unittest.TestCase):
     def test_temperature_schedule_default(self):
         """
@@ -121,9 +124,10 @@ class TestSamplers(unittest.TestCase):
         sampler = DefaultSampler(prior, default_proposal_probs, dummy_gen)
         data = MagicMock()
         sampler.add_data(data)
-        sampler.current = MagicMock()
+        current = MagicMock()
+        temp = sampler.temp_schedule(0)
 
-        new_state = sampler.one_iter()
+        new_state = sampler.one_iter(current, temp)
         
         # Check that Move.propose is called
         mock_move.propose.assert_called_once_with(dummy_gen)
@@ -161,9 +165,10 @@ class TestSamplers(unittest.TestCase):
         sampler = DefaultSampler(prior, default_proposal_probs, dummy_gen)
         data = MagicMock()
         sampler.add_data(data)
-        sampler.current = MagicMock()
+        current = MagicMock()
+        temp = sampler.temp_schedule(0)
 
-        new_state = sampler.one_iter()
+        new_state = sampler.one_iter(current, temp)
         mock_move.propose.assert_called_once_with(dummy_gen)
         # In the rejection branch, update_leaf_vals should not be called
         mock_move.proposed.update_leaf_vals.assert_not_called()
@@ -206,7 +211,50 @@ class TestSamplers(unittest.TestCase):
         self.assertEqual(sampler.n_iter, 2)
         self.assertEqual(len(sampler.trace), 3)
         self.assertIs(sampler.trace[0], mock_state)
-        self.assertIs(sampler.trace[-1], sampler.current)
+        #self.assertIs(sampler.trace[-1], sampler.current) # Not applicable now
+
+class TestSamplers2(unittest.TestCase):
+
+    def setUp(self):
+        X, y = np.random.rand(100, 5), np.random.rand(100)
+        self.dataset = Dataset(X, y, X)
+        self.trees = [Tree(data=self.dataset) for _ in range(5)]
+        self.tree_params = Parameters(self.trees, None, self.dataset)
+        # Ensure every tree has at least one split using Parameters
+        for tree in self.tree_params.trees:
+            tree.split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=-1.0)
+        self.alpha = 0.5
+        self.beta = 0.5
+        self.prior = DefaultPrior(n_trees=len(self.trees), tree_alpha=self.alpha, tree_beta=self.beta)
+        self.prior.fit(self.dataset)
+        self.generator = np.random.default_rng(42)
+        self.temp_schedule = TemperatureSchedule()
+        self.sampler = DefaultSampler(
+            prior=self.prior, 
+            proposal_probs={"grow": 0.5, "prune": 0.5},
+            generator=self.generator,
+            temp_schedule=self.temp_schedule
+        )
+        self.sampler.add_data(self.dataset)
+
+    
+    def test_add_data(self):
+        self.assertIsNotNone(self.sampler.data)
+        self.assertEqual(self.sampler.data.X.shape, (100, 5))
+        self.assertEqual(self.sampler.data.y.shape, (100,))
+    
+    def test_get_init_state(self):
+        init_state = self.sampler.get_init_state()
+        self.assertIsInstance(init_state, Parameters)
+        self.assertEqual(len(init_state.trees), self.prior.n_trees)
+    
+    def test_run(self):
+        self.sampler.run(5)
+        self.assertEqual(len(self.sampler.trace), 6)
+    
+    def test_sample_move(self):
+        move = self.sampler.sample_move()
+        self.assertIn(move, all_moves.values())
 
 if __name__ == '__main__':
     unittest.main()
