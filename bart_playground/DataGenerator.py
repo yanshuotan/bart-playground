@@ -36,28 +36,9 @@ class DataGenerator:
         Returns:
             tuple: (X, y) where X is the feature matrix and y is the target array.
         """
-        if scenario == "linear":
-            return self.linear()
-        elif scenario == "heteroscedastic":
-            return self.heteroscedastic()
-        elif scenario == "nonoverlapping_vs_overlapping":
-            return self.nonoverlapping_vs_overlapping()
-        elif scenario == "spiky_vs_smooth":
-            return self.spiky_vs_smooth()
-        elif scenario == "cyclic":
-            return self.cyclic()
-        elif scenario == "distribution_shift":
-            return self.distribution_shift()
-        elif scenario == "multimodal":
-            return self.multimodal()
-        elif scenario == "imbalanced":
-            return self.imbalanced()
-        elif scenario == "piecewise_linear":
-            return self.piecewise_linear()
-        elif scenario == "tied_x":
-            return self.tied_x(**kwargs)
-        elif scenario == "tied_y":
-            return self.tied_y()
+        func = getattr(self, scenario, None)
+        if callable(func):
+            return func(**kwargs)
         else:
             raise NotImplementedError(f"No such a scenario supported.")
 
@@ -65,6 +46,20 @@ class DataGenerator:
         X = self.rng.uniform(0, 1, (self.n_samples, self.n_features))
         weights = self.rng.uniform(1, 5, size=self.n_features)
         y = X @ weights
+        y = self._add_noise(y)
+        return X, y
+    
+    def piecewise_flat(self):
+        X = self.rng.uniform(0, 1, (self.n_samples, self.n_features))
+        piecewise_conditions = [
+            (X @ np.ones(self.n_features) < 0.3, lambda x: 0),
+            ((X @ np.ones(self.n_features) >= 0.3) & (X @ np.ones(self.n_features) < 0.7), lambda x: 1),
+            (X @ np.ones(self.n_features) >= 0.7, lambda x: 2)
+        ]
+
+        y = np.zeros(self.n_samples)
+        for condition, func in piecewise_conditions:
+            y[condition] = func((X[condition] @ np.ones(self.n_features)))
         y = self._add_noise(y)
         return X, y
 

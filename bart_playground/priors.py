@@ -152,7 +152,7 @@ class DefaultPrior(Prior):
     Default implementation of the BART priors.
     """
     def __init__(self, n_trees=200, tree_alpha: float=0.95, tree_beta: float=2.0, f_k=2.0, 
-                 eps_q: float=0.9, eps_nu: float=3, specification="linear"):
+                 eps_q: float=0.9, eps_nu: float=3, specification="linear", generator : np.random.Generator = np.random.default_rng()):
         """
         Initializes the parameters for the prior distribution.
 
@@ -186,6 +186,7 @@ class DefaultPrior(Prior):
         self.eps_nu = eps_nu
         self.eps_lambda = None
         self.specification = specification
+        self.generator = generator
 
     def fit(self, data : Dataset):
         """
@@ -254,11 +255,11 @@ class DefaultPrior(Prior):
         leaf_basis = bart_params.leaf_basis(tree_ids)
         p = leaf_basis.shape[1]
         post_cov = np.linalg.inv(leaf_basis.T @ leaf_basis / 
-                                 bart_params.global_params["eps_sigma2"] + 
+                                 bart_params.global_params["eps_sigma2"] + # suspicious
                                  np.eye(p) / self.f_sigma2)
         post_mean = post_cov @ leaf_basis.T @ residuals / \
             bart_params.global_params["eps_sigma2"]
-        leaf_params_new = sqrtm(post_cov) @ np.random.randn(p) + post_mean
+        leaf_params_new = sqrtm(post_cov) @ self.generator.standard_normal(p) + post_mean
         return leaf_params_new
 
     def trees_log_prior(self, bart_params : Parameters, tree_ids):
@@ -360,7 +361,7 @@ class DefaultPrior(Prior):
         prior_beta = self.eps_nu * self.eps_lambda / 2
         post_alpha = prior_alpha + n / 2
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
-        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1)[0]
+        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)[0]
         return eps_sigma2
 
 all_priors = {"default" : DefaultPrior}
