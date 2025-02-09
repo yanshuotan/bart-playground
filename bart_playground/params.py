@@ -400,7 +400,7 @@ class Parameters:
             all_except = []
 
         if X is None:
-            total_output = self.cache
+            total_output = self.cache.copy()
             for i in all_except:
                 total_output -= self.trees[i].evals
         else:
