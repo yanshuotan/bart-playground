@@ -108,7 +108,8 @@ class Tree:
 
         The existing elements of each array are preserved, and the new elements are initialized as specified.
         """
-        new_length = len(self.vars) * 2
+        old_length = len(self.vars)
+        new_length = old_length * 2
 
         # Resize vars array
         new_vars = np.full(new_length, -2, dtype=int)
@@ -132,7 +133,8 @@ class Tree:
 
         # Resize node_indicators array
         new_node_indicators = np.full((self.node_indicators.shape[0], new_length), 0, dtype=bool)
-        new_node_indicators[:self.node_indicators.shape[1]] = self.n
+        # Copy the existing node_indicators into the first part of new_node_indicators
+        new_node_indicators[:, :old_length] = self.node_indicators
         self.node_indicators = new_node_indicators
 
     def split_leaf(self, node_id: int, var: int, threshold: float, left_val: float=np.nan, 
