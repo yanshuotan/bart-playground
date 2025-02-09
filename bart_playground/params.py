@@ -183,6 +183,8 @@ class Tree:
         self.n[right_child] = np.sum(self.node_indicators[:, right_child])
 
         # Assign the provided values to the new leaf nodes
+
+        self.leaf_vals[node_id] = np.nan
         self.leaf_vals[left_child] = left_val
         self.leaf_vals[right_child] = right_val
         
@@ -209,6 +211,8 @@ class Tree:
         right_child = node_id * 2 + 2
         self.vars[left_child] = -2
         self.vars[right_child] = -2
+        self.leaf_vals[left_child] = np.nan
+        self.leaf_vals[right_child] = np.nan
 
     def change_split(self, node_id, var, threshold, update_n=True):
         self.vars[node_id] = var

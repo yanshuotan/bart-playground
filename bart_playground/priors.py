@@ -1,7 +1,7 @@
 import numpy as np
 from abc import ABC, abstractmethod
 
-from scipy.stats import invgamma, gamma
+from scipy.stats import invgamma, chi2
 from scipy.linalg import sqrtm
 from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
@@ -242,6 +242,7 @@ class DefaultPrior(Prior):
         Parameters:
         -----------
         bart_params : Parameters
+        
             An instance of the Parameters class containing the BART model parameters.
         tree_ids : list or array-like
             A list or array of tree indices for which the leaf values are to be resampled.
@@ -254,10 +255,12 @@ class DefaultPrior(Prior):
         residuals = bart_params.data.y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
         p = leaf_basis.shape[1]
-        post_cov = np.linalg.inv(leaf_basis.T @ leaf_basis / 
+        # leaf_basis should be a numerical type to avoid loss of information
+        num_lbs = leaf_basis.astype(np.float64)
+        post_cov = np.linalg.inv(num_lbs.T @ num_lbs / 
                                  bart_params.global_params["eps_sigma2"] + # suspicious
                                  np.eye(p) / self.f_sigma2)
-        post_mean = post_cov @ leaf_basis.T @ residuals / \
+        post_mean = post_cov @ num_lbs.T @ residuals / \
             bart_params.global_params["eps_sigma2"]
         leaf_params_new = sqrtm(post_cov) @ self.generator.standard_normal(p) + post_mean
         return leaf_params_new
@@ -348,12 +351,9 @@ class DefaultPrior(Prior):
         else:
             raise ValueError("Invalid specification for the noise variance prior.")
         
-        def objective(l):
-            scale_value = max(self.eps_nu * l / 2, 1e-6)  # Ensure scale is never zero or negative
-            return np.abs(invgamma.cdf(self.eps_q, a=self.eps_nu/2, 
-                                       scale=scale_value) - sigma_hat)
-        result = minimize_scalar(objective)
-        return result.x
+        # chi2.ppf suffices
+        c = chi2.ppf(1 - self.eps_q, df=self.eps_nu)
+        return (sigma_hat**2 * c) / self.eps_nu
     
     def _sample_eps_sigma2(self, n, residuals):
         # Convert to inverse gamma params

@@ -52,9 +52,9 @@ class DataGenerator:
     def piecewise_flat(self):
         X = self.rng.uniform(0, 1, (self.n_samples, self.n_features))
         piecewise_conditions = [
-            (X @ np.ones(self.n_features) < 0.3, lambda x: 0),
-            ((X @ np.ones(self.n_features) >= 0.3) & (X @ np.ones(self.n_features) < 0.7), lambda x: 1),
-            (X @ np.ones(self.n_features) >= 0.7, lambda x: 2)
+            (X @ np.ones(self.n_features) < 0.3, lambda x: -0.5),
+            ((X @ np.ones(self.n_features) >= 0.3) & (X @ np.ones(self.n_features) < 0.7), lambda x: 0),
+            (X @ np.ones(self.n_features) >= 0.7, lambda x: 0.5)
         ]
 
         y = np.zeros(self.n_samples)
