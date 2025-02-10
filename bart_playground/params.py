@@ -68,8 +68,8 @@ class Tree:
         if not self.split_nodes: # Tree has no splits
             return node_ids
         routing = X[:, self.vars[self.split_nodes]] > self.thresholds[self.split_nodes]
+        split_node_counter = 0
         for k in range(len(self.vars)):
-            split_node_counter = 0
             if self.is_split_node(k):
                 node_ids[node_ids == k] = node_ids[node_ids == k] * 2 + \
                     1 + routing[node_ids == k, split_node_counter]
@@ -444,5 +444,7 @@ class Parameters:
             tree.leaf_vals[tree.leaves] = \
                 leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
             tree.update_outputs()
+            # if(not (tree.evaluate() == tree.evaluate(self.data.X)).all()):
+            #    breakpoint()
             self.cache = self.cache + tree.evals - tree_evals_old
             leaf_counter += tree.n_leaves

@@ -254,6 +254,12 @@ class DefaultPrior(Prior):
         """
         residuals = bart_params.data.y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
+        # Assuming tree_ids only contain one tree, 
+        # leaf_basis is an n×p binary (0–1) indicator matrix, 
+        # with each row having exactly one 1 (leaf assignment).
+        # num_lbs.T @ num_lbs yields a diagonal matrix with counts per leaf
+        # Similarly, num_lbs.T @ residuals sums residuals per leaf
+
         p = leaf_basis.shape[1]
         # leaf_basis should be a numerical type to avoid loss of information
         num_lbs = leaf_basis.astype(np.float64)
