@@ -213,6 +213,8 @@ class Tree:
         self.vars[right_child] = -2
         self.leaf_vals[left_child] = np.nan
         self.leaf_vals[right_child] = np.nan
+        self.n[left_child] = -2
+        self.n[right_child] = -2
 
     def change_split(self, node_id, var, threshold, update_n=True):
         self.vars[node_id] = var
