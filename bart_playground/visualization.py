@@ -22,19 +22,19 @@ def visualize_tree(tree_structure, tree_params, filename: str = "tree", format: 
 
     # Helper function to recursively add nodes and edges
     def add_nodes_edges(node_id):
-        if node_id >= len(tree_structure.var) or tree_structure.var[node_id] == -2:
+        if node_id >= len(tree_structure.vars) or tree_structure.vars[node_id] == -2:
             # If node_id is out of range or invalid, skip processing
             return
 
-        if tree_structure.var[node_id] == -1:
+        if tree_structure.vars[node_id] == -1:
             # Add leaf node with its value
             leaf_value = tree_params.leaf_vals[node_id]
             dot.node(str(node_id), f"Leaf\nValue: {leaf_value:.2f}", shape="box")
         else:
             # Add split node with variable and split value
-            var = tree_structure.var[node_id]
-            split = tree_structure.split[node_id]
-            dot.node(str(node_id), f"Var: X_{var}\nSplit: {split:.2f}")
+            var = tree_structure.vars[node_id]
+            threshold = tree_structure.thresholds[node_id]
+            dot.node(str(node_id), f"Var: X_{var}\nThreshold: {threshold:.2f}")
 
             # Recursively add left and right children
             left_child = node_id * 2 + 1
@@ -44,9 +44,9 @@ def visualize_tree(tree_structure, tree_params, filename: str = "tree", format: 
             add_nodes_edges(right_child)
 
             # Add edges to children
-            if left_child < len(tree_structure.var) and tree_structure.var[left_child] != -2:
+            if left_child < len(tree_structure.vars) and tree_structure.vars[left_child] != -2:
                 dot.edge(str(node_id), str(left_child), label="Left")
-            if right_child < len(tree_structure.var) and tree_structure.var[right_child] != -2:
+            if right_child < len(tree_structure.vars) and tree_structure.vars[right_child] != -2:
                 dot.edge(str(node_id), str(right_child), label="Right")
 
     # Start with the root node (node_id = 0)

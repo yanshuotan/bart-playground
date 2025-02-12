@@ -1,14 +1,14 @@
 import numpy as np
 from abc import ABC, abstractmethod
 
-from scipy.stats import invgamma
+from scipy.stats import invgamma, chi2
 from scipy.linalg import sqrtm
 from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
 
-from params import Tree, Parameters
-from moves import Move
-from util import Dataset
+from .params import Tree, Parameters
+from .moves import Move
+from .util import Dataset
 
 class Prior(ABC):
     """
@@ -152,7 +152,7 @@ class DefaultPrior(Prior):
     Default implementation of the BART priors.
     """
     def __init__(self, n_trees=200, tree_alpha: float=0.95, tree_beta: float=2.0, f_k=2.0, 
-                 eps_q: float=0.9, eps_nu: float=3, specification="linear"):
+                 eps_q: float=0.9, eps_nu: float=3, specification="linear", generator : np.random.Generator = np.random.default_rng()):
         """
         Initializes the parameters for the prior distribution.
 
@@ -178,14 +178,15 @@ class DefaultPrior(Prior):
         """
 
         self.n_trees = n_trees
-        self.tree_alpha = tree_alpha
-        self.tree_beta = tree_beta
+        self.alpha = tree_alpha
+        self.beta = tree_beta
         self.f_k = f_k
-        self.f_sigma2 = 0.25 / (self.k ** 2 * n_trees)
+        self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda = None
         self.specification = specification
+        self.generator = generator
 
     def fit(self, data : Dataset):
         """
@@ -209,6 +210,7 @@ class DefaultPrior(Prior):
             dict: A dictionary containing the initialized global parameter:
                 - eps_sigma2 (float): The sampled epsilon sigma squared value.
         """
+        self.fit(data)
         eps_sigma2 = self._sample_eps_sigma2(data.X.shape[1], data.y)
         return {"eps_sigma2" : eps_sigma2}
 
@@ -240,6 +242,7 @@ class DefaultPrior(Prior):
         Parameters:
         -----------
         bart_params : Parameters
+        
             An instance of the Parameters class containing the BART model parameters.
         tree_ids : list or array-like
             A list or array of tree indices for which the leaf values are to be resampled.
@@ -249,15 +252,23 @@ class DefaultPrior(Prior):
         leaf_params_new : numpy.ndarray
             The resampled leaf parameters.
         """
-        residuals = bart_params.y - bart_params.evaluate(all_except=tree_ids)
+        residuals = bart_params.data.y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
+        # Assuming tree_ids only contain one tree, 
+        # leaf_basis is an n×p binary (0–1) indicator matrix, 
+        # with each row having exactly one 1 (leaf assignment).
+        # num_lbs.T @ num_lbs yields a diagonal matrix with counts per leaf
+        # Similarly, num_lbs.T @ residuals sums residuals per leaf
+
         p = leaf_basis.shape[1]
-        post_cov = np.linalg.inv(leaf_basis.T @ leaf_basis / 
-                                 bart_params.global_params["eps_sigma2"] + 
+        # leaf_basis should be a numerical type to avoid loss of information
+        num_lbs = leaf_basis.astype(np.float64)
+        post_cov = np.linalg.inv(num_lbs.T @ num_lbs / 
+                                 bart_params.global_params["eps_sigma2"] + # suspicious
                                  np.eye(p) / self.f_sigma2)
-        post_mean = post_cov @ leaf_basis.T @ residuals / \
+        post_mean = post_cov @ num_lbs.T @ residuals / \
             bart_params.global_params["eps_sigma2"]
-        leaf_params_new = sqrtm(post_cov) @ np.np.random.randn(p) + post_mean
+        leaf_params_new = sqrtm(post_cov) @ self.generator.standard_normal(p) + post_mean
         return leaf_params_new
 
     def trees_log_prior(self, bart_params : Parameters, tree_ids):
@@ -281,10 +292,11 @@ class DefaultPrior(Prior):
         for tree_id in tree_ids:
             tree = bart_params.trees[tree_id]
             d = np.ceil(np.log2(np.arange(len(tree.vars)) + 2)) - 1
-            log_p_split = np.log(self.alpha) - self.tree_beta * np.log(1 + d)
-            log_probs = np.where(self.var == -1, np.log(1 - np.exp(log_p_split)), 
+            log_p_split = np.log(self.alpha) - self.beta * np.log(1 + d)
+            log_probs = np.where(tree.vars == -1, np.log(1 - np.exp(log_p_split)), 
                                  log_p_split)
-            log_prior += np.sum(log_probs[~np.isnan(tree.var)])
+            is_non_empty = np.where(tree.vars != -2)[0]
+            log_prior += np.sum(log_probs[is_non_empty])
         return log_prior
 
     def trees_log_marginal_lkhd(self, bart_params : Parameters, tree_ids):
@@ -318,7 +330,7 @@ class DefaultPrior(Prior):
         """
         resids = bart_params.data.y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
-        U, S, _ = np.linalg.svd(leaf_basis)
+        U, S, _ = np.linalg.svd(leaf_basis, full_matrices=False) # Fix shape issue
         noise_ratio = bart_params.global_params["eps_sigma2"] / self.f_sigma2
         logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
         resid_u_coefs = U.T @ resids
@@ -333,6 +345,7 @@ class DefaultPrior(Prior):
         Compute the lambda parameter for the noise variance prior.
         Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.
         """
+       
         if specification == "naive":
             sigma_hat = np.std(data.y)
         elif specification == "linear":
@@ -343,11 +356,10 @@ class DefaultPrior(Prior):
             sigma_hat = np.std(resids)
         else:
             raise ValueError("Invalid specification for the noise variance prior.")
-        def objective(l):
-            return np.abs(invgamma.cdf(self.eps_q, a=self.eps_nu/2, 
-                                       scale=self.eps_nu * l / 2) - sigma_hat)
-        result = minimize_scalar(objective)
-        return result.x
+        
+        # chi2.ppf suffices
+        c = chi2.ppf(1 - self.eps_q, df=self.eps_nu)
+        return (sigma_hat**2 * c) / self.eps_nu
     
     def _sample_eps_sigma2(self, n, residuals):
         # Convert to inverse gamma params
@@ -355,7 +367,7 @@ class DefaultPrior(Prior):
         prior_beta = self.eps_nu * self.eps_lambda / 2
         post_alpha = prior_alpha + n / 2
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
-        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1)[0]
+        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)[0]
         return eps_sigma2
 
 all_priors = {"default" : DefaultPrior}
