@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from bart_playground import Tree
+from bart_playground import Tree, Parameters
 from bart_playground import Dataset
 
 class TestTree(unittest.TestCase):
@@ -97,6 +97,46 @@ class TestTree(unittest.TestCase):
     #     self.tree.split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=np.nan)
     #     self.tree.split_leaf(2, var=1, threshold=0.7, left_val=2.0, right_val=-2.0)
     #     self.assertEqual(self.tree.get_n_leaves(), 3)
+
+class TestParameters(unittest.TestCase):
+
+    def setUp(self):
+        X, y = np.random.rand(100, 5), np.random.rand(100)
+        self.dataset = Dataset(X, y, None)
+        self.trees = [Tree(data=self.dataset) for _ in range(5)]
+        self.global_params = {'param1': 1.0, 'param2': 2.0}
+        self.params = Parameters(trees=self.trees, global_params=self.global_params, data=self.dataset)
+
+    def test_initialization(self):
+        self.assertEqual(len(self.params.trees), 5)
+        self.assertEqual(self.params.n_trees, 5)
+        self.assertEqual(self.params.global_params['param1'], 1.0)
+        self.assertTrue(np.all(self.params.cache == np.sum([tree.evaluate() for tree in self.trees], axis=0)))
+
+    def test_copy(self):
+        params_copy = self.params.copy()
+        self.assertEqual(len(params_copy.trees), 5)
+        self.assertEqual(params_copy.global_params, self.params.global_params)
+        self.assertFalse(params_copy.trees is self.params.trees)
+        self.assertFalse(params_copy.cache is self.params.cache)
+
+    def test_evaluate(self):
+        output = self.params.evaluate()
+        expected_output = np.sum([tree.evaluate() for tree in self.trees], axis=0)
+        self.assertTrue(np.allclose(output, expected_output))
+
+    def test_leaf_basis(self):
+        tree_ids = [0, 1, 2]
+        basis = self.params.leaf_basis(tree_ids)
+        expected_basis = np.hstack([self.trees[i].leaf_basis for i in tree_ids])
+        self.assertTrue(np.allclose(basis, expected_basis))
+
+    def test_update_leaf_vals(self):
+        leaf_vals = np.random.rand(sum(tree.n_leaves for tree in self.trees))
+        tree_ids = list(range(len(self.trees)))
+        self.params.update_leaf_vals(tree_ids, leaf_vals)
+        updated_output = self.params.evaluate()
+        self.assertTrue(np.allclose(updated_output, np.sum([tree.evaluate() for tree in self.trees], axis=0)))
 
 if __name__ == "__main__":
     unittest.main()
