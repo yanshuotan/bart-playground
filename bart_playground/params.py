@@ -359,11 +359,14 @@ class Parameters:
         self.trees = trees
         self.n_trees = len(self.trees)
         self.global_params = global_params
+        self.init_cache(cache)
+            
+    def init_cache(self, cache):
         if cache is None:
             self.cache = np.sum([tree.evaluate() for tree in self.trees], axis=0)
         else:
             self.cache = cache
-
+            
     def copy(self, modified_tree_ids=None):
         if modified_tree_ids is None:
             modified_tree_ids = range(self.n_trees)

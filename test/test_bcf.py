@@ -26,12 +26,12 @@ def generate_bcf_data(n=1000, p=10, noise_level=0.5, random_state=42):
     return X, y, z, mu, tau
 
 # Generate data
-X, y, z, true_mu, true_tau = generate_bcf_data(n=2000)
+X, y, z, true_mu, true_tau = generate_bcf_data(n=500)
 X_train, X_test, y_train, y_test, z_train, z_test, mu_train, mu_test, tau_train, tau_test = \
     train_test_split(X, y, z, true_mu, true_tau, test_size=0.2, random_state=42)
 
 bcf = BCF(
-    n_mu_trees=200,       # Number of prognostic effect trees
+    n_mu_trees=100,       # Number of prognostic effect trees
     n_tau_trees=50,       # Number of treatment effect trees
     mu_alpha=0.95,        # Tree depth prior for mu
     mu_beta=2.0,          # Tree depth prior for mu
@@ -44,3 +44,5 @@ bcf = BCF(
 )
 
 bcf.fit(X_train, y_train, z_train)
+
+print(bcf.predict_components(X_test, z_test))

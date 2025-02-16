@@ -46,17 +46,24 @@ class BCF:
         self.sampler.add_data(data)
         self.sampler.run(self.ndpost + self.nskip)
 
-    def predict_components(self, X):
+    def predict_components(self, X, Z):
         """Return separate mu and tau predictions"""
         post_mu = np.zeros((X.shape[0], self.ndpost))
         post_tau = np.zeros_like(post_mu)
+        post_y = np.zeros_like(post_mu)
         
         for k in range(self.ndpost):
             params = self.sampler.trace[self.nskip + k]
             post_mu[:,k] = np.sum([t.evaluate(X) for t in params.mu_trees], axis=0)
             post_tau[:,k] = np.sum([t.evaluate(X) for t in params.tau_trees], axis=0)
+            post_y[:, k] = post_mu[:, k] + Z * post_tau[:, k]
             
-        return post_mu, post_tau
+        return post_mu, post_tau, post_y
+    
+    def predict_mean(self, X, Z):
+        """Return the mean prediction"""
+        post_mu, post_tau, post_y = self.predict_components(X, Z)
+        return np.mean(post_mu, axis=1), np.mean(post_tau, axis=1), np.mean(post_y, axis=1)
 
 class BCFPreprocessor(DefaultPreprocessor):
     @staticmethod

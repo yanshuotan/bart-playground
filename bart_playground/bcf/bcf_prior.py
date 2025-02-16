@@ -4,6 +4,9 @@
 from ..priors import DefaultPrior
 from .bcf_util import BCFDataset
 from .bcf_params import BCFParams
+from ..moves import Move
+from ..params import Parameters
+import numpy as np
 class BCFPrior:
     """Manages separate priors for prognostic (μ) and treatment (τ) trees"""
     def __init__(self, n_mu_trees=200, n_tau_trees=50,
@@ -38,6 +41,53 @@ class BCFPrior:
             eps_nu=eps_nu,
             specification=specification
         )
+      
+    # TODO
+    def trees_log_prior_ratio(self, move : Move, ensemble_id):
+        if ensemble_id == 'mu':
+            bart_prior : DefaultPrior = self.mu_prior
+        else:
+            bart_prior : DefaultPrior = self.tau_prior
+            
+        log_prior_current = bart_prior.trees_log_prior(move.current, move.trees_changed)
+        log_prior_proposed = bart_prior.trees_log_prior(move.proposed, move.trees_changed)
+        return log_prior_proposed - log_prior_current
+    
+    # TODO
+    def trees_log_marginal_lkhd_ratio(self, move : Move, ensemble_id, marginalize: bool=False):
+        """
+        Compute the ratio of marginal likelihoods for a given move.
+
+        Parameters:
+        - move: Move
+            The move to compute the marginal likelihood ratio for.
+        - marginalize: bool
+            Whether to marginalize over the ensemble.
+
+        Returns:
+        - float
+            Marginal likelihood ratio.
+        """
+        if not marginalize:
+            trees = move.trees_changed
+        else:
+            trees = np.arange(self.current.n_trees)
+            
+        if ensemble_id == 'mu':
+            bart_prior : DefaultPrior = self.mu_prior
+        else:
+            bart_prior : DefaultPrior = self.tau_prior
+            
+        log_lkhd_current = bart_prior.trees_log_marginal_lkhd(move.current,
+                                                            tree_ids= trees)
+        log_lkhd_proposed = bart_prior.trees_log_marginal_lkhd(move.proposed,
+                                                            tree_ids= trees)
+        return log_lkhd_proposed - log_lkhd_current
+    
+    # copied, TODO
+    def trees_log_mh_ratio(self, move : Move, ensemble_id, marginalize : bool=False):
+         return self.trees_log_prior_ratio(move, ensemble_id) + \
+            self.trees_log_marginal_lkhd_ratio(move, ensemble_id, marginalize)
     
     def fit(self, data : BCFDataset):
         """
@@ -61,43 +111,16 @@ class BCFPrior:
                                              bcf_params.data.y - bcf_params.evaluate())
         return {"eps_sigma2" : eps_sigma2}
 
-    def resample_leaf_vals(self, bcf_params : BCFParams, ensemble_id, tree_ids):
+    def resample_leaf_vals(self, bart_params, ensemble_id, tree_ids):
         """
         Resample the values of the leaf nodes for the specified trees in a specified ensemble.
         """
         if ensemble_id == 'mu':
-            return self.mu_prior.resample_leaf_vals(
-                bcf_params.mu_trees, tree_ids
-            )
+            bart_prior : DefaultPrior = self.mu_prior
         else:
-            return self.tau_prior.resample_leaf_vals(
-                bcf_params.tau_trees, tree_ids
-            )
-
-    def trees_log_prior(self, bcf_params : BCFParams, ensemble_id, tree_ids):
-        """Get log prior for specified trees in a specified ensemble"""
-        if ensemble_id == 'mu':
-            return self.mu_prior.trees_log_prior(
-                bcf_params.mu_trees, tree_ids
-            )
-        else:
-            return self.tau_prior.trees_log_prior(
-                bcf_params.tau_trees, tree_ids
-            )
+            bart_prior : DefaultPrior = self.tau_prior
+        return bart_prior.resample_leaf_vals(bart_params, tree_ids)
         
-    def trees_log_marginal_lkhd(self, bcf_params : BCFParams, ensemble_id, tree_ids):
-        """
-        Calculate the log marginal likelihood of the trees in a specified BART model.
-        """
-        if ensemble_id == 'mu':
-            return self.mu_prior.trees_log_marginal_lkhd(
-                bcf_params.mu_trees, tree_ids
-            )
-        else:
-            return self.tau_prior.trees_log_marginal_lkhd(
-                bcf_params.tau_trees, tree_ids
-            )
-
     def _fit_eps_lambda(self, data, specification="linear"):
         # Which prior to use does not matter
         return self.mu_prior._fit_eps_lambda(data, specification)

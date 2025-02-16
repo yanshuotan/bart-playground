@@ -43,11 +43,9 @@ class BCFSampler(Sampler):
             probs = list(self.proposals_tau.values())
         return all_moves[self.generator.choice(moves, p=probs)]
     
-    def one_iter(self, return_trace=False):
+    def one_iter(self, current, temp, return_trace=False):
         """One MCMC iteration: Update μ trees -> τ trees -> global params"""
-        if self.current is None:
-            self.current = self.get_init_state()
-        iter_current = self.current
+        iter_current = current
         iter_trace = [iter_current] if return_trace else None
         temp = self.temp_schedule(iter_current)
 
@@ -57,16 +55,13 @@ class BCFSampler(Sampler):
             move = move_class(
                 current=BCFParamSlice(iter_current, "mu"), trees_changed=[k], tol=self.tol
             )
-            move.propose(self.generator)
-
-            # Metropolis–Hastings
-            Z = self.generator.uniform(0,1)
-            if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
-                new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, 'mu', [k])
-                move.proposed.update_leaf_vals('mu', [k], new_leaf_vals)
-                iter_current = move.proposed.bcf_params
-            else:
-                pass
+            if move.propose(self.generator): # Check if a valid move was proposed
+                # Metropolis–Hastings
+                Z = self.generator.uniform(0,1)
+                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, 'mu')):
+                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, 'mu', [k])
+                    move.proposed.update_leaf_vals([k], new_leaf_vals)
+                    iter_current = move.proposed.bcf_params
 
             if return_trace:
                 iter_trace.append(iter_current)
@@ -77,29 +72,25 @@ class BCFSampler(Sampler):
             move = move_class(
                 current=BCFParamSlice(iter_current, "tau"), trees_changed=[k], tol=self.tol
             )
-            move.propose(self.generator)
-
-            # Metropolis–Hastings
-            Z = self.generator.uniform(0,1)
-            if Z < np.exp(temp * move.get_log_MH_ratio()):
-                new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, 'tau', [k])
-                # TODO: ???
-                move.proposed.update_leaf_vals('tau', [k], new_leaf_vals)
-                iter_current = move.proposed.bcf_params
-            else:
-                pass
+            if move.propose(self.generator): # Check if a valid move was proposed
+                # Metropolis–Hastings
+                Z = self.generator.uniform(0,1)
+                if Z < np.exp(temp *  self.prior.trees_log_mh_ratio(move, 'tau')):
+                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, 'tau', [k])
+                    move.proposed.update_leaf_vals([k], new_leaf_vals)
+                    iter_current = move.proposed.bcf_params
 
             if return_trace:
                 iter_trace.append(iter_current)
 
         # 3) Resample global parameters
-        new_globals = self.prior.resample_global_params(iter_current)
-        iter_current = iter_current.update_global_params(new_globals)
-
-        # self.current = iter_current
+        iter_current.global_params = self.prior.resample_global_params(iter_current)
+        # new_globals = self.prior.resample_global_params(iter_current)
+        # iter_current = iter_current.update_global_params(new_globals)
 
         if return_trace:
             return iter_trace
         else:
+            del iter_trace
             return iter_current
     
