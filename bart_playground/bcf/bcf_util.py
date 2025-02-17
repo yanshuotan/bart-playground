@@ -10,7 +10,7 @@ class BCFDataset(Dataset):
         self.z = z
         super().__init__(X, y, thresholds)
         
-class BCFParamSlice(Parameters):
+class BCFParamView(Parameters):
     """
     An adapter making a BCFParams ensemble look like a single-ensemble
     BART 'Parameters' object.
@@ -62,7 +62,7 @@ class BCFParamSlice(Parameters):
         else:
             new_bcf = self.bcf_params.copy(modified_tau_ids=modified_tree_ids)
             
-        sub_model = BCFParamSlice(new_bcf, self.ensemble_id, cache=copy.deepcopy(self.cache))
+        sub_model = BCFParamView(new_bcf, self.ensemble_id, cache=copy.deepcopy(self.cache))
         return sub_model
 
     # def copy(self, trees_changed=None):

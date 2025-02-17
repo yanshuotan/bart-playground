@@ -6,7 +6,7 @@ from ..moves import all_moves
 from .bcf_params import BCFParams
 from ..params import Tree
 from .bcf_prior import BCFPrior
-from .bcf_util import BCFDataset, BCFParamSlice
+from .bcf_util import BCFDataset, BCFParamView
 
 import numpy as np
 
@@ -53,7 +53,7 @@ class BCFSampler(Sampler):
         for k in range(self.prior.mu_prior.n_trees):
             move_class = self.sample_move("mu")  
             move = move_class(
-                current=BCFParamSlice(iter_current, "mu"), trees_changed=[k], tol=self.tol
+                current=BCFParamView(iter_current, "mu"), trees_changed=[k], tol=self.tol
             )
             if move.propose(self.generator): # Check if a valid move was proposed
                 # Metropolis–Hastings
@@ -70,7 +70,7 @@ class BCFSampler(Sampler):
         for k in range(self.prior.tau_prior.n_trees):
             move_class = self.sample_move("tau")  
             move = move_class(
-                current=BCFParamSlice(iter_current, "tau"), trees_changed=[k], tol=self.tol
+                current=BCFParamView(iter_current, "tau"), trees_changed=[k], tol=self.tol
             )
             if move.propose(self.generator): # Check if a valid move was proposed
                 # Metropolis–Hastings
@@ -85,8 +85,6 @@ class BCFSampler(Sampler):
 
         # 3) Resample global parameters
         iter_current.global_params = self.prior.resample_global_params(iter_current)
-        # new_globals = self.prior.resample_global_params(iter_current)
-        # iter_current = iter_current.update_global_params(new_globals)
 
         if return_trace:
             return iter_trace
