@@ -173,3 +173,86 @@ default_proposal_probs = {"grow" : 0.25,
                           "prune" : 0.25,
                           "change" : 0.4,
                           "swap" : 0.1}
+
+
+class NtreeSampler(Sampler):
+    """
+    Change the number of trees implementation of the BART sampler.
+    """
+    def __init__(self, prior : Prior, proposal_probs: dict, move_tree_probs : dict,
+                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(),tol=100):
+        self.tol = tol
+        if proposal_probs is None:
+            proposal_probs = {"grow" : 0.5,
+                              "prune" : 0.5}
+        # if move_tree_probs is None:
+        #     move_tree_probs = {"break": 0.5,
+        #                        "combine": 0.5}
+        super().__init__(prior, proposal_probs, generator, temp_schedule)
+
+    def get_init_state(self) -> Parameters:
+        """
+        Retrieve the initial state for the sampler.
+
+        Returns:
+            The initial state for the sampler.
+        """
+        if self.data is None:
+            raise AttributeError("Need data before running sampler.")
+        trees = [Tree(self.data) for _ in range(self.prior.n_trees)]
+        global_params = self.prior.init_global_params(self.data)
+        init_state = Parameters(trees, global_params, self.data)
+        return init_state
+
+    def one_iter(self, current, temp, return_trace=False):
+        """
+        Perform one iteration of the sampler.
+        """
+        iter_current = current.copy() # First make a copy
+        iter_trace = [(0, iter_current)]
+        theta = iter_current.global_params['n_trees_controler']
+
+        # Break and Combine
+        U = self.generator.uniform(0,1)
+        if U < 0.5: # Break move 
+            move = Break(iter_current, [self.generator.integers(0,self.prior.n_trees)], self.tol)   
+            if move.propose(self.generator):
+                Z = self.generator.uniform(0, 1)
+                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)): # Here should be MH ratio for Break move
+                    self.prior.n_trees = self.prior.n_trees + 1
+                    new_leaf_vals_remain = self.prior.resample_leaf_vals(move.proposed,[self.prior.n_trees-2])
+                    new_leaf_vals_new = self.prior.resample_leaf_vals(move.proposed,[self.prior.n_trees-1])
+                    move.proposed.update_leaf_vals([self.prior.n_trees-2], new_leaf_vals_remain)
+                    move.proposed.update_leaf_vals([self.prior.n_trees-1], new_leaf_vals_new)
+                    iter_current = move.proposed
+                    iter_trace.append((1, move.proposed))
+        
+        else: # Combine move 
+            move = Combine(iter_current, [self.generator.integers(0,self.prior.n_trees,size=2)], self.tol)   
+            if move.propose(self.generator):
+                Z = self.generator.uniform(0, 1)
+                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)): # Here should be MH ratio for Combine move
+                    self.prior.n_trees = self.prior.n_trees - 1
+                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed,[self.prior.n_trees-1])
+                    move.proposed.update_leaf_vals([self.prior.n_trees-1], new_leaf_vals)
+                    iter_current = move.proposed
+                    iter_trace.append((1, move.proposed))
+
+        # Default BART
+        for k in range(self.prior.n_trees):
+            move = self.sample_move()(iter_current, [k], self.tol)
+            if move.propose(self.generator): # Check if a valid move was proposed
+                Z = self.generator.uniform(0, 1)
+                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
+                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, [k])
+                    move.proposed.update_leaf_vals([k], new_leaf_vals)
+                    iter_current = move.proposed
+                    iter_trace.append((k+2, move.proposed))
+        iter_current.global_params = self.prior.resample_global_params(iter_current)
+        if return_trace:
+            return iter_trace
+        else:
+            del iter_trace
+            return iter_current
+    
+all_samplers = {"default" : DefaultSampler}
