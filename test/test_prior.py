@@ -154,6 +154,22 @@ class TestPrior2(unittest.TestCase):
         mh_ratio = self.prior.trees_log_mh_ratio(mock_move)
         self.assertAlmostEqual(mh_ratio, 0.4)
 
+    def test_trees_log_mh_ratio_marginalized(self):
+            """
+            Test computing MH ratio.
+            """
+            mock_move = MagicMock()
+            mock_move.current = MagicMock()
+            mock_move.proposed = MagicMock()
+            mock_move.trees_changed = [0]
+
+            self.prior.trees_log_prior_ratio = MagicMock(return_value=-0.3)
+            self.prior.trees_log_marginal_lkhd_ratio = MagicMock(return_value=0.7)
+
+
+            mh_ratio = self.prior.trees_log_mh_ratio(mock_move, marginalize=True)
+            self.assertAlmostEqual(mh_ratio, 0.4)
+
 
 if __name__ == "__main__":
     unittest.main()
