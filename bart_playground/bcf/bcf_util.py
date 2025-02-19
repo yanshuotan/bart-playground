@@ -18,9 +18,10 @@ class BCFParamView(Parameters):
         self.ensemble_id = ensemble_id
         self.init_cache(cache)
         # self._internal_count = 0
-        self._init_treated_data()
+        # self._init_treated_data()
     
     def _init_treated_data(self):
+        raise Exception("Should never be called")
         parent_data = self.bcf_params.data
         
         self.context_treated = parent_data.X[parent_data.treated, :]
@@ -34,25 +35,6 @@ class BCFParamView(Parameters):
     @global_params.setter
     def global_params(self, new_params):
         self.bcf_params.global_params = new_params
-    
-    @property
-    def data(self):
-        raise Exception("Shouldn't be called now")
-        return self.bart_data()
-        # return self.bcf_params.data
-    @data.setter
-    def data(self, new_data):
-        raise Exception("data.setter called, but not implemented")
-        # self.bcf_params.data = new_data
-        
-    def bart_data(self):
-        parent_data = self.bcf_params.data
-        if(self.ensemble_id == "mu"):
-            residuals = parent_data.y - parent_data.z * self.bcf_params.tau_view.evaluate()
-            return Dataset(parent_data.X, residuals, parent_data.thresholds)
-        else:
-            residuals = parent_data.y - self.bcf_params.mu_view.evaluate()
-            return Dataset(self.context_treated, residuals[parent_data.treated], self.thresholds_treated)
         
     @property
     def trees(self):

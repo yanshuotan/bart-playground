@@ -107,8 +107,8 @@ class BCFPrior:
         return {"eps_sigma2" : eps_sigma2}
     
     # use global residuals to resample global eps_sigma2
-    def resample_global_params(self, bcf_params : BCFParams, data_y):
-        eps_sigma2 = self._sample_eps_sigma2(data_y - bcf_params.evaluate())
+    def resample_global_params(self, bcf_params : BCFParams, data_y, treated):
+        eps_sigma2 = self._sample_eps_sigma2(data_y - bcf_params.evaluate(z = treated))
         return {"eps_sigma2" : eps_sigma2}
 
     def resample_leaf_vals(self, bart_params, data_y, ensemble_id, tree_ids):

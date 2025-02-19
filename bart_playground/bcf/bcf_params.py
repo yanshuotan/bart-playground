@@ -8,13 +8,13 @@ import numpy as np
 class BCFParams:
     """Trees and parameters for BCF model"""
     from .bcf_dataset import BCFDataset
-    def __init__(self, mu_trees : list, tau_trees : list, global_params, data : BCFDataset, mu_cache = None, tau_cache = None):
+    def __init__(self, mu_trees : list, tau_trees : list, global_params, mu_cache = None, tau_cache = None):
         self.mu_trees = mu_trees  # Prognostic trees
         self.n_mu_trees = len(self.mu_trees)
         self.tau_trees = tau_trees  # Treatment effect trees
         self.n_tau_trees = len(self.tau_trees)
         self.global_params = global_params
-        self._data = data
+        # self._data = data
         
         from .bcf_util import BCFParamView
         self.mu_view = BCFParamView(self, "mu", mu_cache)
@@ -22,6 +22,7 @@ class BCFParams:
         
     @property
     def data(self):
+        raise Exception("Should never be called")
         return self._data
 
     def copy(self, modified_mu_ids=None, modified_tau_ids=None):
@@ -44,22 +45,29 @@ class BCFParams:
         return BCFParams(
             new_mu, new_tau,
             copy.deepcopy(self.global_params),
-            self.data,
             mu_cache = copy.deepcopy(self.mu_view.cache),
             tau_cache = copy.deepcopy(self.tau_view.cache)
         )
 
-    def evaluate(self, X=None, z=None):
+    def evaluate(self, z, X=None):
         """μ(x) + z*τ(x)"""
-        X = self.data.X if X is None else X
-        z = self.data.z if z is None else z
+        if X is None:
+            X_treated = None
+        else:
+            X_treated = X[z]
+        if z is None:
+            raise Exception("z is None")
         
-        mu_pred = np.zeros(X.shape[0])
-        tau_pred = np.zeros(X.shape[0])
-        for i, tree in enumerate(self.mu_trees):
-            mu_pred += tree.evaluate(X)
-        for i, tree in enumerate(self.tau_trees):
-            tau_pred += tree.evaluate(X)
+        mu_pred = self.mu_view.evaluate(X = X)
+        tau_pred = np.zeros_like(mu_pred)
+        tau_pred[z] = self.tau_view.evaluate(X = X_treated)
+        
+        # mu_pred = np.zeros(X.shape[0])
+        # tau_pred = np.zeros(X.shape[0])
+        # for i, tree in enumerate(self.mu_trees):
+        #     mu_pred += tree.evaluate(X)
+        # for i, tree in enumerate(self.tau_trees):
+        #     tau_pred += tree.evaluate(X)
         
         return mu_pred + z * tau_pred
 
