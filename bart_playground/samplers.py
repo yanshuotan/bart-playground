@@ -48,7 +48,7 @@ class Sampler(ABC):
         self.trace = []
         self.generator = generator
 
-    def add_data(self, data : Dataset):
+    def add_data(self, data : Dataset, thresholds):
         """
         Adds data to the sampler.
 
@@ -56,6 +56,7 @@ class Sampler(ABC):
         data (Dataset): The data to be added to the sampler.
         """
         self.data = data
+        self.possible_thresholds = thresholds
 
     def run(self, n_iter):
         """
@@ -124,7 +125,7 @@ class DefaultSampler(Sampler):
     Default implementation of the BART sampler.
     """
     def __init__(self, prior : Prior, proposal_probs: dict,
-                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(),tol=100):
+                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
         self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
@@ -152,14 +153,17 @@ class DefaultSampler(Sampler):
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
         for k in range(self.prior.n_trees):
-            move = self.sample_move()(iter_current, [k], possible_thresholds=self.data.thresholds, tol=self.tol)
+            move = self.sample_move()(
+                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
+                )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
                     new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
-                    iter_trace.append((k+1, move.proposed))
+                    if return_trace:
+                        iter_trace.append((k+1, move.proposed))
         iter_current.global_params = self.prior.resample_global_params(iter_current)
         if return_trace:
             return iter_trace
