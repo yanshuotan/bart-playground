@@ -7,13 +7,22 @@ import numpy as np
 
 class BCFParams:
     """Trees and parameters for BCF model"""
-    def __init__(self, mu_trees : list, tau_trees : list, global_params, data : Dataset):
+    from .bcf_dataset import BCFDataset
+    def __init__(self, mu_trees : list, tau_trees : list, global_params, data : BCFDataset, mu_cache = None, tau_cache = None):
         self.mu_trees = mu_trees  # Prognostic trees
         self.n_mu_trees = len(self.mu_trees)
         self.tau_trees = tau_trees  # Treatment effect trees
         self.n_tau_trees = len(self.tau_trees)
         self.global_params = global_params
-        self.data = data
+        self._data = data
+        
+        from .bcf_util import BCFParamView
+        self.mu_view = BCFParamView(self, "mu", mu_cache)
+        self.tau_view = BCFParamView(self, "tau", tau_cache)
+        
+    @property
+    def data(self):
+        return self._data
 
     def copy(self, modified_mu_ids=None, modified_tau_ids=None):
         """Create a copy of BCFParams with optionally modified trees.
@@ -35,7 +44,9 @@ class BCFParams:
         return BCFParams(
             new_mu, new_tau,
             copy.deepcopy(self.global_params),
-            self.data
+            self.data,
+            mu_cache = copy.deepcopy(self.mu_view.cache),
+            tau_cache = copy.deepcopy(self.tau_view.cache)
         )
 
     def evaluate(self, X=None, z=None):
@@ -63,6 +74,7 @@ class BCFParams:
         Returns:
         - numpy.ndarray: A horizontally stacked array of leaf basis arrays corresponding to the given tree IDs.
         """
+        raise Exception("Should never be called")
         if(ensemble_id == "mu"):
             return np.hstack([self.mu_trees[tree_id].leaf_basis for tree_id in tree_ids])
         elif(ensemble_id == "tau"):

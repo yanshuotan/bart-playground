@@ -2,7 +2,7 @@
 # bcf_prior.py
 
 from ..priors import DefaultPrior
-from .bcf_util import BCFDataset
+from .bcf_dataset import BCFDataset
 from .bcf_params import BCFParams
 from ..moves import Move
 from ..params import Parameters
@@ -105,7 +105,8 @@ class BCFPrior:
         self.mu_prior.fit(data)
         eps_sigma2 = self._sample_eps_sigma2(data.X.shape[1], data.y)
         return {"eps_sigma2" : eps_sigma2}
-
+    
+    # use global residuals to resample global eps_sigma2
     def resample_global_params(self, bcf_params : BCFParams):
         eps_sigma2 = self._sample_eps_sigma2(bcf_params.data.n, 
                                              bcf_params.data.y - bcf_params.evaluate())

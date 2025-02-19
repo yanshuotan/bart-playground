@@ -1,14 +1,9 @@
 from abc import ABC, abstractmethod
-from ..util import Dataset
+from ..util import Dataset, DefaultPreprocessor
 import numpy as np
 from .bcf_params import BCFParams
 from ..params import Parameters
 import copy
-
-class BCFDataset(Dataset):
-    def __init__(self, X, y, z, thresholds):
-        self.z = z
-        super().__init__(X, y, thresholds)
         
 class BCFParamView(Parameters):
     """
@@ -22,7 +17,18 @@ class BCFParamView(Parameters):
         self.bcf_params = bcf_params
         self.ensemble_id = ensemble_id
         self.init_cache(cache)
+        # self._internal_count = 0
+        self._init_treated_data()
+    
+    def _init_treated_data(self):
+        parent_data = self.bcf_params.data
         
+        self.context_treated = parent_data.X[parent_data.treated, :]
+        
+        prep = DefaultPreprocessor()
+        prep.fit_X(self.context_treated)
+        self.thresholds_treated = prep.thresholds
+    
     @property
     def global_params(self):
         return self.bcf_params.global_params
@@ -32,10 +38,21 @@ class BCFParamView(Parameters):
     
     @property
     def data(self):
-        return self.bcf_params.data
+        return self.bart_data()
+        # return self.bcf_params.data
     @data.setter
     def data(self, new_data):
-        self.bcf_params.data = new_data
+        raise Exception("data.setter called, but not implemented")
+        # self.bcf_params.data = new_data
+        
+    def bart_data(self):
+        parent_data = self.bcf_params.data
+        if(self.ensemble_id == "mu"):
+            residuals = parent_data.y - parent_data.z * self.bcf_params.tau_view.evaluate()
+            return Dataset(parent_data.X, residuals, parent_data.thresholds)
+        else:
+            residuals = parent_data.y - self.bcf_params.mu_view.evaluate()
+            return Dataset(self.context_treated, residuals[parent_data.treated], self.thresholds_treated)
         
     @property
     def trees(self):
@@ -64,12 +81,6 @@ class BCFParamView(Parameters):
             
         sub_model = BCFParamView(new_bcf, self.ensemble_id, cache=copy.deepcopy(self.cache))
         return sub_model
-
-    # def copy(self, trees_changed=None):
-    #     # TODO: Only copy necessary parts of the ensemble 
-    #     new_bcf = self.bcf_params.copy()
-    #     sub_model = BCFParamSlice(new_bcf, self.ensemble_id)
-    #     return sub_model
 
     # def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
     #     # TODO: Only update necessary parts of the ensemble 

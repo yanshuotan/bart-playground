@@ -3,7 +3,7 @@ from ..bart import BART
 from ..util import Dataset, DefaultPreprocessor
 from .bcf_prior import BCFPrior
 from .bcf_sampler import BCFSampler
-from .bcf_util import BCFDataset
+from .bcf_dataset import BCFDataset
 
 import numpy as np
 

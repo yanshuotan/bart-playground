@@ -6,7 +6,8 @@ from ..moves import all_moves
 from .bcf_params import BCFParams
 from ..params import Tree
 from .bcf_prior import BCFPrior
-from .bcf_util import BCFDataset, BCFParamView
+from .bcf_util import BCFParamView
+from .bcf_dataset import BCFDataset
 
 import numpy as np
 
@@ -19,6 +20,9 @@ class BCFSampler(Sampler):
         self.tol = tol
         super().__init__(prior, proposal_probs, generator, temp_schedule)
         
+    def add_data(self, data : BCFDataset):
+        return super().add_data(data)
+        
     def get_init_state(self):
         """
         Retrieve the initial state for the sampler.
@@ -26,8 +30,8 @@ class BCFSampler(Sampler):
         Returns:
             The initial state for the sampler.
         """
-        mu_trees = [Tree(self.data) for _ in range(self.prior.mu_prior.n_trees)]
-        tau_trees = [Tree(self.data) for _ in range(self.prior.tau_prior.n_trees)]
+        mu_trees = [Tree(self.data.X) for _ in range(self.prior.mu_prior.n_trees)]
+        tau_trees = [Tree(self.data.X[self.data.treated]) for _ in range(self.prior.tau_prior.n_trees)]
         global_params = self.prior.init_global_params(self.data)
 
         init_state = BCFParams(mu_trees, tau_trees, global_params, self.data)
@@ -43,9 +47,17 @@ class BCFSampler(Sampler):
             probs = list(self.proposals_tau.values())
         return all_moves[self.generator.choice(moves, p=probs)]
     
-    def one_iter(self, current, temp, return_trace=False):
+    def create_views(self, bcfp : BCFParams):
+        raise Exception("create_views should not be called now")
+        if not bcfp.mu_view:
+            bcfp.mu_view = BCFParamView(bcfp, "mu", None)
+        if not bcfp.tau_view:
+            bcfp.tau_view = BCFParamView(bcfp, "tau", None)
+    
+    def one_iter(self, current : BCFParams, temp, return_trace=False):
         """One MCMC iteration: Update μ trees -> τ trees -> global params"""
         iter_current = current
+        
         iter_trace = [iter_current] if return_trace else None
         temp = self.temp_schedule(iter_current)
 
@@ -53,7 +65,7 @@ class BCFSampler(Sampler):
         for k in range(self.prior.mu_prior.n_trees):
             move_class = self.sample_move("mu")  
             move = move_class(
-                current=BCFParamView(iter_current, "mu"), trees_changed=[k], tol=self.tol
+                current=iter_current.mu_view, trees_changed=[k], tol=self.tol
             )
             if move.propose(self.generator): # Check if a valid move was proposed
                 # Metropolis–Hastings
@@ -70,12 +82,12 @@ class BCFSampler(Sampler):
         for k in range(self.prior.tau_prior.n_trees):
             move_class = self.sample_move("tau")  
             move = move_class(
-                current=BCFParamView(iter_current, "tau"), trees_changed=[k], tol=self.tol
+                current=iter_current.tau_view, trees_changed=[k], tol=self.tol
             )
             if move.propose(self.generator): # Check if a valid move was proposed
                 # Metropolis–Hastings
                 Z = self.generator.uniform(0,1)
-                if Z < np.exp(temp *  self.prior.trees_log_mh_ratio(move, 'tau')):
+                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, 'tau')):
                     new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, 'tau', [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed.bcf_params
