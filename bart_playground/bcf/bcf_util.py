@@ -26,8 +26,7 @@ class BCFParamView(Parameters):
         self.context_treated = parent_data.X[parent_data.treated, :]
         
         prep = DefaultPreprocessor()
-        prep.fit_X(self.context_treated)
-        self.thresholds_treated = prep.thresholds
+        self.thresholds_treated = prep.gen_thresholds(self.context_treated)
     
     @property
     def global_params(self):

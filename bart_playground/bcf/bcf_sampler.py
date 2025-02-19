@@ -20,8 +20,8 @@ class BCFSampler(Sampler):
         self.tol = tol
         super().__init__(prior, proposal_probs, generator, temp_schedule)
         
-    def add_data(self, data : BCFDataset):
-        return super().add_data(data)
+    def add_data(self, data : BCFDataset, thresholds):
+        return super().add_data(data, thresholds)
         
     def get_init_state(self):
         """

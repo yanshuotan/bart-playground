@@ -40,10 +40,11 @@ class BCF:
 
     def fit(self, X, y, z):
         """Extend fit to handle treatment indicator z"""
-        data = BCFPreprocessor.fit_transform(X, y, z)
+        preprocessor = BCFPreprocessor()
+        data = preprocessor.fit_transform(X, y, z)
         data.z = z  # Store treatment vector
         self.sampler.prior.fit(data)
-        self.sampler.add_data(data)
+        self.sampler.add_data(data, preprocessor.thresholds)
         self.sampler.run(self.ndpost + self.nskip)
 
     def predict_components(self, X, Z):
@@ -66,9 +67,7 @@ class BCF:
         return np.mean(post_mu, axis=1), np.mean(post_tau, axis=1), np.mean(post_y, axis=1)
 
 class BCFPreprocessor(DefaultPreprocessor):
-    @staticmethod
-    def fit_transform(X, y, z):
-        dp = DefaultPreprocessor()
-        dataset = dp.fit_transform(X, y)
-        return BCFDataset(dataset.X, dataset.y, z, dataset.thresholds)
+    def fit_transform(self, X, y, z):
+        dataset = super().fit_transform(X, y)
+        return BCFDataset(dataset.X, dataset.y, z)
     

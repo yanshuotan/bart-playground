@@ -103,7 +103,7 @@ class BCFPrior:
         based on the provided data and returns it in a dictionary.
         """
         self.mu_prior.fit(data)
-        eps_sigma2 = self._sample_eps_sigma2(data.X.shape[1], data.y)
+        eps_sigma2 = self._sample_eps_sigma2(data.y) # TODO
         return {"eps_sigma2" : eps_sigma2}
     
     # use global residuals to resample global eps_sigma2
@@ -126,7 +126,7 @@ class BCFPrior:
         # Which prior to use does not matter
         return self.mu_prior._fit_eps_lambda(data, specification)
     
-    def _sample_eps_sigma2(self, n, residuals):
+    def _sample_eps_sigma2(self, residuals):
         # Which prior to use does not matter
-        return self.mu_prior._sample_eps_sigma2(n, residuals)
+        return self.mu_prior._sample_eps_sigma2(residuals)
     
