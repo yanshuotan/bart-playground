@@ -143,7 +143,7 @@ class DefaultSampler(Sampler):
             raise AttributeError("Need data before running sampler.")
         trees = [Tree(self.data.X) for _ in range(self.prior.n_trees)]
         global_params = self.prior.init_global_params(self.data)
-        init_state = Parameters(trees, global_params, self.data)
+        init_state = Parameters(trees, global_params)
         return init_state
 
     def one_iter(self, current, temp, return_trace=False):
@@ -158,13 +158,13 @@ class DefaultSampler(Sampler):
                 )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
-                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
-                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, [k])
+                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, data_y = self.data.y)):
+                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
                         iter_trace.append((k+1, move.proposed))
-        iter_current.global_params = self.prior.resample_global_params(iter_current)
+        iter_current.global_params = self.prior.resample_global_params(iter_current, data_y = self.data.y)
         if return_trace:
             return iter_trace
         else:

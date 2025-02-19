@@ -341,7 +341,7 @@ class Parameters:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, global_params, data : Dataset, cache=None):
+    def __init__(self, trees: list, global_params, cache=None):
         """
         Initializes the parameters for the model.
 
@@ -356,7 +356,6 @@ class Parameters:
         - n_trees (int): The number of trees in the model.
         - global_params (dict): Global parameters for the model.
         """
-        self.data = data
         self.trees = trees
         self.n_trees = len(self.trees)
         self.global_params = global_params
@@ -371,8 +370,7 @@ class Parameters:
         copied_trees = self.trees.copy() # Shallow copy
         for tree_id in modified_tree_ids:
             copied_trees[tree_id] = self.trees[tree_id].copy()
-        return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), 
-                          data=self.data, cache=copy.deepcopy(self.cache))
+        return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), cache=copy.deepcopy(self.cache))
 
     # def copy(self, modified_tree_ids):
         # return copy.deepcopy(self)
@@ -446,7 +444,7 @@ class Parameters:
             tree.leaf_vals[tree.leaves] = \
                 leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
             tree.update_outputs()
-            # if(not (tree.evaluate() == tree.evaluate(self.data.X)).all()):
+            # if(not (tree.evaluate() == tree.evaluate(tree.dataX)).all()):
             #    breakpoint()
             self.cache = self.cache + tree.evals - tree_evals_old
             leaf_counter += tree.n_leaves

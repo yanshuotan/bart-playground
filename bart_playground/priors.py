@@ -37,7 +37,7 @@ class Prior(ABC):
         pass
 
     @abstractmethod
-    def resample_global_params(self, bart_params : Parameters):
+    def resample_global_params(self, bart_params : Parameters, data_y):
         """
         Resamples the global parameters for the BART model.
 
@@ -46,6 +46,7 @@ class Prior(ABC):
         Args:
             bart_params (Parameters): An instance of the Parameters class containing 
                                       the data and model parameters for BART.
+            data_y (numpy.ndarray): The target values array.
 
         Returns:
             dict: A dictionary containing the resampled global parameters.
@@ -53,7 +54,7 @@ class Prior(ABC):
         pass
     
     @abstractmethod
-    def resample_leaf_vals(self, bart_params : Parameters, tree_ids):
+    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """
         Resample the values of the leaf nodes for the specified trees.
 
@@ -64,6 +65,7 @@ class Prior(ABC):
         -----------
         bart_params : Parameters
             An instance of the Parameters class containing the BART model parameters.
+        data_y (numpy.ndarray): The target values array.
         tree_ids : list or array-like
             A list or array of tree indices for which the leaf values are to be resampled.
 
@@ -95,7 +97,7 @@ class Prior(ABC):
         pass
 
     @abstractmethod
-    def trees_log_marginal_lkhd(self, bart_params : Parameters, tree_ids):
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
         """
         Calculate the log marginal likelihood of the trees in a BART model.
 
@@ -104,6 +106,7 @@ class Prior(ABC):
         bart_params : Parameters
             An instance of the Parameters class containing the BART model parameters,
             including data, global parameters, and methods for evaluation and leaf basis computation.
+        data_y (numpy.ndarray): The target values array.
         tree_ids : list or array-like
             A list or array of tree identifiers for which the log marginal likelihood is to be computed.
 
@@ -119,13 +122,14 @@ class Prior(ABC):
         log_prior_proposed = self.trees_log_prior(move.proposed, move.trees_changed)
         return log_prior_proposed - log_prior_current
 
-    def trees_log_marginal_lkhd_ratio(self, move : Move, marginalize: bool=False):
+    def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, marginalize: bool=False):
         """
         Compute the ratio of marginal likelihoods for a given move.
 
         Parameters:
         - move: Move
             The move to compute the marginal likelihood ratio for.
+        - data_y (numpy.ndarray): The target values array.
         - marginalize: bool
             Whether to marginalize over the ensemble.
 
@@ -134,18 +138,18 @@ class Prior(ABC):
             Marginal likelihood ratio.
         """
         if not marginalize:
-            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, move.trees_changed)
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, move.trees_changed)
+            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, move.trees_changed)
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, move.trees_changed)
         else:
-            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, 
+            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, 
                                                             np.arange(self.current.n_trees))
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, 
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, 
                                                              np.arange(self.current.n_trees))
         return log_lkhd_proposed - log_lkhd_current
     
-    def trees_log_mh_ratio(self, move : Move, marginalize : bool=False):
+    def trees_log_mh_ratio(self, move : Move, data_y, marginalize : bool=False):
          return self.trees_log_prior_ratio(move) + \
-            self.trees_log_marginal_lkhd_ratio(move, marginalize)
+            self.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)
 
 class DefaultPrior(Prior):
     """
@@ -211,10 +215,10 @@ class DefaultPrior(Prior):
                 - eps_sigma2 (float): The sampled epsilon sigma squared value.
         """
         self.fit(data)
-        eps_sigma2 = self._sample_eps_sigma2(data.X.shape[0], data.y)
+        eps_sigma2 = self._sample_eps_sigma2(data.y)
         return {"eps_sigma2" : eps_sigma2}
 
-    def resample_global_params(self, bart_params : Parameters):
+    def resample_global_params(self, bart_params : Parameters, data_y):
         """
         Resamples the global parameters for the BART model.
 
@@ -224,15 +228,15 @@ class DefaultPrior(Prior):
         Args:
             bart_params (Parameters): An instance of the Parameters class containing 
                                       the data and model parameters for BART.
+            data_y (numpy.ndarray): The target values array.
 
         Returns:
             dict: A dictionary containing the resampled global parameters.
         """
-        eps_sigma2 = self._sample_eps_sigma2(bart_params.data.n, 
-                                             bart_params.data.y - bart_params.evaluate())
+        eps_sigma2 = self._sample_eps_sigma2(data_y - bart_params.evaluate())
         return {"eps_sigma2" : eps_sigma2}
 
-    def resample_leaf_vals(self, bart_params : Parameters, tree_ids):
+    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """
         Resample the values of the leaf nodes for the specified trees.
 
@@ -242,8 +246,8 @@ class DefaultPrior(Prior):
         Parameters:
         -----------
         bart_params : Parameters
-        
             An instance of the Parameters class containing the BART model parameters.
+        data_y (numpy.ndarray): The target values array.
         tree_ids : list or array-like
             A list or array of tree indices for which the leaf values are to be resampled.
 
@@ -252,7 +256,7 @@ class DefaultPrior(Prior):
         leaf_params_new : numpy.ndarray
             The resampled leaf parameters.
         """
-        residuals = bart_params.data.y - bart_params.evaluate(all_except=tree_ids)
+        residuals = data_y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
         # Assuming tree_ids only contain one tree, 
         # leaf_basis is an n×p binary (0–1) indicator matrix, 
@@ -299,7 +303,7 @@ class DefaultPrior(Prior):
             log_prior += np.sum(log_probs[is_non_empty])
         return log_prior
 
-    def trees_log_marginal_lkhd(self, bart_params : Parameters, tree_ids):
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
         """
         Calculate the log marginal likelihood of the trees in a BART model.
 
@@ -308,6 +312,7 @@ class DefaultPrior(Prior):
         bart_params : Parameters
             An instance of the Parameters class containing the BART model parameters,
             including data, global parameters, and methods for evaluation and leaf basis computation.
+        data_y (numpy.ndarray): The target values array.
         tree_ids : list or array-like
             A list or array of tree identifiers for which the log marginal likelihood is to be computed.
 
@@ -328,7 +333,7 @@ class DefaultPrior(Prior):
         7. Compute the least squares residuals and ridge bias.
         8. Combine the log determinant, least squares residuals, and ridge bias to obtain the log marginal likelihood.
         """
-        resids = bart_params.data.y - bart_params.evaluate(all_except=tree_ids)
+        resids = data_y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
         U, S, _ = np.linalg.svd(leaf_basis, full_matrices=False) # Fix shape issue
         noise_ratio = bart_params.global_params["eps_sigma2"] / self.f_sigma2
@@ -361,7 +366,8 @@ class DefaultPrior(Prior):
         c = chi2.ppf(1 - self.eps_q, df=self.eps_nu)
         return (sigma_hat**2 * c) / self.eps_nu
     
-    def _sample_eps_sigma2(self, n, residuals):
+    def _sample_eps_sigma2(self, residuals):
+        n = len(residuals)
         # Convert to inverse gamma params
         prior_alpha = self.eps_nu / 2
         prior_beta = self.eps_nu * self.eps_lambda / 2
