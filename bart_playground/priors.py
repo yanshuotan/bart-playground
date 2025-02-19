@@ -211,7 +211,7 @@ class DefaultPrior(Prior):
                 - eps_sigma2 (float): The sampled epsilon sigma squared value.
         """
         self.fit(data)
-        eps_sigma2 = self._sample_eps_sigma2(data.X.shape[1], data.y)
+        eps_sigma2 = self._sample_eps_sigma2(data.X.shape[0], data.y)
         return {"eps_sigma2" : eps_sigma2}
 
     def resample_global_params(self, bart_params : Parameters):
