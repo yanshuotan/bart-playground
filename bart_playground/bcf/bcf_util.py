@@ -37,6 +37,7 @@ class BCFParamView(Parameters):
     
     @property
     def data(self):
+        raise Exception("Shouldn't be called now")
         return self.bart_data()
         # return self.bcf_params.data
     @data.setter

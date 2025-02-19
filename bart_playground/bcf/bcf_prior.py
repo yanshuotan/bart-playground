@@ -54,7 +54,7 @@ class BCFPrior:
         return log_prior_proposed - log_prior_current
     
     # TODO
-    def trees_log_marginal_lkhd_ratio(self, move : Move, ensemble_id, marginalize: bool=False):
+    def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, ensemble_id, marginalize: bool=False):
         """
         Compute the ratio of marginal likelihoods for a given move.
 
@@ -78,16 +78,16 @@ class BCFPrior:
         else:
             bart_prior : DefaultPrior = self.tau_prior
             
-        log_lkhd_current = bart_prior.trees_log_marginal_lkhd(move.current,
+        log_lkhd_current = bart_prior.trees_log_marginal_lkhd(move.current, data_y,
                                                             tree_ids= trees)
-        log_lkhd_proposed = bart_prior.trees_log_marginal_lkhd(move.proposed,
+        log_lkhd_proposed = bart_prior.trees_log_marginal_lkhd(move.proposed, data_y,
                                                             tree_ids= trees)
         return log_lkhd_proposed - log_lkhd_current
     
     # copied, TODO
-    def trees_log_mh_ratio(self, move : Move, ensemble_id, marginalize : bool=False):
+    def trees_log_mh_ratio(self, move : Move, data_y, ensemble_id, marginalize : bool=False):
          return self.trees_log_prior_ratio(move, ensemble_id) + \
-            self.trees_log_marginal_lkhd_ratio(move, ensemble_id, marginalize)
+            self.trees_log_marginal_lkhd_ratio(move, data_y, ensemble_id, marginalize)
     
     def fit(self, data : BCFDataset):
         """
@@ -107,12 +107,11 @@ class BCFPrior:
         return {"eps_sigma2" : eps_sigma2}
     
     # use global residuals to resample global eps_sigma2
-    def resample_global_params(self, bcf_params : BCFParams):
-        eps_sigma2 = self._sample_eps_sigma2(bcf_params.data.n, 
-                                             bcf_params.data.y - bcf_params.evaluate())
+    def resample_global_params(self, bcf_params : BCFParams, data_y):
+        eps_sigma2 = self._sample_eps_sigma2(data_y - bcf_params.evaluate())
         return {"eps_sigma2" : eps_sigma2}
 
-    def resample_leaf_vals(self, bart_params, ensemble_id, tree_ids):
+    def resample_leaf_vals(self, bart_params, data_y, ensemble_id, tree_ids):
         """
         Resample the values of the leaf nodes for the specified trees in a specified ensemble.
         """
@@ -120,7 +119,7 @@ class BCFPrior:
             bart_prior : DefaultPrior = self.mu_prior
         else:
             bart_prior : DefaultPrior = self.tau_prior
-        return bart_prior.resample_leaf_vals(bart_params, tree_ids)
+        return bart_prior.resample_leaf_vals(bart_params, data_y, tree_ids)
         
     def _fit_eps_lambda(self, data, specification="linear"):
         # Which prior to use does not matter
