@@ -60,6 +60,8 @@ class Grow(Move):
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
                  possible_thresholds = None, tol = 100):
+        if not possible_thresholds:
+            raise ValueError("Possible thresholds must be provided for grow move.")
         super().__init__(current, trees_changed, possible_thresholds, tol)
         assert len(trees_changed) == 1
 
@@ -99,6 +101,8 @@ class Change(Move):
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
                  possible_thresholds = None, tol = 100):
+        if not possible_thresholds:
+            raise ValueError("Possible thresholds must be provided for change move.")
         super().__init__(current, trees_changed, possible_thresholds, tol)
         assert len(trees_changed) == 1
 
