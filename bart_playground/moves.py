@@ -8,7 +8,8 @@ class Move(ABC):
     """
     Base class for moves in the BART sampler.
     """
-    def __init__(self, current : Parameters, trees_changed: np.ndarray):
+    def __init__(self, current : Parameters, trees_changed: np.ndarray, 
+                 possible_thresholds = None, tol = 100):
         """
         Initialize the move.
 
@@ -21,6 +22,8 @@ class Move(ABC):
         self.current = current
         self.proposed = None
         self.trees_changed = trees_changed
+        self.possible_thresholds = possible_thresholds
+        self.tol = tol
 
     def propose(self, generator):
         """
@@ -55,10 +58,10 @@ class Grow(Move):
     """
     Move to grow a new split.
     """
-    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
-        super().__init__(current, trees_changed)
+    def __init__(self, current : Parameters, trees_changed: np.ndarray,
+                 possible_thresholds = None, tol = 100):
+        super().__init__(current, trees_changed, possible_thresholds, tol)
         assert len(trees_changed) == 1
-        self.tol = tol
 
     def is_feasible(self):
         return True
@@ -66,8 +69,8 @@ class Grow(Move):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         node_id = generator.choice(tree.leaves)
-        var = generator.integers(tree.data.p)
-        threshold = generator.choice(tree.data.thresholds[var])
+        var = generator.integers(tree.dataX.shape[1])
+        threshold = generator.choice(self.possible_thresholds[var])
         success = tree.split_leaf(node_id, var, threshold)
         return success
 
@@ -75,10 +78,10 @@ class Prune(Move):
     """
     Move to prune a terminal split.
     """
-    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
-        super().__init__(current, trees_changed)
+    def __init__(self, current : Parameters, trees_changed: np.ndarray,
+                 possible_thresholds = None, tol = 100):
+        super().__init__(current, trees_changed, tol = tol)
         assert len(trees_changed) == 1
-        self.tol = tol
 
     def is_feasible(self):
         tree = self.current.trees[self.trees_changed[0]]
@@ -94,10 +97,10 @@ class Change(Move):
     """
     Move to change the split variable and threshold for an internal node.
     """
-    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
-        super().__init__(current, trees_changed)
+    def __init__(self, current : Parameters, trees_changed: np.ndarray,
+                 possible_thresholds = None, tol = 100):
+        super().__init__(current, trees_changed, possible_thresholds, tol)
         assert len(trees_changed) == 1
-        self.tol = tol
 
     def is_feasible(self):
         tree = self.current.trees[self.trees_changed[0]]
@@ -106,8 +109,8 @@ class Change(Move):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         node_id = generator.choice(tree.split_nodes)
-        var = generator.integers(tree.data.p)
-        threshold = generator.choice(tree.data.thresholds[var])
+        var = generator.integers(tree.dataX.shape[1])
+        threshold = generator.choice(self.possible_thresholds[var])
         success = tree.change_split(node_id, var, threshold)
         return success
 
@@ -115,10 +118,10 @@ class Swap(Move):
     """
     Move to swap the split variables and thresholds for a pair of parent-child nodes.
     """
-    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
-        super().__init__(current, trees_changed)
+    def __init__(self, current : Parameters, trees_changed: np.ndarray,
+                 possible_thresholds = None, tol = 100):
+        super().__init__(current, trees_changed, tol = tol)
         assert len(trees_changed) == 1
-        self.tol = tol
 
     def is_feasible(self):
         tree = self.current.trees[self.trees_changed[0]]

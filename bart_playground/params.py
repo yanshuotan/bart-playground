@@ -8,14 +8,14 @@ class Tree:
     Represents the parameters of a single tree in the BART model, combining both
     the tree structure and leaf values into a single object.
     """
-    def __init__(self, data : Dataset, vars=None, thresholds=None, leaf_vals=None, n=None, 
+    def __init__(self, dataX : np.ndarray, vars=None, thresholds=None, leaf_vals=None, n=None, 
                  node_indicators=None, evals=None):
         """
         Initialize the tree parameters.
 
         Parameters:
-        - data : Dataset
-            The dataset object containing the data.
+        - dataX : np.ndarray, optional
+            The np.ndarray object containing the X (covariates) of data.
         - vars : np.ndarray, optional
             Array of variables used for splitting at each node. Default is None.
         - thresholds : np.ndarray, optional
@@ -27,7 +27,7 @@ class Tree:
         - node_indicators : np.ndarray, optional
             Boolean array indicating which data examples lie within each node. Default is None.
         """
-        self.data = data
+        self.dataX = dataX
         if vars is None:
             self.vars = np.full(8, -2, dtype=int) # -2 represents an inexistant node
             self.vars[0] = -1 # -1 represents a leaf node
@@ -35,10 +35,10 @@ class Tree:
             self.leaf_vals = np.full(8, np.nan, dtype=float)
             self.leaf_vals[0] = 0 # Initialize the leaf value
             # Cached leaf indicators for each training observation
-            self.node_indicators = np.full((data.X.shape[0], 8), 0, dtype=bool)
+            self.node_indicators = np.full((dataX.shape[0], 8), 0, dtype=bool)
             self.node_indicators[:, 0] = True
             self.n = np.full(8, -2, dtype=int)
-            self.n[0] = data.X.shape[0]
+            self.n[0] = dataX.shape[0]
             self.evals = np.zeros(self.n[0]) # Cached evaluations for each training observation
         else:
             self.vars = copy.deepcopy(vars)
@@ -49,7 +49,7 @@ class Tree:
             self.evals = copy.deepcopy(evals)
 
     def copy(self):
-        return Tree(self.data, self.vars, self.thresholds, self.leaf_vals, self.n, 
+        return Tree(self.dataX, self.vars, self.thresholds, self.leaf_vals, self.n, 
                     self.node_indicators, self.evals)
 
     def traverse_tree(self, X: np.ndarray) -> int:
@@ -174,7 +174,7 @@ class Tree:
         # Initialize the new leaf nodes
         self.vars[left_child] = -1
         self.vars[right_child] = -1
-        x_bigger = self.data.X[:, var] > threshold
+        x_bigger = self.dataX[:, var] > threshold
         self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & ~x_bigger
         self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & x_bigger
         # self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
@@ -253,8 +253,8 @@ class Tree:
             threshold = self.thresholds[node_id]
             left_child = node_id * 2 + 1
             right_child = node_id * 2 + 2
-            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & (self.data.X[:, var] <= threshold)
-            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & (self.data.X[:, var] > threshold)
+            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & (self.dataX[:, var] <= threshold)
+            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & (self.dataX[:, var] > threshold)
             self.n[left_child] = np.sum(self.node_indicators[:, left_child])
             self.n[right_child] = np.sum(self.node_indicators[:, right_child])
             is_valid = self.update_n(left_child) and self.update_n(right_child)

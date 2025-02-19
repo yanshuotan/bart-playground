@@ -140,7 +140,7 @@ class DefaultSampler(Sampler):
         """
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
-        trees = [Tree(self.data) for _ in range(self.prior.n_trees)]
+        trees = [Tree(self.data.X) for _ in range(self.prior.n_trees)]
         global_params = self.prior.init_global_params(self.data)
         init_state = Parameters(trees, global_params, self.data)
         return init_state
@@ -152,7 +152,7 @@ class DefaultSampler(Sampler):
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
         for k in range(self.prior.n_trees):
-            move = self.sample_move()(iter_current, [k], self.tol)
+            move = self.sample_move()(iter_current, [k], possible_thresholds=self.data.thresholds, tol=self.tol)
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
