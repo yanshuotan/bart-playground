@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from .params import Tree, Parameters
 from .moves import all_moves
 from .util import Dataset
-from .priors import Prior
+from .priors import *
 
 class TemperatureSchedule:
 
@@ -47,6 +47,11 @@ class Sampler(ABC):
         self.temp_schedule = temp_schedule
         self.trace = []
         self.generator = generator
+        
+        self.tree_prior = prior.tree_prior
+        self.global_prior = prior.global_prior
+        self.likelihood = prior.likelihood
+        
 
     def add_data(self, data : Dataset, thresholds):
         """
@@ -124,7 +129,7 @@ class DefaultSampler(Sampler):
     """
     Default implementation of the BART sampler.
     """
-    def __init__(self, prior : Prior, proposal_probs: dict,
+    def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
         self.tol = tol
         if proposal_probs is None:
@@ -141,10 +146,15 @@ class DefaultSampler(Sampler):
         """
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
-        trees = [Tree(self.data.X) for _ in range(self.prior.n_trees)]
-        global_params = self.prior.init_global_params(self.data)
+        trees = [Tree(self.data.X) for _ in range(self.tree_prior.n_trees)]
+        global_params = self.global_prior.init_global_params(self.data)
         init_state = Parameters(trees, global_params)
         return init_state
+    
+    def log_mh_ratio(self, move : Move, marginalize : bool=False):
+        """Calculate total log Metropolis-Hastings ratio"""
+        return self.tree_prior.trees_log_prior_ratio(move) + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize)
 
     def one_iter(self, current, temp, return_trace=False):
         """
@@ -152,19 +162,19 @@ class DefaultSampler(Sampler):
         """
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
-        for k in range(self.prior.n_trees):
+        for k in range(self.tree_prior.n_trees):
             move = self.sample_move()(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
                 )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
-                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, data_y = self.data.y)):
-                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
+                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
                         iter_trace.append((k+1, move.proposed))
-        iter_current.global_params = self.prior.resample_global_params(iter_current, data_y = self.data.y)
+        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
         if return_trace:
             return iter_trace
         else:
