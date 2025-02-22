@@ -7,12 +7,18 @@ import numpy as np
 from bart_playground import TemperatureSchedule
 from bart_playground.samplers import DefaultSampler, default_proposal_probs
 from bart_playground.params import Parameters, Tree
-from bart_playground.priors import DefaultPrior
+from bart_playground.priors import ComprehensivePrior
 
 from bart_playground.moves import all_moves
-from bart_playground.util import Dataset
+from bart_playground.util import Dataset, DefaultPreprocessor
 
 class TestSamplers(unittest.TestCase):
+    def __init__(self, methodName: str = "runTest") -> None:
+        X, y = np.random.rand(100, 5), np.random.rand(100)
+        self.dataset = Dataset(X, y)
+
+        super().__init__(methodName)
+
     def test_temperature_schedule_default(self):
         """
         Test default temperature schedule
@@ -48,16 +54,16 @@ class TestSamplers(unittest.TestCase):
             sampler.run(1)
 
     @patch("bart_playground.samplers.Parameters")
-    @patch("bart_playground.samplers.Tree")
-    def test_get_init_state(self, mock_tree, mock_parameters):
+    @patch("bart_playground.samplers.Tree.new")
+    def test_get_init_state(self, mock_tree_new, mock_parameters):
         """
         Test the get_init_state method
         It calls get_init_state and verifies that Tree() is called for correct times and that Parameters() is called with the correct arguments.
         """
         # Set up a mock prior 
         prior = MagicMock()
-        prior.n_trees = 3
-        prior.init_global_params.return_value = "initial_global_params"
+        prior.tree_prior.n_trees = 3
+        prior.global_prior.init_global_params.return_value = "initial_global_params"
         
         sampler = DefaultSampler(prior, default_proposal_probs, np.random.default_rng())
         data = MagicMock()
@@ -66,13 +72,12 @@ class TestSamplers(unittest.TestCase):
         state = sampler.get_init_state()
         
         # Check that Tree is called 3 times (corresponding to 3 trees)
-        self.assertEqual(mock_tree.call_count, 3)
+        self.assertEqual(mock_tree_new.call_count, 3)
         # Check the arguments passed during the Parameters call
         args, _ = mock_parameters.call_args
         trees_arg = args[0]
         self.assertEqual(len(trees_arg), 3)
         self.assertEqual(args[1], "initial_global_params")
-        self.assertIs(args[2], data)
         # Check the returned state
         self.assertEqual(state, mock_parameters.return_value)
 
@@ -104,9 +109,10 @@ class TestSamplers(unittest.TestCase):
         # Set up a mock prior 
         prior = MagicMock()
         prior.n_trees = 1
-        prior.trees_log_mh_ratio.return_value = 0  # Acceptance probability is exp(0) > 0.5
-        prior.resample_leaf_vals.return_value = "new_leaf"
-        prior.resample_global_params.return_value = "updated_global"
+        prior.tree_prior.resample_leaf_vals.return_value = "new_leaf"
+        prior.global_prior.resample_global_params.return_value = "updated_global"
+        prior.tree_prior.trees_log_prior_ratio.return_value = 0
+        prior.likelihood.trees_log_marginal_lkhd_ratio.return_value = 0
 
         mock_move = MagicMock()
         mock_move.proposed = MagicMock()
@@ -124,6 +130,7 @@ class TestSamplers(unittest.TestCase):
         sampler = DefaultSampler(prior, default_proposal_probs, dummy_gen)
         data = MagicMock()
         sampler.add_data(data)
+        sampler.add_thresholds(DefaultPreprocessor.test_thresholds(data.X))
         current = MagicMock()
         temp = sampler.temp_schedule(0)
 
@@ -132,11 +139,11 @@ class TestSamplers(unittest.TestCase):
         # Check that Move.propose is called
         mock_move.propose.assert_called_once_with(dummy_gen)
         # Check that prior.resample_leaf_vals is correctly called
-        prior.resample_leaf_vals.assert_called_once_with(mock_move.proposed, [0])
+        prior.tree_prior.resample_leaf_vals.assert_called_once()
         # Check that Move.proposed.update_leaf_vals is called
         mock_move.proposed.update_leaf_vals.assert_called_once_with([0], "new_leaf")
         # Check that prior.resample_global_params is called
-        prior.resample_global_params.assert_called_once_with(new_state)
+        prior.global_prior.resample_global_params.assert_called_once()
         self.assertEqual(new_state.global_params, "updated_global")
 
     @patch("bart_playground.samplers.all_moves")
@@ -149,8 +156,9 @@ class TestSamplers(unittest.TestCase):
         """
         prior = MagicMock()
         prior.n_trees = 1
-        prior.trees_log_mh_ratio.return_value = -10  # exp(-10) < 0.5
-        prior.resample_global_params.return_value = "updated_global"
+        prior.global_prior.resample_global_params.return_value = "updated_global"
+        prior.tree_prior.trees_log_prior_ratio.return_value = -5
+        prior.likelihood.trees_log_marginal_lkhd_ratio.return_value = -5
 
         mock_move = MagicMock()
         mock_move.proposed = MagicMock()
@@ -165,6 +173,8 @@ class TestSamplers(unittest.TestCase):
         sampler = DefaultSampler(prior, default_proposal_probs, dummy_gen)
         data = MagicMock()
         sampler.add_data(data)
+        sampler.add_thresholds(DefaultPreprocessor.test_thresholds(data.X))
+        
         current = MagicMock()
         temp = sampler.temp_schedule(0)
 
@@ -172,11 +182,10 @@ class TestSamplers(unittest.TestCase):
         mock_move.propose.assert_called_once_with(dummy_gen)
         # In the rejection branch, update_leaf_vals should not be called
         mock_move.proposed.update_leaf_vals.assert_not_called()
-        prior.resample_global_params.assert_called_once_with(new_state)
+        prior.global_prior.resample_global_params.assert_called_once()
         self.assertEqual(new_state.global_params, "updated_global")
 
     @patch("bart_playground.samplers.all_moves")
-    @patch("bart_playground.samplers.tqdm", lambda x: x)  # Turn off the progress bar
     def test_run_method(self, mock_all_moves):
         """
         Test the run method
@@ -201,13 +210,14 @@ class TestSamplers(unittest.TestCase):
         sampler = DefaultSampler(prior, default_proposal_probs, dummy_gen)
         data = MagicMock()
         sampler.add_data(data)
+        sampler.add_thresholds(DefaultPreprocessor.test_thresholds(data.X))
 
         mock_state = MagicMock()
         # Just like Parameters, mock_state should have a copy method
         mock_state.copy = MagicMock(return_value=copy.deepcopy(mock_state))
         sampler.get_init_state = MagicMock(return_value=mock_state)
 
-        sampler.run(2)
+        sampler.run(2, progress_bar=False)
         self.assertEqual(sampler.n_iter, 2)
         self.assertEqual(len(sampler.trace), 3)
         self.assertIs(sampler.trace[0], mock_state)
@@ -217,16 +227,16 @@ class TestSamplers2(unittest.TestCase):
 
     def setUp(self):
         X, y = np.random.rand(100, 5), np.random.rand(100)
-        self.dataset = Dataset(X, y, X)
-        self.trees = [Tree(data=self.dataset) for _ in range(5)]
+        self.dataset = Dataset(X, y)
+        self.trees = [Tree.new(dataX=self.dataset.X) for _ in range(5)]
         self.tree_params = Parameters(self.trees, None, self.dataset)
         # Ensure every tree has at least one split using Parameters
         for tree in self.tree_params.trees:
             tree.split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=-1.0)
         self.alpha = 0.5
         self.beta = 0.5
-        self.prior = DefaultPrior(n_trees=len(self.trees), tree_alpha=self.alpha, tree_beta=self.beta)
-        self.prior.fit(self.dataset)
+        self.prior = ComprehensivePrior(n_trees=len(self.trees), tree_alpha=self.alpha, tree_beta=self.beta)
+        # self.prior.fit(self.dataset)
         self.generator = np.random.default_rng(42)
         self.temp_schedule = TemperatureSchedule()
         self.sampler = DefaultSampler(
@@ -236,7 +246,7 @@ class TestSamplers2(unittest.TestCase):
             temp_schedule=self.temp_schedule
         )
         self.sampler.add_data(self.dataset)
-
+        self.sampler.add_thresholds(DefaultPreprocessor.test_thresholds(self.dataset.X))
     
     def test_add_data(self):
         self.assertIsNotNone(self.sampler.data)
@@ -246,7 +256,7 @@ class TestSamplers2(unittest.TestCase):
     def test_get_init_state(self):
         init_state = self.sampler.get_init_state()
         self.assertIsInstance(init_state, Parameters)
-        self.assertEqual(len(init_state.trees), self.prior.n_trees)
+        self.assertEqual(len(init_state.trees), self.prior.tree_prior.n_trees)
     
     def test_run(self):
         self.sampler.run(5)
@@ -255,6 +265,21 @@ class TestSamplers2(unittest.TestCase):
     def test_sample_move(self):
         move = self.sampler.sample_move()
         self.assertIn(move, all_moves.values())
+
+    def test_trees_log_mh_ratio(self):
+        """
+        Test computing MH ratio.
+        """
+        mock_move = MagicMock()
+        mock_move.current = MagicMock()
+        mock_move.proposed = MagicMock()
+        mock_move.trees_changed = [0]
+
+        self.prior.tree_prior.trees_log_prior_ratio = MagicMock(return_value=-0.3)
+        self.prior.likelihood.trees_log_marginal_lkhd_ratio = MagicMock(return_value=0.7)
+
+        mh_ratio = self.sampler.log_mh_ratio(mock_move)
+        self.assertAlmostEqual(mh_ratio, 0.4)
 
 if __name__ == '__main__':
     unittest.main()

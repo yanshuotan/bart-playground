@@ -117,7 +117,7 @@ class GlobalParamPrior:
         specification (str): Method for initial variance estimate
         generator: Random number generator
     """
-    def __init__(self, eps_q=0.9, eps_nu=3, specification="linear", generator=np.random.default_rng()):
+    def __init__(self, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng()):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda = None
@@ -284,7 +284,7 @@ class BARTLikelihood:
         return log_lkhd_proposed - log_lkhd_current
 
 class ComprehensivePrior:
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3, specification="linear", generator=np.random.default_rng()):
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng()):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
         self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)

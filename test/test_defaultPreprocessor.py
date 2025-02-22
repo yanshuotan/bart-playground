@@ -38,13 +38,13 @@ class TestDefaultPreprocessor(unittest.TestCase):
         dataset = self.preprocessor.transform(self.X, self.y)
         self.assertEqual(dataset.X.shape, self.X.shape)
         self.assertEqual(dataset.y.shape, self.y.shape)
-        self.assertIsInstance(dataset.thresholds, dict)
+        self.assertIsInstance(self.preprocessor.thresholds, dict)
 
     def test_fit_transform(self):
         dataset = self.preprocessor.fit_transform(self.X, self.y)
         self.assertEqual(dataset.X.shape, self.X.shape)
         self.assertEqual(dataset.y.shape, self.y.shape)
-        self.assertIsInstance(dataset.thresholds, dict)
+        self.assertIsInstance(self.preprocessor.thresholds, dict)
 
     def test_transform_y(self):
         self.preprocessor.fit(self.X, self.y)
