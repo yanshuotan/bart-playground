@@ -53,7 +53,7 @@ class Sampler(ABC):
         self.likelihood = prior.likelihood
         
 
-    def add_data(self, data : Dataset, thresholds):
+    def add_data(self, data : Dataset):
         """
         Adds data to the sampler.
 
@@ -61,9 +61,11 @@ class Sampler(ABC):
         data (Dataset): The data to be added to the sampler.
         """
         self.data = data
+
+    def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
 
-    def run(self, n_iter):
+    def run(self, n_iter, progress_bar = True):
         """
         Run the sampler for a specified number of iterations.
 
@@ -80,9 +82,12 @@ class Sampler(ABC):
             raise AttributeError("Data has not been added yet.")
         current = self.get_init_state()
         self.trace.append(current) # Add initial state to trace
-        for iter in range(n_iter):
-            if iter % 10 == 0:
-                print(f"Running iteration {iter}")
+        
+        iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
+    
+        for iter in iterator:
+            if not progress_bar and iter % 10 == 0:
+                print(f"Running iteration {iter}/{n_iter}")
             # print(self.temp_schedule)
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False)
@@ -119,7 +124,7 @@ class Sampler(ABC):
         pass
 
     @abstractmethod
-    def one_iter(self, current, return_trace=False):
+    def one_iter(self, current, temp, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
@@ -146,7 +151,7 @@ class DefaultSampler(Sampler):
         """
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
-        trees = [Tree(self.data.X) for _ in range(self.tree_prior.n_trees)]
+        trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
         global_params = self.global_prior.init_global_params(self.data)
         init_state = Parameters(trees, global_params)
         return init_state
