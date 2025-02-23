@@ -43,8 +43,9 @@ class BCF:
         preprocessor = BCFPreprocessor()
         data = preprocessor.fit_transform(X, y, z)
         data.z = z  # Store treatment vector
-        self.sampler.prior.fit(data)
-        self.sampler.add_data(data, preprocessor.thresholds)
+        # self.sampler.prior.fit(data)
+        self.sampler.add_data(data)
+        self.sampler.add_thresholds(preprocessor.thresholds)
         self.sampler.run(self.ndpost + self.nskip)
 
     def predict_components(self, X, Z):

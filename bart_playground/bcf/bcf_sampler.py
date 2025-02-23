@@ -20,8 +20,10 @@ class BCFSampler(Sampler):
         self.tol = tol
         super().__init__(prior, proposal_probs, generator, temp_schedule)
         
-    def add_data(self, data : BCFDataset, thresholds):
-        return super().add_data(data, thresholds)
+    def add_data(self, data : BCFDataset):
+        return super().add_data(data)
+    def add_thresholds(self, thresholds):
+        return super().add_thresholds(thresholds)
         
     def get_init_state(self):
         """
@@ -30,8 +32,8 @@ class BCFSampler(Sampler):
         Returns:
             The initial state for the sampler.
         """
-        mu_trees = [Tree(self.data.X) for _ in range(self.prior.mu_prior.n_trees)]
-        tau_trees = [Tree(self.data.X[self.data.treated]) for _ in range(self.prior.tau_prior.n_trees)]
+        mu_trees = [Tree.new(self.data.X) for _ in range(self.prior.mu_prior.n_trees)]
+        tau_trees = [Tree.new(self.data.X[self.data.treated]) for _ in range(self.prior.tau_prior.n_trees)]
         global_params = self.prior.init_global_params(self.data)
 
         init_state = BCFParams(mu_trees, tau_trees, global_params)
