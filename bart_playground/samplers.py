@@ -48,10 +48,6 @@ class Sampler(ABC):
         self.trace = []
         self.generator = generator
         
-        self.tree_prior = prior.tree_prior
-        self.global_prior = prior.global_prior
-        self.likelihood = prior.likelihood
-        
 
     def add_data(self, data : Dataset):
         """
@@ -140,6 +136,9 @@ class DefaultSampler(Sampler):
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
+        self.tree_prior = prior.tree_prior
+        self.global_prior = prior.global_prior
+        self.likelihood = prior.likelihood
         super().__init__(prior, proposal_probs, generator, temp_schedule)
 
     def get_init_state(self) -> Parameters:
