@@ -374,7 +374,7 @@ class Tree:
             )
         
     def _print_node(self, node_id):
-        if self.dataX is None:
+        if self.dataX is not None:
             n_output = self.n[node_id]
         else:
             n_output = "NA"
