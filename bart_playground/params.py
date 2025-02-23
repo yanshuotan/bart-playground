@@ -425,7 +425,7 @@ class Parameters:
     # def copy(self, modified_tree_ids):
         # return copy.deepcopy(self)
 
-    def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
+    def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> np.ndarray:
         """
         Evaluate the model on the given data.
 
@@ -440,7 +440,7 @@ class Parameters:
 
         Returns:
         --------
-        float
+        np.ndarray
             The total output of the evaluated trees on the input data.
         """
 

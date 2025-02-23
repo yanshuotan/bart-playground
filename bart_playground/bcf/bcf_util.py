@@ -57,12 +57,17 @@ class BCFParamView(Parameters):
     def copy(self, modified_tree_ids=None):
         new_bcf = None
         if(self.ensemble_id == 'mu'):
-            new_bcf = self.bcf_params.copy(modified_mu_ids=modified_tree_ids)
+            new_bcf = self.bcf_params.copy(modified_mu_ids=modified_tree_ids, modified_tau_ids=[])
         else:
-            new_bcf = self.bcf_params.copy(modified_tau_ids=modified_tree_ids)
+            new_bcf = self.bcf_params.copy(modified_tau_ids=modified_tree_ids, modified_mu_ids=[])
             
-        sub_model = BCFParamView(new_bcf, self.ensemble_id, cache=copy.deepcopy(self.cache))
-        return sub_model
+        copied = BCFParamView(new_bcf, self.ensemble_id, cache=copy.deepcopy(self.cache))
+        if(self.ensemble_id == 'mu'):
+            new_bcf.mu_view = copied
+        else:
+            new_bcf.tau_view = copied
+
+        return copied
 
     # def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
     #     # TODO: Only update necessary parts of the ensemble 
