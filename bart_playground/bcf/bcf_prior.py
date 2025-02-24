@@ -42,7 +42,6 @@ class BCFPrior:
         self.mu_likelihood = BARTLikelihood(self.mu_prior.f_sigma2)
         self.tau_likelihood = BARTLikelihood(self.tau_prior.f_sigma2)
       
-    # TODO
     def trees_log_prior_ratio(self, move : Move, ensemble_id):
         if ensemble_id == 'mu':
             bart_prior : TreesPrior = self.mu_prior
@@ -53,7 +52,6 @@ class BCFPrior:
         log_prior_proposed = bart_prior.trees_log_prior(move.proposed, move.trees_changed)
         return log_prior_proposed - log_prior_current
     
-    # TODO
     def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, ensemble_id, marginalize: bool=False):
         """
         Compute the ratio of marginal likelihoods for a given move.
@@ -84,7 +82,6 @@ class BCFPrior:
                                                             tree_ids= trees)
         return log_lkhd_proposed - log_lkhd_current
     
-    # copied, TODO
     def trees_log_mh_ratio(self, move : Move, data_y, ensemble_id, marginalize : bool=False):
          return self.trees_log_prior_ratio(move, ensemble_id) + \
             self.trees_log_marginal_lkhd_ratio(move, data_y, ensemble_id, marginalize)
@@ -97,7 +94,7 @@ class BCFPrior:
         based on the provided data and returns it in a dictionary.
         """
         self.global_prior.fit_hyperparameters(data)
-        eps_sigma2 = self.global_prior._sample_eps_sigma2(data.y) # TODO
+        eps_sigma2 = self.global_prior._sample_eps_sigma2(data.y)
         return {"eps_sigma2" : eps_sigma2}
     
     # use global residuals to resample global eps_sigma2

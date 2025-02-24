@@ -58,7 +58,7 @@ class BCFSampler(Sampler):
         self.prior : BCFPrior
 
         # 1) Update mu (prognostic) ensemble
-        remaining_y = self.data.y
+        remaining_y = self.data.y.copy()
         remaining_y[self.data.treated] -= iter_current.tau_view.evaluate()
         for k in range(self.prior.mu_prior.n_trees):
             move_class = self.sample_move("mu")  
@@ -68,7 +68,6 @@ class BCFSampler(Sampler):
             if move.propose(self.generator): # Check if a valid move was proposed
                 # Metropolis–Hastings
                 Z = self.generator.uniform(0,1)
-                # TODO
                 if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, data_y = remaining_y, ensemble_id = 'mu')):
                     new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, data_y = remaining_y, ensemble_id = 'mu', tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
@@ -86,7 +85,6 @@ class BCFSampler(Sampler):
         for k in range(self.prior.tau_prior.n_trees):
             move_class = self.sample_move("tau")  
             move = move_class(
-                # TODO: Check if this is correct
                 current=iter_current.tau_view, trees_changed=[k], possible_thresholds = thresholds_treated, tol=self.tol
             )
             if move.propose(self.generator): # Check if a valid move was proposed

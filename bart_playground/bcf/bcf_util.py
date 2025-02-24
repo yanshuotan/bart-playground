@@ -68,13 +68,4 @@ class BCFParamView(Parameters):
             new_bcf.tau_view = copied
 
         return copied
-
-    # def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
-    #     # TODO: Only update necessary parts of the ensemble 
-    #     if X is None:
-    #         X = self.data.X
-    #     yhat = 0.
-    #     for t in self.trees:
-    #         yhat += t.predict(X)
-    #     return yhat
     
