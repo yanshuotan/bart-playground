@@ -120,7 +120,7 @@ class GlobalParamPrior:
     def __init__(self, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng()):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
-        self.eps_lambda = None
+        self.eps_lambda : float
         self.specification = specification
         self.generator = generator
 
@@ -166,25 +166,25 @@ class GlobalParamPrior:
         eps_sigma2 = self._sample_eps_sigma2(data_y - bart_params.evaluate())
         return {"eps_sigma2" : eps_sigma2}
     
-    def _fit_eps_lambda(self, data, specification="linear"):
+    def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:
         """
         Compute the lambda parameter for the noise variance prior.
         Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.
         """
-       
+        sigma_hat : float
         if specification == "naive":
-            sigma_hat = np.std(data.y)
+            sigma_hat = float(np.std(data.y))
         elif specification == "linear":
             # Fit a linear model to the data
             model = LinearRegression().fit(data.X, data.y)
             y_hat = model.predict(data.X)
             resids = data.y - y_hat
-            sigma_hat = np.std(resids)
+            sigma_hat = float(np.std(resids))
         else:
             raise ValueError("Invalid specification for the noise variance prior.")
         
         # chi2.ppf suffices
-        c = chi2.ppf(1 - self.eps_q, df=self.eps_nu)
+        c = chi2.ppf(1 - self.eps_q, df=self.eps_nu).item()
         return (sigma_hat**2 * c) / self.eps_nu
 
     def _sample_eps_sigma2(self, residuals):
@@ -203,7 +203,7 @@ class GlobalParamPrior:
         prior_beta = self.eps_nu * self.eps_lambda / 2
         post_alpha = prior_alpha + n / 2
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
-        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)[0]
+        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)# [0]
         return eps_sigma2
 
 class BARTLikelihood:
