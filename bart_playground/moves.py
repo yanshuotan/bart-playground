@@ -1,6 +1,6 @@
 import numpy as np
 from abc import ABC, abstractmethod
-
+from typing import Optional
 from .params import Parameters
 
 
@@ -9,7 +9,7 @@ class Move(ABC):
     Base class for moves in the BART sampler.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray, 
-                 possible_thresholds = None, tol = 100):
+                 possible_thresholds : Optional[dict] = None, tol : int = 100):
         """
         Initialize the move.
 
@@ -20,10 +20,15 @@ class Move(ABC):
             Indices of trees that were changed.
         """
         self.current = current
-        self.proposed = None
+        # self.proposed = None
         self.trees_changed = trees_changed
-        self.possible_thresholds = possible_thresholds
+        self._possible_thresholds = possible_thresholds
         self.tol = tol
+
+    @property
+    def possible_thresholds(self):
+        assert self._possible_thresholds, "possible_thresholds must be initialized"
+        return self._possible_thresholds
 
     def propose(self, generator):
         """
@@ -59,7 +64,7 @@ class Grow(Move):
     Move to grow a new split.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
-                 possible_thresholds = None, tol = 100):
+                 possible_thresholds : dict, tol : int = 100):
         if not possible_thresholds:
             raise ValueError("Possible thresholds must be provided for grow move.")
         super().__init__(current, trees_changed, possible_thresholds, tol)
@@ -81,7 +86,7 @@ class Prune(Move):
     Move to prune a terminal split.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
-                 possible_thresholds = None, tol = 100):
+                 possible_thresholds = None, tol : int = 100):
         super().__init__(current, trees_changed, tol = tol)
         assert len(trees_changed) == 1
 
@@ -100,7 +105,7 @@ class Change(Move):
     Move to change the split variable and threshold for an internal node.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
-                 possible_thresholds = None, tol = 100):
+                 possible_thresholds : dict, tol : int = 100):
         if not possible_thresholds:
             raise ValueError("Possible thresholds must be provided for change move.")
         super().__init__(current, trees_changed, possible_thresholds, tol)
@@ -123,7 +128,7 @@ class Swap(Move):
     Move to swap the split variables and thresholds for a pair of parent-child nodes.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
-                 possible_thresholds = None, tol = 100):
+                 possible_thresholds = None, tol : int = 100):
         super().__init__(current, trees_changed, tol = tol)
         assert len(trees_changed) == 1
 

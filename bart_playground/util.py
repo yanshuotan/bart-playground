@@ -13,7 +13,17 @@ class Dataset:
         self.n, self.p = X.shape
 
 class Preprocessor(ABC):
+    @property
+    def thresholds(self):
+        return self._thresholds
+    @thresholds.setter
+    def thresholds(self, value):
+        self._thresholds = value
 
+    @abstractmethod
+    def gen_thresholds(self, X):
+        pass
+    
     @abstractmethod
     def fit(self, X, y):
         pass
@@ -64,13 +74,6 @@ class DefaultPreprocessor(Preprocessor):
     @staticmethod
     def test_thresholds(X):
         return dict({k : np.unique(X[:, k]) for k in range(X.shape[1])})
-    
-    @property
-    def thresholds(self):
-        return self._thresholds
-    @thresholds.setter
-    def thresholds(self, value):
-        self._thresholds = value
 
     def transform_y(self, y):
         return (y - self.y_min) / (self.y_max - self.y_min) - 0.5
