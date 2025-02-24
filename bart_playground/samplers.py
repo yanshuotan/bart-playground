@@ -4,7 +4,7 @@ from tqdm import tqdm
 from abc import ABC, abstractmethod
 
 from .params import Tree, Parameters
-from .moves import all_moves
+from .moves import all_moves, Break, Combine
 from .util import Dataset
 from .priors import Prior
 
@@ -179,7 +179,7 @@ class NtreeSampler(Sampler):
     """
     Change the number of trees implementation of the BART sampler.
     """
-    def __init__(self, prior : Prior, proposal_probs: dict, move_tree_probs : dict,
+    def __init__(self, prior : Prior, proposal_probs: dict, # move_tree_probs : dict,
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(),tol=100):
         self.tol = tol
         if proposal_probs is None:
@@ -210,39 +210,42 @@ class NtreeSampler(Sampler):
         """
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
-        theta = iter_current.global_params['n_trees_controler']
-
+        # theta = iter_current.global_params['n_trees_controler']
+        
         # Break and Combine
         U = self.generator.uniform(0,1)
         if U < 0.5: # Break move 
             move = Break(iter_current, [self.generator.integers(0,self.prior.n_trees)], self.tol)   
             if move.propose(self.generator):
                 Z = self.generator.uniform(0, 1)
-                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)): # Here should be MH ratio for Break move
+                if Z < 2: # Here should be MH ratio for Break move
                     self.prior.n_trees = self.prior.n_trees + 1
-                    new_leaf_vals_remain = self.prior.resample_leaf_vals(move.proposed,[self.prior.n_trees-2])
-                    new_leaf_vals_new = self.prior.resample_leaf_vals(move.proposed,[self.prior.n_trees-1])
-                    move.proposed.update_leaf_vals([self.prior.n_trees-2], new_leaf_vals_remain)
-                    move.proposed.update_leaf_vals([self.prior.n_trees-1], new_leaf_vals_new)
+                    new_leaf_vals_remain = self.prior.resample_leaf_vals(move.proposed,[-2])
+                    new_leaf_vals_new = self.prior.resample_leaf_vals(move.proposed,[-1])
+                    move.proposed.update_leaf_vals([-2], new_leaf_vals_remain)
+                    move.proposed.update_leaf_vals([-1], new_leaf_vals_new)
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
         
         else: # Combine move 
-            move = Combine(iter_current, [self.generator.integers(0,self.prior.n_trees,size=2)], self.tol)   
+            a = self.generator.choice(np.arange(0,self.prior.n_trees),size=2)
+            move = Combine(iter_current, a, self.tol)   
             if move.propose(self.generator):
                 Z = self.generator.uniform(0, 1)
-                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)): # Here should be MH ratio for Combine move
+                if Z < 2: # Here should be MH ratio for Combine move
                     self.prior.n_trees = self.prior.n_trees - 1
-                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed,[self.prior.n_trees-1])
-                    move.proposed.update_leaf_vals([self.prior.n_trees-1], new_leaf_vals)
+                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed,[a[0]])
+                    move.proposed.update_leaf_vals([a[0]], new_leaf_vals)
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
 
         # Default BART
+        print(move)
         for k in range(self.prior.n_trees):
             move = self.sample_move()(iter_current, [k], self.tol)
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
+                #print(k)
                 if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
                     new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)

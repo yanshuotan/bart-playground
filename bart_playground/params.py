@@ -157,6 +157,7 @@ class Tree:
             If the node is not a leaf and cannot be split.
         """
         # Check if the node is already a leaf
+        #print(self.vars)
         if self.vars[node_id] != -1:
             raise ValueError("Node is not a leaf and cannot be split.")
 
@@ -172,6 +173,7 @@ class Tree:
         self.thresholds[node_id] = threshold
 
         # Initialize the new leaf nodes
+        #print(self.vars)
         self.vars[left_child] = -1
         self.vars[right_child] = -1
         x_bigger = self.data.X[:, var] > threshold
