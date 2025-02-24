@@ -61,17 +61,22 @@ class Sampler(ABC):
     def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
 
-    def run(self, n_iter, progress_bar = True):
+    def run(self, n_iter, progress_bar = True, quietly = False):
         """
         Run the sampler for a specified number of iterations.
 
         Parameters:
         n_iter (int): The number of iterations to run the sampler.
+        progress_bar (bool): Whether to display a progress bar.
+        quietly (bool): Whether to suppress all output.
 
         Raises:
         AttributeError: If data has not been added yet.
 
         """
+        if quietly:
+            progress_bar = False
+
         self.trace = []
         self.n_iter = n_iter
         if self.data is None:
@@ -82,7 +87,7 @@ class Sampler(ABC):
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
     
         for iter in iterator:
-            if not progress_bar and iter % 10 == 0:
+            if not progress_bar and iter % 10 == 0 and not quietly:
                 print(f"Running iteration {iter}/{n_iter}")
             # print(self.temp_schedule)
             temp = self.temp_schedule(iter)

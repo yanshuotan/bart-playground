@@ -19,7 +19,7 @@ class BART:
         self.nskip = nskip
         self.trace = []
 
-    def fit(self, X, y):
+    def fit(self, X, y, quietly = False):
         """
         Fit the BART model.
         """
@@ -27,7 +27,7 @@ class BART:
         # self.sampler.global_prior.fit_hyperparameters(data)
         self.sampler.add_data(data)
         self.sampler.add_thresholds(self.preprocessor.thresholds)
-        self.trace = self.sampler.run(self.ndpost + self.nskip)
+        self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly)
 
     def posterior_f(self, X):
         """
