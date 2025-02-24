@@ -44,7 +44,7 @@ class TestBCF(unittest.TestCase):
     def test_fit_predict(self):
         # Fit the model on the training data
         self.bcf.fit(self.X_train, self.y_train, self.z_train)
-        predictions = self.bcf.predict_mean(self.X_test, self.z_test)
+        predictions = self.bcf.predict_components(self.X_test, self.z_test)
         
         for i in range(1,3):
             prediction = predictions[i]

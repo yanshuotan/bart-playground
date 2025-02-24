@@ -49,8 +49,8 @@ class BCF:
         self.sampler.add_thresholds(self.preprocessor.thresholds)
         self.sampler.run(self.ndpost + self.nskip)
 
-    def predict_components(self, X, Z):
-        """Return separate mu and tau predictions"""
+    def predict_all(self, X, Z):
+        """Return all mu, tau and y predictions"""
         post_mu = np.zeros((X.shape[0], self.ndpost))
         post_tau = np.zeros_like(post_mu)
         post_y = np.zeros_like(post_mu)
@@ -67,10 +67,14 @@ class BCF:
             
         return post_mu, post_tau, post_y
     
-    def predict_mean(self, X, Z):
-        """Return the mean prediction"""
-        post_mu, post_tau, post_y = self.predict_components(X, Z)
+    def predict_components(self, X, Z):
+        """Return separate mu, tau and y prediction means"""
+        post_mu, post_tau, post_y = self.predict_all(X, Z)
         return np.mean(post_mu, axis=1), np.mean(post_tau, axis=1), np.mean(post_y, axis=1)
+    
+    def predict(self, X, Z):
+        """Return the mean prediction of y"""
+        return self.predict_components(X, Z)[2]
 
 class BCFPreprocessor(DefaultPreprocessor):
     def fit_transform(self, X, y, z):
