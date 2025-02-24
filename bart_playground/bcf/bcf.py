@@ -18,6 +18,7 @@ class BCF:
         self.eps_lambda = None
 
         # Initialize priors
+        rng = np.random.default_rng(random_state)
         self.prior = BCFPrior(
             n_mu_trees=n_mu_trees,
             n_tau_trees=n_tau_trees,
@@ -26,11 +27,11 @@ class BCF:
             mu_k=mu_k,
             tau_alpha=tau_alpha,
             tau_beta=tau_beta,
-            tau_k=tau_k
+            tau_k=tau_k,
+            generator=rng
         )
         
         # Initialize sampler
-        rng = np.random.default_rng(random_state)
         self.sampler = BCFSampler(
             prior=self.prior,
             proposal_probs = {'grow':0.5, 'prune':0.5},
@@ -40,12 +41,12 @@ class BCF:
 
     def fit(self, X, y, z):
         """Extend fit to handle treatment indicator z"""
-        preprocessor = BCFPreprocessor()
-        data = preprocessor.fit_transform(X, y, z)
+        self.preprocessor = BCFPreprocessor()
+        data = self.preprocessor.fit_transform(X, y, z)
         data.z = z  # Store treatment vector
         # self.sampler.prior.fit(data)
         self.sampler.add_data(data)
-        self.sampler.add_thresholds(preprocessor.thresholds)
+        self.sampler.add_thresholds(self.preprocessor.thresholds)
         self.sampler.run(self.ndpost + self.nskip)
 
     def predict_components(self, X, Z):
@@ -56,9 +57,13 @@ class BCF:
         
         for k in range(self.ndpost):
             params = self.sampler.trace[self.nskip + k]
-            post_mu[:,k] = np.sum([t.evaluate(X) for t in params.mu_trees], axis=0)
-            post_tau[:,k] = np.sum([t.evaluate(X) for t in params.tau_trees], axis=0)
-            post_y[:, k] = post_mu[:, k] + Z * post_tau[:, k]
+            
+            # np.sum([t.evaluate(X) for t in params.mu_trees], axis=0)
+            post_mu[:,k] = params.mu_view.evaluate(X)
+            post_tau[:, k] = params.tau_view.evaluate(X)
+            post_y[:, k] = self.preprocessor.backtransform_y(
+                post_mu[:, k] + Z * post_tau[:, k]
+                )
             
         return post_mu, post_tau, post_y
     

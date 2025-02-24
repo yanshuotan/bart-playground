@@ -35,8 +35,8 @@ class BART:
         """
         preds = np.zeros((X.shape[0], self.ndpost))
         for k in range(self.ndpost):
-            preds[:, k] = self.preprocessor.backtransform_y(
-                self.sampler.trace[self.nskip + k].evaluate(X))
+            y_eval = self.sampler.trace[self.nskip + k].evaluate(X)
+            preds[:, k] = self.preprocessor.backtransform_y(y_eval)
         return preds
     
     def predict(self, X):

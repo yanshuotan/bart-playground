@@ -12,7 +12,7 @@ class BCFPrior:
     def __init__(self, n_mu_trees=200, n_tau_trees=50,
                  mu_alpha=0.95, mu_beta=2.0, mu_k=2.0,
                  tau_alpha=0.25, tau_beta=3.0, tau_k=1.0,
-                 eps_q=0.9, eps_nu=3, specification="linear"):
+                 eps_q=0.9, eps_nu=3, specification="linear", generator=np.random.default_rng()):
         """
             Initialize the BCF prior with specified parameters.
         """
@@ -25,7 +25,8 @@ class BCFPrior:
             n_trees=n_mu_trees,
             tree_alpha=mu_alpha,
             tree_beta=mu_beta,
-            f_k=mu_k
+            f_k=mu_k,
+            generator=generator
         )
         
         # Treatment effect prior
@@ -33,9 +34,10 @@ class BCFPrior:
             n_trees=n_tau_trees,
             tree_alpha=tau_alpha,
             tree_beta=tau_beta,
-            f_k=tau_k
+            f_k=tau_k,
+            generator=generator
         )
-        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification)
+        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator=generator)
 
         self.mu_likelihood = BARTLikelihood(self.mu_prior.f_sigma2)
         self.tau_likelihood = BARTLikelihood(self.tau_prior.f_sigma2)
