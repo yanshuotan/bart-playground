@@ -1,13 +1,16 @@
-
+import numpy as np
 from ..util import Dataset, DefaultPreprocessor
 class BCFDataset(Dataset):
     def __init__(self, X, y, z):
-        self.z = z.reshape(-1, 1)
+        if z.ndim == 1:
+            z = z.reshape(-1, 1)
+        self.z = z
+        for i in range(z.shape[0]):
+            assert np.sum(z[i, :]) <= 1 # At most one treatment arm shall be True
         super().__init__(X, y)
         
     @property
     def treated(self):
-        raise NotImplementedError("Property treated is not implemented.")
         assert self.z.shape[1] == 1, "Only one treatment arm is supported when using property treated."
         return self.treated_by(0)
     

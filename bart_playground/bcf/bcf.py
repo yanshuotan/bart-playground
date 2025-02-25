@@ -65,8 +65,8 @@ class BCF:
             post_mu[:,k] = params.mu_view.evaluate(X)
             for i in range(self.n_treat_arms):
                 post_tau[:, i, k] = params.tau_view_list[i].evaluate(X)
-                post_y[:, k] = self.preprocessor.backtransform_y(
-                    post_mu[:, k] + Z[:, i] * post_tau[:, i, k]
+            post_y[:, k] = self.preprocessor.backtransform_y(
+                    post_mu[:, k] + np.sum(Z * post_tau[:, :, k], axis = 1)
                     )
             
         return post_mu, post_tau, post_y
