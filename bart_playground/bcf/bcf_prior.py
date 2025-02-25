@@ -69,7 +69,7 @@ class BCFPrior:
         if not marginalize:
             trees = move.trees_changed
         else:
-            trees = np.arange(self.current.n_trees)
+            trees = np.arange(move.current.n_trees)
             
         if ensemble_id == 'mu':
             bart_likelihood : BARTLikelihood = self.mu_likelihood
