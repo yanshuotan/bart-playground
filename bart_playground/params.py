@@ -477,7 +477,7 @@ class Parameters:
         """
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
-    def update_leaf_vals(self, tree_ids, leaf_vals):
+    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float_]):
         """
         Update the leaf values of specified trees.
 
@@ -495,7 +495,5 @@ class Parameters:
             tree.leaf_vals[tree.leaves] = \
                 leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
             tree.update_outputs()
-            # if(not (tree.evaluate() == tree.evaluate(tree.dataX)).all()):
-            #    breakpoint()
             self.cache = self.cache + tree.evals - tree_evals_old
             leaf_counter += tree.n_leaves
