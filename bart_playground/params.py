@@ -1,6 +1,7 @@
 import numpy as np
 import copy
-
+from typing import Optional
+from numpy.typing import NDArray
 from .util import Dataset
 
 class Tree:
@@ -8,7 +9,7 @@ class Tree:
     Represents the parameters of a single tree in the BART model, combining both
     the tree structure and leaf values into a single object.
     """
-    def __init__(self, dataX: np.ndarray, vars, thresholds, leaf_vals, n, node_indicators, evals):
+    def __init__(self, dataX: Optional[np.ndarray], vars, thresholds, leaf_vals, n, node_indicators, evals):
         """
         Initialize the tree parameters.
 
@@ -29,7 +30,7 @@ class Tree:
         self.dataX = dataX
         self.vars = vars
         self.thresholds = thresholds
-        self.leaf_vals = leaf_vals
+        self.leaf_vals : NDArray[np.float_] = leaf_vals
 
         self.n = n
         self.node_indicators = node_indicators
@@ -98,7 +99,7 @@ class Tree:
                 split_node_counter += 1
         return node_ids
 
-    def evaluate(self, X: np.ndarray=None) -> float:
+    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float_]:
         """
         Evaluate the tree for a given input data matrix.
 
@@ -339,7 +340,7 @@ class Tree:
                 and not self.is_terminal_split_node(i)]
 
     @property
-    def leaf_basis(self):
+    def leaf_basis(self) -> NDArray[np.bool_]:
         if self.dataX is None:
             raise ValueError("Data matrix is not provided.")
         
@@ -425,7 +426,7 @@ class Parameters:
     # def copy(self, modified_tree_ids):
         # return copy.deepcopy(self)
 
-    def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> np.ndarray:
+    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float_]:
         """
         Evaluate the model on the given data.
 
@@ -450,7 +451,7 @@ class Parameters:
         elif all_except is not None:
             tree_ids = [i for i in np.arange(self.n_trees) if i not in all_except]
         else:
-            tree_ids = np.arange(self.n_trees)
+            tree_ids = list(np.arange(self.n_trees))
             all_except = []
 
         if X is None:
@@ -476,7 +477,7 @@ class Parameters:
         """
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
-    def update_leaf_vals(self, tree_ids, leaf_vals):
+    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float_]):
         """
         Update the leaf values of specified trees.
 
@@ -494,7 +495,5 @@ class Parameters:
             tree.leaf_vals[tree.leaves] = \
                 leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
             tree.update_outputs()
-            # if(not (tree.evaluate() == tree.evaluate(tree.dataX)).all()):
-            #    breakpoint()
             self.cache = self.cache + tree.evals - tree_evals_old
             leaf_counter += tree.n_leaves

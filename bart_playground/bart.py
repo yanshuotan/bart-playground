@@ -2,6 +2,7 @@ import numpy as np
 
 from .samplers import Sampler, DefaultSampler, default_proposal_probs
 from .priors import *
+from .priors import *
 from .util import Preprocessor, DefaultPreprocessor
 
 class BART:
@@ -54,6 +55,7 @@ class DefaultBART(BART):
                  random_state=42):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
+        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
                              eps_nu, specification, rng)
         sampler = DefaultSampler(prior = prior, proposal_probs = proposal_probs, generator = rng, tol = tol)

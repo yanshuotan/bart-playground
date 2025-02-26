@@ -2,15 +2,17 @@
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
+from typing import Callable, Optional
 
 from .params import Tree, Parameters
 from .moves import all_moves
 from .util import Dataset
 from .priors import *
+from .priors import *
 
 class TemperatureSchedule:
 
-    def __init__(self, temp_schedule: callable = lambda x: 1):
+    def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
         self.temp_schedule = temp_schedule
     
     def __call__(self, t):
@@ -40,7 +42,7 @@ class Sampler(ABC):
             trace (list): A list to store the trace of the sampling process.
             generator (np.random.Generator): A random number generator.
         """
-        self.data = None
+        self._data : Optional[Dataset] = None
         self.prior = prior
         self.n_iter = None
         self.proposals = proposal_probs
@@ -48,7 +50,11 @@ class Sampler(ABC):
         self.trace = []
         self.generator = generator
         
-
+    @property
+    def data(self) -> Dataset:
+        assert self._data, "Data has not been added yet."
+        return self._data
+    
     def add_data(self, data : Dataset):
         """
         Adds data to the sampler.
@@ -56,38 +62,30 @@ class Sampler(ABC):
         Parameters:
         data (Dataset): The data to be added to the sampler.
         """
-        self.data = data
+        self._data = data
 
     def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
 
-    def run(self, n_iter, progress_bar = True, quietly = False):
+    def run(self, n_iter, progress_bar = True):
         """
         Run the sampler for a specified number of iterations.
 
         Parameters:
         n_iter (int): The number of iterations to run the sampler.
-        progress_bar (bool): Whether to display a progress bar.
-        quietly (bool): Whether to suppress all output.
-
-        Raises:
-        AttributeError: If data has not been added yet.
-
         """
         if quietly:
             progress_bar = False
 
         self.trace = []
         self.n_iter = n_iter
-        if self.data is None:
-            raise AttributeError("Data has not been added yet.")
         current = self.get_init_state()
         self.trace.append(current) # Add initial state to trace
         
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
     
         for iter in iterator:
-            if not progress_bar and iter % 10 == 0 and not quietly:
+            if not progress_bar and iter % 10 == 0:
                 print(f"Running iteration {iter}/{n_iter}")
             # print(self.temp_schedule)
             temp = self.temp_schedule(iter)
