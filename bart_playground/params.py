@@ -1,3 +1,4 @@
+from functools import cache
 from math import e
 from typing import Optional
 import numpy as np
@@ -271,7 +272,7 @@ class Tree:
         is_valid = self.change_split(parent_id, child_var, child_threshold, update_n=True)
         return is_valid
     
-    def update_n(self, node_id=0):
+    def update_n(self, node_id=0, X_range=None):
         """
         Updates the counts of samples reaching each node in the decision tree.
 
@@ -289,6 +290,8 @@ class Tree:
         """
         if self.dataX is None:
             raise ValueError("Data matrix is not provided.")
+        if X_range is None:
+            X_range = np.arange(self.dataX.shape[0])
         
         if self.is_leaf(node_id):
             return self.n[node_id] > 0
@@ -297,8 +300,8 @@ class Tree:
             threshold = self.thresholds[node_id]
             left_child = node_id * 2 + 1
             right_child = node_id * 2 + 2
-            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & (self.dataX[:, var] <= threshold)
-            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & (self.dataX[:, var] > threshold)
+            self.node_indicators[X_range, left_child] = self.node_indicators[X_range, node_id] & (self.dataX[X_range, var] <= threshold)
+            self.node_indicators[X_range, right_child] = self.node_indicators[X_range, node_id] & (self.dataX[X_range, var] > threshold)
             self.n[left_child] = np.sum(self.node_indicators[:, left_child])
             self.n[right_child] = np.sum(self.node_indicators[:, right_child])
             is_valid = self.update_n(left_child) and self.update_n(right_child)
@@ -409,7 +412,7 @@ class Tree:
             return
         
         # Get dimensions
-        n_old = self.dataX.shape[0]
+        # n_old = self.dataX.shape[0]
         n_new = new_dataX.shape[0]
         
         # Update data matrix
@@ -417,20 +420,13 @@ class Tree:
         
         # Extend node_indicators array
         extended_indicators = np.full((n_new, len(self.vars)), False, dtype=bool)
+        extended_indicators[:, 0] = 1
         self.node_indicators = np.vstack([self.node_indicators, extended_indicators])
-        self.update_n()  # Update node indicators for the full tree
-
-        # new_node_ids = self.traverse_tree(new_dataX)
-        # 
-        # # Update node counts
-        # for i in range(len(self.vars)):
-        #     if self.vars[i] != -2:  # If it's not an empty node
-        #         self.n[i] = np.sum(self.node_indicators[:, i])
-        # 
-        # Update cached evaluations, TODO
-        self.evals = np.zeros(n_old + n_new)
-        for leaf_idx in self.leaves:
-            self.evals[self.node_indicators[:, leaf_idx]] = self.leaf_vals[leaf_idx]
+        self.update_n()   # Update node indicators for new data, could be improved below
+        # self.update_n(X_range = range(n_old, n_old+n_new))
+        
+        # Update evaluations, could be improved
+        self.update_outputs()
 
 class Parameters:
     """
@@ -492,7 +488,7 @@ class Parameters:
         new_state = Parameters(
             trees=new_trees, 
             global_params=self.global_params.copy(),
-            cache=None  # Let Parameters initialize the cache TODO
+            cache=None  # Let Parameters initialize the cache, could be improved
         )
         
         return new_state

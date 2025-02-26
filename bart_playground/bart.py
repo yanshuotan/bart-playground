@@ -33,14 +33,15 @@ class BART:
         self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly)
         self.is_fitted = True
 
-    def update_fit(self, X, y, additional_iters=10, quietly=False):
+    def update_fit(self, X, y, add_ndpost=20, add_nskip=10, quietly=False):
         """
         Update an existing fitted model with new data points.
         
         Parameters:
             X: New feature data to add
             y: New target data to add
-            additional_iters: Number of additional MCMC iterations to run
+            add_ndpost: Number of posterior samples to draw
+            add_nskip: Number of burn-in iterations to skip
             quietly: Whether to suppress output
             
         Returns:
@@ -50,13 +51,20 @@ class BART:
             # If not fitted yet, just do a regular fit
             self.fit(X, y, quietly)
             return self
+        additional_iters = add_ndpost + add_nskip
+        # TODO
+        # Set all previous iterations + add_nskip as burn-in
+        self.nskip += self.ndpost + add_nskip
+        # Set new add_ndpost iterations as post-burn-in
+        self.ndpost = add_ndpost
         
         assert self.data, "Data has not been added yet."
         X_combined = np.vstack([self.data.X, X])
         # if old data's sample size is small, recompute thresholds and y
-        if self.data.n < 10:
+        if self.data.n <= 10:
             y_combined = np.vstack([self.preprocessor.backtransform_y(self.data.y).reshape(-1, 1), y.reshape(-1, 1)]).flatten()
             self.data = self.preprocessor.fit_transform(X_combined, y_combined)
+            self.sampler.add_thresholds(self.preprocessor.thresholds)
         # if old data's sample size is large, just update y
         else:
             # Transform new data using already fitted preprocessor
@@ -73,15 +81,7 @@ class BART:
         current_state = last_state.add_data_points(X)
         
         # Run the sampler for additional iterations
-        new_trace = [current_state]
-        
-        for i in range(additional_iters):
-            if not quietly and i % 10 == 0:
-                print(f"Running update iteration {i}/{additional_iters}")
-            current_state = self.sampler.one_iter(current_state, temp=1.0, return_trace=False)
-            new_trace.append(current_state)
-        
-        # Update the trace
+        new_trace = self.sampler.run(additional_iters, quietly=quietly, current=current_state)
         self.trace = self.trace + new_trace
         
         return self
@@ -92,7 +92,7 @@ class BART:
         """
         preds = np.zeros((X.shape[0], self.ndpost))
         for k in range(self.ndpost):
-            y_eval = self.sampler.trace[self.nskip + k].evaluate(X)
+            y_eval = self.trace[self.nskip + k].evaluate(X)
             preds[:, k] = self.preprocessor.backtransform_y(y_eval)
         return preds
     

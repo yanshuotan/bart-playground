@@ -67,7 +67,7 @@ class Sampler(ABC):
     def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
 
-    def run(self, n_iter, progress_bar = True, quietly = False):
+    def run(self, n_iter, progress_bar = True, quietly = False, current = None):
         """
         Run the sampler for a specified number of iterations.
 
@@ -79,7 +79,9 @@ class Sampler(ABC):
 
         self.trace = []
         self.n_iter = n_iter
-        current = self.get_init_state()
+        if current is None:
+            current = self.get_init_state()
+        # assert isinstance(current, Parameters), "Current state must be of type Parameters."
         self.trace.append(current) # Add initial state to trace
         
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
