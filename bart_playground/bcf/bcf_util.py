@@ -29,6 +29,9 @@ class BCFPreprocessor(DefaultPreprocessor):
 class EnsembleName(Enum):
     MU = "mu"
     TAU = "tau"
+    
+    def toggle(self):
+        return next(member for member in type(self) if member != self)
 
 @dataclass
 class BCFEnsembleIndex:

@@ -29,32 +29,47 @@ class BCFParams:
         
         Args:
         - modified_ids_list (list of tuple[BCFIndex, list of int]): List of tuples specifying the ensemble and tree IDs to be updated.
+            If provided, shallow copy the unspecified trees.
         """
-        modified_mu_ids = list(range(len(self.mu_trees)))
-        modified_tau_ids_list = [list(range(len(self.tau_trees_list[i]))) for i in range(self.n_treat_arms)]
+        if modified_ids_list is None:
+            # Deep copy all trees if no modified_ids_list provided
+            return BCFParams(
+                [tree.copy() for tree in self.mu_trees],
+                [[tree.copy() for tree in tau_trees] for tau_trees in self.tau_trees_list],
+                copy.deepcopy(self.global_params),
+                mu_cache = copy.deepcopy(self.mu_view.cache),
+                tau_cache_list = [copy.deepcopy(tau_view.cache) for tau_view in self.tau_view_list] 
+            )
+        
+        # Track which tree IDs need to be deep copied
+        modified_mu_ids = []
+        modified_tau_ids_list = [[] for _ in range(self.n_treat_arms)]
 
-        if modified_ids_list is not None:
-            for i in range(len(modified_ids_list)):
-                ensemble_id, modified_ids = modified_ids_list[i]
-                if ensemble_id is not None:
-                    if ensemble_id.ensemble_name == EnsembleName.MU:
-                        modified_mu_ids = modified_ids
-                    elif ensemble_id.ensemble_name == EnsembleName.TAU:
-                        modified_tau_ids_list[ensemble_id.index] = modified_ids
-                    else:
-                        raise ValueError("ensemble_id must be either BCFIndex.MU or BCFIndex.TAU")
+        # Parse the modified_ids_list to determine which trees to deep copy
+        for ensemble_id, modified_ids in modified_ids_list:
+            if ensemble_id is not None:
+                if ensemble_id.ensemble_name == EnsembleName.MU:
+                    modified_mu_ids = modified_ids
+                elif ensemble_id.ensemble_name == EnsembleName.TAU:
+                    modified_tau_ids_list[ensemble_id.index] = modified_ids
+                else:
+                    raise ValueError("ensemble_id must be either BCFIndex.MU or BCFIndex.TAU")
 
+        # Start with shallow copies of all tree lists
         copied_mu_trees = self.mu_trees.copy()
+        copied_tau_trees_list = [trees_list.copy() for trees_list in self.tau_trees_list]
+        
+        # Deep copy only the trees that are in the modified lists
         for tree_id in modified_mu_ids:
             copied_mu_trees[tree_id] = self.mu_trees[tree_id].copy()
-
-        copied_tau_trees_list = [self.tau_trees_list[i].copy() for i in range(self.n_treat_arms)]
+        
         for i in range(self.n_treat_arms):
             for tree_id in modified_tau_ids_list[i]:
                 copied_tau_trees_list[i][tree_id] = self.tau_trees_list[i][tree_id].copy()
         
         return BCFParams(
-            copied_mu_trees, copied_tau_trees_list,
+            copied_mu_trees, 
+            copied_tau_trees_list,
             copy.deepcopy(self.global_params),
             mu_cache = copy.deepcopy(self.mu_view.cache),
             tau_cache_list = [copy.deepcopy(tau_view.cache) for tau_view in self.tau_view_list] 
@@ -105,4 +120,3 @@ class BCFParams:
             view = self.tau_view_list[tree_ids[0].index]
 
         view.update_leaf_vals(tree_ids[1], leaf_vals)
-    
