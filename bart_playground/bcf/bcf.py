@@ -2,7 +2,7 @@
 from bart_playground.bcf.bcf_params import BCFParams
 from .bcf_prior import BCFPrior
 from .bcf_sampler import BCFSampler
-from .bcf_dataset import BCFPreprocessor
+from .bcf_util import BCFPreprocessor
 
 import numpy as np
 

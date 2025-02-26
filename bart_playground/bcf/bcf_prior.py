@@ -4,12 +4,11 @@
 from math import e
 
 from matplotlib.pyplot import bar
-from ..priors import *
-from .bcf_dataset import BCFDataset
+from ..priors import TreesPrior, GlobalParamPrior, BARTLikelihood
 from .bcf_params import BCFParams
 from ..moves import Move
 from ..params import Parameters
-from .bcf_util import BCFEnsembleIndex, EnsembleName
+from .bcf_util import BCFEnsembleIndex, EnsembleName, BCFDataset
 import numpy as np
 class BCFPrior:
     """Manages separate priors for prognostic (μ) and treatment (τ) trees"""

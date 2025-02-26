@@ -7,9 +7,7 @@ from ..moves import all_moves
 from .bcf_params import BCFParams
 from ..params import Tree
 from .bcf_prior import BCFPrior
-from .bcf_util import BCFEnsembleIndex, EnsembleName
-from .bcf_view import BCFParamView
-from .bcf_dataset import BCFDataset
+from .bcf_util import BCFEnsembleIndex, EnsembleName, BCFDataset
 
 import numpy as np
 

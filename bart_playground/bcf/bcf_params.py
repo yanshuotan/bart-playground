@@ -8,7 +8,6 @@ from .bcf_util import BCFEnsembleIndex, EnsembleName, BCFTreeIndices
 
 class BCFParams:
     """Trees and parameters for BCF model"""
-    from .bcf_dataset import BCFDataset
     def __init__(self, mu_trees : list[Tree], tau_trees_list : list[list[Tree]], global_params : dict, 
                  mu_cache : Optional[np.ndarray] = None, tau_cache_list : Optional[list[np.ndarray]] = None):
         self.mu_trees = mu_trees  # Prognostic trees
