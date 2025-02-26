@@ -1,3 +1,5 @@
+from math import e
+from typing import Optional
 import numpy as np
 import copy
 from typing import Optional
@@ -9,7 +11,8 @@ class Tree:
     Represents the parameters of a single tree in the BART model, combining both
     the tree structure and leaf values into a single object.
     """
-    def __init__(self, dataX: Optional[np.ndarray], vars, thresholds, leaf_vals, n, node_indicators, evals):
+    def __init__(self, dataX: Optional[np.ndarray], vars : np.ndarray, thresholds : np.ndarray, leaf_vals : np.ndarray,
+                  n, node_indicators, evals):
         """
         Initialize the tree parameters.
 
@@ -36,6 +39,17 @@ class Tree:
         self.node_indicators = node_indicators
         self.evals = evals
 
+    def _init_caching_arrays(self):
+        """
+        Initialize caching arrays for the tree.
+        """
+        assert self.dataX is not None
+        self.node_indicators = np.full((self.dataX.shape[0], 8), False, dtype=bool)
+        self.node_indicators[:, 0] = True
+        self.n = np.full(8, -2, dtype=int)
+        self.n[0] = self.dataX.shape[0]
+        self.evals = np.zeros(self.dataX.shape[0])
+
     @classmethod
     def new(cls, dataX=None):
         # Define the basic tree parameters.
@@ -45,20 +59,12 @@ class Tree:
         leaf_vals = np.full(8, np.nan, dtype=float)
         leaf_vals[0] = 0                   # Initialize the leaf value
 
+        new_tree = cls(dataX, vars, thresholds, leaf_vals, n = None, node_indicators = None, evals = None)
         if dataX is not None:
             # If dataX is provided, initialize caching arrays.
-            node_indicators = np.full((dataX.shape[0], 8), False, dtype=bool)
-            node_indicators[:, 0] = True   # All observations go to the root
-            n = np.full(8, -2, dtype=int)
-            n[0] = dataX.shape[0]
-            evals = np.zeros(dataX.shape[0])
-        else:
-            # Otherwise, skip caching.
-            node_indicators = None
-            n = None
-            evals = None
-
-        return cls(dataX, vars, thresholds, leaf_vals, n, node_indicators, evals)
+            new_tree._init_caching_arrays()
+        
+        return new_tree
 
     @classmethod
     def from_existing(cls, other: "Tree"):
@@ -385,6 +391,47 @@ class Tree:
             return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
                 f" (split, n = {n_output})"
 
+    def add_data_points(self, new_dataX):
+        """
+        Efficiently add new data points to an existing tree structure without
+        rebuilding the entire tree. This method updates only the necessary parts
+        of node_indicators, n, and evals arrays.
+        
+        Parameters:
+            new_dataX: New feature data to add (np.ndarray)
+        """
+        if self.dataX is None:
+            # If no previous data, initialize with the new data
+            self.dataX = new_dataX
+            self._init_caching_arrays()
+            self.update_n()  # Update node indicators for the full tree
+            self.update_outputs()
+            return
+        
+        # Get dimensions
+        n_old = self.dataX.shape[0]
+        n_new = new_dataX.shape[0]
+        
+        # Update data matrix
+        self.dataX = np.vstack([self.dataX, new_dataX])
+        
+        # Extend node_indicators array
+        extended_indicators = np.full((n_new, len(self.vars)), False, dtype=bool)
+        self.node_indicators = np.vstack([self.node_indicators, extended_indicators])
+        self.update_n()  # Update node indicators for the full tree
+
+        # new_node_ids = self.traverse_tree(new_dataX)
+        # 
+        # # Update node counts
+        # for i in range(len(self.vars)):
+        #     if self.vars[i] != -2:  # If it's not an empty node
+        #         self.n[i] = np.sum(self.node_indicators[:, i])
+        # 
+        # Update cached evaluations, TODO
+        self.evals = np.zeros(n_old + n_new)
+        for leaf_idx in self.leaves:
+            self.evals[self.node_indicators[:, leaf_idx]] = self.leaf_vals[leaf_idx]
+
 class Parameters:
     """
     Represents the parameters of the BART model.
@@ -423,8 +470,32 @@ class Parameters:
             copied_trees[tree_id] = self.trees[tree_id].copy()
         return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), cache=copy.deepcopy(self.cache))
 
-    # def copy(self, modified_tree_ids):
-        # return copy.deepcopy(self)
+    def add_data_points(self, X_new):
+        """
+        Rebuilds the MCMC state to accommodate the new data by efficiently updating
+        the existing tree structures with the new data points.
+        
+        Parameters:
+            current_state: The current MCMC state (Parameters object)
+            X_new: New feature data to add (np.ndarray)
+            
+        Returns:
+            A new Parameters object with updated caches for the new data
+        """
+        new_trees = []
+        for tree in self.trees:
+            # Efficiently add new data points
+            tree.add_data_points(X_new)
+            new_trees.append(tree)
+        
+        # Create new parameters object with the updated trees and same global parameters
+        new_state = Parameters(
+            trees=new_trees, 
+            global_params=self.global_params.copy(),
+            cache=None  # Let Parameters initialize the cache TODO
+        )
+        
+        return new_state
 
     def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float_]:
         """

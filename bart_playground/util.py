@@ -13,7 +13,13 @@ class Dataset:
             # X = X.to_numpy()
         self.X = X
         self.y = y
-        self.n, self.p = X.shape
+
+    @property
+    def n(self):
+        return self.X.shape[0]
+    @property
+    def p(self):
+        return self.X.shape[1]
 
 class Preprocessor(ABC):
     @property
@@ -40,11 +46,11 @@ class Preprocessor(ABC):
         return self.transform(X, y)
 
     @abstractmethod
-    def transform_y(self, y):
+    def transform_y(self, y) -> np.ndarray:
         pass
 
     @abstractmethod
-    def backtransform_y(self, y):
+    def backtransform_y(self, y) -> np.ndarray:
         pass
 
 class DefaultPreprocessor(Preprocessor):
@@ -78,8 +84,8 @@ class DefaultPreprocessor(Preprocessor):
     def test_thresholds(X):
         return dict({k : np.unique(X[:, k]) for k in range(X.shape[1])})
 
-    def transform_y(self, y):
+    def transform_y(self, y) -> np.ndarray:
         return (y - self.y_min) / (self.y_max - self.y_min) - 0.5
     
-    def backtransform_y(self, y):
+    def backtransform_y(self, y) -> np.ndarray:
         return (self.y_max - self.y_min) * (y + 0.5) + self.y_min
