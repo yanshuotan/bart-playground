@@ -33,7 +33,6 @@ class Preprocessor(ABC):
 
     @abstractmethod
     def transform(self, X, y) -> Dataset:
-    def transform(self, X, y) -> Dataset:
         pass
 
     def fit_transform(self, X, y):
