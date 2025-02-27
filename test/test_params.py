@@ -4,11 +4,17 @@ from bart_playground import Tree, Parameters
 from bart_playground import Dataset
 
 class TestTree(unittest.TestCase):
+    def __init__(self, methodName: str = "runTest", setup_option=1) -> None:
+        super().__init__(methodName)
+        self.setup_option = setup_option
 
     def setUp(self):
         X, y = np.random.rand(100, 5), np.random.rand(100)
-        dataset = Dataset(X, y, None)
-        self.tree = Tree(data=dataset)
+        self.dataset = Dataset(X, y)
+        if self.setup_option == 1:
+            self.tree = Tree.new(dataX=self.dataset.X)
+        else:
+            self.tree = Tree.new()
 
     def test_traverse_tree(self):
         self.tree.vars = np.array([0, -1, -1], dtype=int)
@@ -48,17 +54,22 @@ class TestTree(unittest.TestCase):
         self.tree.node_indicators = np.zeros((100, 3), dtype=bool)
         self.tree.node_indicators[:, 0] = True
 
+        if self.setup_option == 2:
+            with self.assertRaises(BaseException):
+                success = self.tree.update_n(0)
+            return
+
         success = self.tree.update_n(0)
 
         self.assertTrue(success, "All nodes should have counts greater than 0")
         self.assertEqual(
             self.tree.n[1], 
-            np.sum(self.tree.data.X[:, 0] <= 0.5), 
+            np.sum(self.dataset.X[:, 0] <= 0.5), 
             "Left child count should match number of samples <= 0.5"
         )
         self.assertEqual(
             self.tree.n[2], 
-            np.sum(self.tree.data.X[:, 0] > 0.5), 
+            np.sum(self.dataset.X[:, 0] > 0.5), 
             "Right child count should match number of samples > 0.5"
         )
 
@@ -117,10 +128,10 @@ class TestParameters(unittest.TestCase):
 
     def setUp(self):
         X, y = np.random.rand(100, 5), np.random.rand(100)
-        self.dataset = Dataset(X, y, None)
-        self.trees = [Tree(data=self.dataset) for _ in range(5)]
+        self.dataset = Dataset(X, y)
+        self.trees = [Tree.new(dataX=self.dataset.X) for _ in range(5)]
         self.global_params = {'param1': 1.0, 'param2': 2.0}
-        self.params = Parameters(trees=self.trees, global_params=self.global_params, data=self.dataset)
+        self.params = Parameters(trees=self.trees, global_params=self.global_params)
 
     def test_initialization(self):
         self.assertEqual(len(self.params.trees), 5)
@@ -152,6 +163,14 @@ class TestParameters(unittest.TestCase):
         self.params.update_leaf_vals(tree_ids, leaf_vals)
         updated_output = self.params.evaluate()
         self.assertTrue(np.allclose(updated_output, np.sum([tree.evaluate() for tree in self.trees], axis=0)))
+
+def load_tests(loader, tests, pattern):
+    suite = unittest.TestSuite()
+    suite.addTests(tests)
+    suite.addTest(TestTree("test_traverse_tree", setup_option=2))
+    suite.addTest(TestTree("test_evaluate", setup_option=2))
+    suite.addTest(TestTree("test_update_n", setup_option=2))
+    return suite
 
 if __name__ == "__main__":
     unittest.main()

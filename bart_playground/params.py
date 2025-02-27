@@ -1,6 +1,7 @@
 import numpy as np
 import copy
-
+from typing import Optional
+from numpy.typing import NDArray
 from .util import Dataset
 
 class Tree:
@@ -8,14 +9,13 @@ class Tree:
     Represents the parameters of a single tree in the BART model, combining both
     the tree structure and leaf values into a single object.
     """
-    def __init__(self, data : Dataset, vars=None, thresholds=None, leaf_vals=None, n=None, 
-                 node_indicators=None, evals=None):
+    def __init__(self, dataX: Optional[np.ndarray], vars, thresholds, leaf_vals, n, node_indicators, evals):
         """
         Initialize the tree parameters.
 
         Parameters:
-        - data : Dataset
-            The dataset object containing the data.
+        - dataX : np.ndarray, optional
+            The np.ndarray object containing the X (covariates) of data.
         - vars : np.ndarray, optional
             Array of variables used for splitting at each node. Default is None.
         - thresholds : np.ndarray, optional
@@ -27,32 +27,55 @@ class Tree:
         - node_indicators : np.ndarray, optional
             Boolean array indicating which data examples lie within each node. Default is None.
         """
-        self.data = data
-        if vars is None:
-            self.vars = np.full(8, -2, dtype=int) # -2 represents an inexistant node
-            self.vars[0] = -1 # -1 represents a leaf node
-            self.thresholds = np.full(8, np.nan, dtype=float)
-            self.leaf_vals = np.full(8, np.nan, dtype=float)
-            self.leaf_vals[0] = 0 # Initialize the leaf value
-            # Cached leaf indicators for each training observation
-            self.node_indicators = np.full((data.X.shape[0], 8), 0, dtype=bool)
-            self.node_indicators[:, 0] = True
-            self.n = np.full(8, -2, dtype=int)
-            self.n[0] = data.X.shape[0]
-            self.evals = np.zeros(self.n[0]) # Cached evaluations for each training observation
+        self.dataX = dataX
+        self.vars = vars
+        self.thresholds = thresholds
+        self.leaf_vals : NDArray[np.float_] = leaf_vals
+
+        self.n = n
+        self.node_indicators = node_indicators
+        self.evals = evals
+
+    @classmethod
+    def new(cls, dataX=None):
+        # Define the basic tree parameters.
+        vars = np.full(8, -2, dtype=int)  # -2 represents an inexistent node
+        vars[0] = -1                      # -1 represents a leaf node
+        thresholds = np.full(8, np.nan, dtype=float)
+        leaf_vals = np.full(8, np.nan, dtype=float)
+        leaf_vals[0] = 0                   # Initialize the leaf value
+
+        if dataX is not None:
+            # If dataX is provided, initialize caching arrays.
+            node_indicators = np.full((dataX.shape[0], 8), False, dtype=bool)
+            node_indicators[:, 0] = True   # All observations go to the root
+            n = np.full(8, -2, dtype=int)
+            n[0] = dataX.shape[0]
+            evals = np.zeros(dataX.shape[0])
         else:
-            self.vars = copy.deepcopy(vars)
-            self.thresholds = copy.deepcopy(thresholds)
-            self.leaf_vals = copy.deepcopy(leaf_vals)
-            self.n = copy.deepcopy(n)
-            self.node_indicators = copy.deepcopy(node_indicators)
-            self.evals = copy.deepcopy(evals)
+            # Otherwise, skip caching.
+            node_indicators = None
+            n = None
+            evals = None
+
+        return cls(dataX, vars, thresholds, leaf_vals, n, node_indicators, evals)
+
+    @classmethod
+    def from_existing(cls, other: "Tree"):
+        return cls(
+            other.dataX,
+            copy.deepcopy(other.vars),
+            copy.deepcopy(other.thresholds),
+            copy.deepcopy(other.leaf_vals),
+            copy.deepcopy(other.n),
+            copy.deepcopy(other.node_indicators),
+            copy.deepcopy(other.evals)
+        )
 
     def copy(self):
-        return Tree(self.data, self.vars, self.thresholds, self.leaf_vals, self.n, 
-                    self.node_indicators, self.evals)
+        return Tree.from_existing(self)
 
-    def traverse_tree(self, X: np.ndarray) -> int:
+    def traverse_tree(self, X: np.ndarray) -> np.ndarray:
         """
         Traverse the tree to find the leaf nodes for a given input data matrix.
 
@@ -76,7 +99,7 @@ class Tree:
                 split_node_counter += 1
         return node_ids
 
-    def evaluate(self, X: np.ndarray=None) -> float:
+    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float_]:
         """
         Evaluate the tree for a given input data matrix.
 
@@ -90,7 +113,10 @@ class Tree:
             Output values of the tree.
         """
         if X is None:
-            return self.evals
+            if self.evals is not None:
+                return self.evals
+            else:
+                raise ValueError("No cached data available for evaluation.")
         else:
             leaf_ids = self.traverse_tree(X)  # Find the leaf node for the input
             return self.leaf_vals[leaf_ids]  # Return the value at the leaf node
@@ -126,16 +152,17 @@ class Tree:
         new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
         self.leaf_vals = new_leaf_vals
 
-        # Resize n_vals array
-        new_n = np.full(new_length, -2, dtype=int)
-        new_n[:len(self.n)] = self.n
-        self.n = new_n
+        if self.dataX is not None:
+            # Resize n_vals array
+            new_n = np.full(new_length, -2, dtype=int)
+            new_n[:len(self.n)] = self.n
+            self.n = new_n
 
-        # Resize node_indicators array
-        new_node_indicators = np.full((self.node_indicators.shape[0], new_length), 0, dtype=bool)
-        # Copy the existing node_indicators into the first part of new_node_indicators
-        new_node_indicators[:, :old_length] = self.node_indicators
-        self.node_indicators = new_node_indicators
+            # Resize node_indicators array
+            new_node_indicators = np.full((self.node_indicators.shape[0], new_length), 0, dtype=bool)
+            # Copy the existing node_indicators into the first part of new_node_indicators
+            new_node_indicators[:, :old_length] = self.node_indicators
+            self.node_indicators = new_node_indicators
 
     def split_leaf(self, node_id: int, var: int, threshold: float, left_val: float=np.nan, 
                    right_val: float=np.nan):
@@ -174,21 +201,27 @@ class Tree:
         # Initialize the new leaf nodes
         self.vars[left_child] = -1
         self.vars[right_child] = -1
-        x_bigger = self.data.X[:, var] > threshold
-        self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & ~x_bigger
-        self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & x_bigger
-        # self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
-        # self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
-        self.n[left_child] = np.sum(self.node_indicators[:, left_child])
-        self.n[right_child] = np.sum(self.node_indicators[:, right_child])
 
         # Assign the provided values to the new leaf nodes
 
         self.leaf_vals[node_id] = np.nan
         self.leaf_vals[left_child] = left_val
         self.leaf_vals[right_child] = right_val
-        
-        return self.n[left_child] > 0 and self.n[right_child] > 0
+
+        if self.dataX is not None:
+            # Update the node indicators and counts
+            x_bigger = self.dataX[:, var] > threshold
+            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & ~x_bigger
+            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & x_bigger
+            # self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
+            # self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
+            self.n[left_child] = np.sum(self.node_indicators[:, left_child])
+            self.n[right_child] = np.sum(self.node_indicators[:, right_child])
+            is_valid = self.n[left_child] > 0 and self.n[right_child] > 0
+        else:
+            is_valid = True
+
+        return is_valid
 
     def prune_split(self, node_id: int, recursive = False):
         """
@@ -219,8 +252,10 @@ class Tree:
         self.vars[right_child] = -2
         self.leaf_vals[left_child] = np.nan
         self.leaf_vals[right_child] = np.nan
-        self.n[left_child] = -2
-        self.n[right_child] = -2
+
+        if self.dataX is not None:
+            self.n[left_child] = -2
+            self.n[right_child] = -2
 
         # If recursive, recursively mark all descendant split nodes as -2
         if recursive:
@@ -281,6 +316,9 @@ class Tree:
         Returns:
         - bool: True if the counts of samples reaching all nodes are greater than 0, False otherwise.
         """
+        if self.dataX is None:
+            raise ValueError("Data matrix is not provided.")
+        
         if self.is_leaf(node_id):
             return self.n[node_id] > 0
         else:
@@ -288,8 +326,8 @@ class Tree:
             threshold = self.thresholds[node_id]
             left_child = node_id * 2 + 1
             right_child = node_id * 2 + 2
-            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & (self.data.X[:, var] <= threshold)
-            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & (self.data.X[:, var] > threshold)
+            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & (self.dataX[:, var] <= threshold)
+            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & (self.dataX[:, var] > threshold)
             self.n[left_child] = np.sum(self.node_indicators[:, left_child])
             self.n[right_child] = np.sum(self.node_indicators[:, right_child])
             is_valid = self.update_n(left_child) and self.update_n(right_child)
@@ -337,7 +375,10 @@ class Tree:
                 and not self.is_terminal_split_node(i)]
 
     @property
-    def leaf_basis(self):
+    def leaf_basis(self) -> NDArray[np.bool_]:
+        if self.dataX is None:
+            raise ValueError("Data matrix is not provided.")
+        
         return self.node_indicators[:, self.leaves]
     
     def __str__(self):
@@ -347,7 +388,10 @@ class Tree:
         return self._print_tree()
         
     def __repr__(self):
-        return f"Tree(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals}, n_vals={self.n})"
+        if self.dataX is None:
+            return f"Tree(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals})"
+        else:
+            return f"Tree(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals}, n_vals={self.n})"
 
     def _print_tree(self, node_id=0, prefix=""):
         pprefix = prefix + "\t"
@@ -366,17 +410,21 @@ class Tree:
             )
         
     def _print_node(self, node_id):
+        if self.dataX is not None:
+            n_output = self.n[node_id]
+        else:
+            n_output = "NA"
         if self.vars[node_id] == -1:
-            return f"Val: {self.leaf_vals[node_id]:0.3f} (leaf, n = {self.n[node_id]})"
+            return f"Val: {self.leaf_vals[node_id]:0.3f} (leaf, n = {n_output})"
         else:
             return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
-                f" (split, n = {self.n[node_id]})"
+                f" (split, n = {n_output})"
 
 class Parameters:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, global_params, data : Dataset, cache=None):
+    def __init__(self, trees: list, global_params, cache=None):
         """
         Initializes the parameters for the model.
 
@@ -391,7 +439,6 @@ class Parameters:
         - n_trees (int): The number of trees in the model.
         - global_params (dict): Global parameters for the model.
         """
-        self.data = data
         self.trees = trees
         self.n_trees = len(self.trees)
         self.global_params = global_params
@@ -406,13 +453,12 @@ class Parameters:
         copied_trees = self.trees.copy() # Shallow copy
         for tree_id in modified_tree_ids:
             copied_trees[tree_id] = self.trees[tree_id].copy()
-        return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), 
-                          data=self.data, cache=copy.deepcopy(self.cache))
+        return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), cache=copy.deepcopy(self.cache))
 
     # def copy(self, modified_tree_ids):
         # return copy.deepcopy(self)
 
-    def evaluate(self, X: np.ndarray=None, tree_ids=None, all_except=None) -> float:
+    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float_]:
         """
         Evaluate the model on the given data.
 
@@ -437,7 +483,7 @@ class Parameters:
         elif all_except is not None:
             tree_ids = [i for i in np.arange(self.n_trees) if i not in all_except]
         else:
-            tree_ids = np.arange(self.n_trees)
+            tree_ids = list(np.arange(self.n_trees))
             all_except = []
 
         if X is None:
@@ -463,7 +509,7 @@ class Parameters:
         """
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
-    def update_leaf_vals(self, tree_ids, leaf_vals):
+    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float_]):
         """
         Update the leaf values of specified trees.
 
@@ -481,7 +527,5 @@ class Parameters:
             tree.leaf_vals[tree.leaves] = \
                 leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
             tree.update_outputs()
-            # if(not (tree.evaluate() == tree.evaluate(self.data.X)).all()):
-            #    breakpoint()
             self.cache = self.cache + tree.evals - tree_evals_old
             leaf_counter += tree.n_leaves

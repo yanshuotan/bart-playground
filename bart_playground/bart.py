@@ -1,9 +1,8 @@
 import numpy as np
 
 from .samplers import Sampler, DefaultSampler, default_proposal_probs
-from .priors import Prior, DefaultPrior
+from .priors import *
 from .util import Preprocessor, DefaultPreprocessor
-
 
 class BART:
     """
@@ -25,8 +24,8 @@ class BART:
         Fit the BART model.
         """
         data = self.preprocessor.fit_transform(X, y)
-        self.sampler.prior.fit(data)
         self.sampler.add_data(data)
+        self.sampler.add_thresholds(self.preprocessor.thresholds)
         self.trace = self.sampler.run(self.ndpost + self.nskip)
 
     def posterior_f(self, X):
@@ -54,7 +53,7 @@ class DefaultBART(BART):
                  random_state=42):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
-        prior = DefaultPrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
+        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
                              eps_nu, specification, rng)
         sampler = DefaultSampler(prior = prior, proposal_probs = proposal_probs, generator = rng, tol = tol)
         super().__init__(preprocessor, sampler, ndpost, nskip)

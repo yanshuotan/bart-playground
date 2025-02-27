@@ -1,23 +1,35 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
+import pandas as pd
 
 class Dataset:
 
-    def __init__(self, X, y, thresholds):
+    def __init__(self, X, y):
+        # if X is pd.DataFrame:
+            # X = X.to_numpy()
         self.X = X
         self.y = y
         self.n, self.p = X.shape
-        self.thresholds = thresholds
 
 class Preprocessor(ABC):
+    @property
+    def thresholds(self):
+        return self._thresholds
+    @thresholds.setter
+    def thresholds(self, value):
+        self._thresholds = value
 
+    @abstractmethod
+    def gen_thresholds(self, X):
+        pass
+    
     @abstractmethod
     def fit(self, X, y):
         pass
 
     @abstractmethod
-    def transform(self, X, y):
+    def transform(self, X, y) -> Dataset:
         pass
 
     def fit_transform(self, X, y):
@@ -50,11 +62,18 @@ class DefaultPreprocessor(Preprocessor):
     def fit(self, X, y):
         self.y_max = y.max()
         self.y_min = y.min()
-        q_vals = np.linspace(0, 1, self.max_bins, endpoint=False)
-        self.thresholds = dict({k : np.unique(np.quantile(X[:, k], q_vals)) for k in range(X.shape[1])})
+        self._thresholds = self.gen_thresholds(X)
         
     def transform(self, X, y):
-        return Dataset(X, self.transform_y(y), self.thresholds)
+        return Dataset(X, self.transform_y(y))
+    
+    def gen_thresholds(self, X):
+        q_vals = np.linspace(0, 1, self.max_bins, endpoint=False)
+        return dict({k : np.unique(np.quantile(X[:, k], q_vals)) for k in range(X.shape[1])})
+    
+    @staticmethod
+    def test_thresholds(X):
+        return dict({k : np.unique(X[:, k]) for k in range(X.shape[1])})
 
     def transform_y(self, y):
         return (y - self.y_min) / (self.y_max - self.y_min) - 0.5

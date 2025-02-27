@@ -2,15 +2,16 @@
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
+from typing import Callable, Optional
 
 from .params import Tree, Parameters
 from .moves import all_moves
 from .util import Dataset
-from .priors import Prior
+from .priors import *
 
 class TemperatureSchedule:
 
-    def __init__(self, temp_schedule: callable = lambda x: 1):
+    def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
         self.temp_schedule = temp_schedule
     
     def __call__(self, t):
@@ -40,14 +41,19 @@ class Sampler(ABC):
             trace (list): A list to store the trace of the sampling process.
             generator (np.random.Generator): A random number generator.
         """
-        self.data = None
+        self._data : Optional[Dataset] = None
         self.prior = prior
         self.n_iter = None
         self.proposals = proposal_probs
         self.temp_schedule = temp_schedule
         self.trace = []
         self.generator = generator
-
+        
+    @property
+    def data(self) -> Dataset:
+        assert self._data, "Data has not been added yet."
+        return self._data
+    
     def add_data(self, data : Dataset):
         """
         Adds data to the sampler.
@@ -55,28 +61,28 @@ class Sampler(ABC):
         Parameters:
         data (Dataset): The data to be added to the sampler.
         """
-        self.data = data
+        self._data = data
 
-    def run(self, n_iter):
+    def add_thresholds(self, thresholds):
+        self.possible_thresholds = thresholds
+
+    def run(self, n_iter, progress_bar = True):
         """
         Run the sampler for a specified number of iterations.
 
         Parameters:
         n_iter (int): The number of iterations to run the sampler.
-
-        Raises:
-        AttributeError: If data has not been added yet.
-
         """
         self.trace = []
         self.n_iter = n_iter
-        if self.data is None:
-            raise AttributeError("Data has not been added yet.")
         current = self.get_init_state()
         self.trace.append(current) # Add initial state to trace
-        for iter in range(n_iter):
-            if iter % 10 == 0:
-                print(f"Running iteration {iter}")
+        
+        iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
+    
+        for iter in iterator:
+            if not progress_bar and iter % 10 == 0:
+                print(f"Running iteration {iter}/{n_iter}")
             # print(self.temp_schedule)
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False)
@@ -113,7 +119,7 @@ class Sampler(ABC):
         pass
 
     @abstractmethod
-    def one_iter(self, current, return_trace=False):
+    def one_iter(self, current, temp, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
@@ -123,12 +129,15 @@ class DefaultSampler(Sampler):
     """
     Default implementation of the BART sampler.
     """
-    def __init__(self, prior : Prior, proposal_probs: dict,
-                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(),tol=100):
+    def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
+                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
         self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
+        self.tree_prior = prior.tree_prior
+        self.global_prior = prior.global_prior
+        self.likelihood = prior.likelihood
         super().__init__(prior, proposal_probs, generator, temp_schedule)
 
     def get_init_state(self) -> Parameters:
@@ -140,10 +149,15 @@ class DefaultSampler(Sampler):
         """
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
-        trees = [Tree(self.data) for _ in range(self.prior.n_trees)]
-        global_params = self.prior.init_global_params(self.data)
-        init_state = Parameters(trees, global_params, self.data)
+        trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
+        global_params = self.global_prior.init_global_params(self.data)
+        init_state = Parameters(trees, global_params)
         return init_state
+    
+    def log_mh_ratio(self, move : Move, marginalize : bool=False):
+        """Calculate total log Metropolis-Hastings ratio"""
+        return self.tree_prior.trees_log_prior_ratio(move) + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize)
 
     def one_iter(self, current, temp, return_trace=False):
         """
@@ -151,16 +165,19 @@ class DefaultSampler(Sampler):
         """
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
-        for k in range(self.prior.n_trees):
-            move = self.sample_move()(iter_current, [k], self.tol)
+        for k in range(self.tree_prior.n_trees):
+            move = self.sample_move()(
+                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
+                )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
-                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move)):
-                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, [k])
+                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
-                    iter_trace.append((k+1, move.proposed))
-        iter_current.global_params = self.prior.resample_global_params(iter_current)
+                    if return_trace:
+                        iter_trace.append((k+1, move.proposed))
+        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
         if return_trace:
             return iter_trace
         else:
