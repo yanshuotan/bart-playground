@@ -1,4 +1,3 @@
-
 from enum import Enum
 from dataclasses import dataclass
 from typing import Optional
@@ -26,6 +25,23 @@ class BCFPreprocessor(DefaultPreprocessor):
     def fit_transform(self, X, y, z):
         dataset = super().fit_transform(X, y)
         return BCFDataset(dataset.X, dataset.y, z)
+    
+    def update_transform(self, X_new, y_new, z_new, dataset):
+        """
+        Update an existing dataset with new data points, including treatment indicators.
+        """
+        # Call the parent method first to handle X and y
+        base_dataset = super().update_transform(X_new, y_new, dataset)
+        
+        # Now handle the treatment indicator z
+        if z_new.ndim == 1:
+            z_new = z_new.reshape(-1, 1)
+            
+        z_combined = np.vstack([dataset.z, z_new])
+        
+        # Create and return a BCFDataset with the updated data
+        return BCFDataset(base_dataset.X, base_dataset.y, z_combined)
+
 class EnsembleName(Enum):
     MU = "mu"
     TAU = "tau"
@@ -50,4 +66,3 @@ class BCFEnsembleIndex:
         return self._index
     
 BCFTreeIndices = tuple[BCFEnsembleIndex, list[int]]
-        

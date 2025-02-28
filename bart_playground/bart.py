@@ -5,7 +5,6 @@ from .priors import *
 from .priors import *
 from .util import Preprocessor, DefaultPreprocessor
 from .params import Tree, Parameters
-
 class BART:
     """
     API for the BART model.
@@ -32,7 +31,7 @@ class BART:
         self.sampler.add_thresholds(self.preprocessor.thresholds)
         self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly)
         self.is_fitted = True
-
+    
     def update_fit(self, X, y, add_ndpost=20, add_nskip=10, quietly=False):
         """
         Update an existing fitted model with new data points.
@@ -49,50 +48,35 @@ class BART:
         """
         if not self.is_fitted:
             # If not fitted yet, just do a regular fit
-            self.fit(X, y, quietly)
+            self.fit(X, y, quietly=quietly)
             return self
+            
         additional_iters = add_ndpost + add_nskip
-        # TODO
         # Set all previous iterations + add_nskip as burn-in
         self.nskip += self.ndpost + add_nskip
         # Set new add_ndpost iterations as post-burn-in
         self.ndpost = add_ndpost
         
-        assert self.data, "Data has not been added yet."
-        X_combined = np.vstack([self.data.X, X])
-        # if old data's sample size is small, recompute thresholds and y
-        if self.data.n <= 10:
-            y_combined = np.vstack([self.preprocessor.backtransform_y(self.data.y).reshape(-1, 1), y.reshape(-1, 1)]).flatten()
-            self.data = self.preprocessor.fit_transform(X_combined, y_combined)
-            self.sampler.add_thresholds(self.preprocessor.thresholds)
-        # if old data's sample size is large, just update y
-        else:
-            # Transform new data using already fitted preprocessor
-            y_new = self.preprocessor.transform_y(y)
-            y_combined = np.vstack([self.data.y.reshape(-1, 1), y_new.reshape(-1, 1)]).flatten()
-            self.data.X = X_combined
-            self.data.y = y_combined
+        # Update the dataset using the appropriate preprocessor method
+        self.data = self.preprocessor.update_transform(X, y, self.data)
             
-        # Update the data in the sampler
-        self.sampler.add_data(self.data)
-        
-        # Get the last state from the trace and rebuild it with updated data
-        last_state : Parameters = self.trace[-1]
-        current_state = last_state.add_data_points(X)
+        # Update thresholds 
+        # if needed TODO
+        self.sampler.add_thresholds(self.preprocessor.thresholds)
         
         # Run the sampler for additional iterations
-        new_trace = self.sampler.run(additional_iters, quietly=quietly, current=current_state)
-        self.trace = self.trace + new_trace
+        new_trace = self.sampler.continue_run(additional_iters, new_data=self.data, quietly=quietly)
+        self.trace = self.trace + new_trace[1:]
         
         return self
-
+    
     def posterior_f(self, X):
         """
         Get the posterior distribution of f(x) for each row in X.
         """
         preds = np.zeros((X.shape[0], self.ndpost))
         for k in range(self.ndpost):
-            y_eval = self.trace[self.nskip + k].evaluate(X)
+            y_eval = self.trace[self.nskip + k + 1].evaluate(X)
             preds[:, k] = self.preprocessor.backtransform_y(y_eval)
         return preds
     

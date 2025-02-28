@@ -1,4 +1,3 @@
-
 # BCFParams class is a container for the trees and parameters of the BCF model. It also provides a method to evaluate the model on a given input data and treatment indicators.
 import copy
 import numpy as np
@@ -120,3 +119,50 @@ class BCFParams:
             view = self.tau_view_list[tree_ids[0].index]
 
         view.update_leaf_vals(tree_ids[1], leaf_vals)
+
+    def add_data_points(self, X_new, z_new):
+        """
+        Update the MCMC state to accommodate new data points by efficiently updating
+        the existing tree structures.
+        
+        Parameters:
+            X_new: New feature data to add (np.ndarray)
+            z_new: New treatment assignments (np.ndarray) with shape [n_new, n_treat_arms]
+            
+        Returns:
+            A new BCFParams object with updated caches for the new data
+        """
+        # Shallow copy the tree lists and update the data points in-place
+        new_mu_trees = self.mu_trees.copy()
+        for tree in new_mu_trees:
+            tree.add_data_points(X_new)
+            
+        # Ensure z_new is properly shaped
+        if z_new.ndim == 1:
+            z_new = z_new.reshape(-1, 1)
+        
+        new_tau_trees_list = []
+        # For each treatment arm, update tau trees with new data from that arm
+        for ensemble_idx, tau_trees in enumerate(self.tau_trees_list):
+            # Shallow copy the tree list
+            new_tau_trees = tau_trees.copy()
+            
+            treated_indices = z_new[:, ensemble_idx] == 1
+            if any(treated_indices):
+                # Update trees with new treated data points
+                X_new_treated = X_new[treated_indices]
+                for tree in new_tau_trees:
+                    tree.add_data_points(X_new_treated)
+            
+            new_tau_trees_list.append(new_tau_trees)
+        
+        # Create new BCFParams object with the updated trees
+        new_params = BCFParams(
+            mu_trees=new_mu_trees,
+            tau_trees_list=new_tau_trees_list,
+            global_params=self.global_params,  # Shallow copy the global params
+            mu_cache=None,  # Let BCFParams initialize the caches
+            tau_cache_list=None
+        )
+        
+        return new_params

@@ -53,6 +53,21 @@ class Preprocessor(ABC):
     def backtransform_y(self, y) -> np.ndarray:
         pass
 
+    @abstractmethod
+    def update_transform(self, X_new, y_new, dataset):
+        """
+        Update an existing dataset with new data points.
+        
+        Parameters:
+            X_new: New feature data to add
+            y_new: New target data to add
+            dataset: Existing dataset to update
+            
+        Returns:
+            Updated dataset
+        """
+        pass
+
 class DefaultPreprocessor(Preprocessor):
     """
     Default implementation for preprocessing input data.
@@ -89,3 +104,22 @@ class DefaultPreprocessor(Preprocessor):
     
     def backtransform_y(self, y) -> np.ndarray:
         return (self.y_max - self.y_min) * (y + 0.5) + self.y_min
+
+    def update_transform(self, X_new, y_new, dataset):
+        """
+        Update an existing dataset with new data points.
+        """
+        X_combined = np.vstack([dataset.X, X_new])
+        
+        # If dataset is small, refit the preprocessor
+        if dataset.n <= 10:
+            y_combined = np.vstack([self.backtransform_y(dataset.y).reshape(-1, 1), 
+                                  y_new.reshape(-1, 1)]).flatten()
+            return self.fit_transform(X_combined, y_combined)
+        # Otherwise, just transform the new data and combine
+        else:
+            y_new_transformed = self.transform_y(y_new)
+            y_combined = np.vstack([dataset.y.reshape(-1, 1), 
+                                  y_new_transformed.reshape(-1, 1)]).flatten()
+            updated_dataset = Dataset(X_combined, y_combined)
+            return updated_dataset

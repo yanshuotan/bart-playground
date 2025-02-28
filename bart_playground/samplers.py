@@ -1,8 +1,10 @@
-
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
+
+from bart_playground.bcf.bcf_params import BCFParams
+from bart_playground.bcf.bcf_util import BCFDataset
 
 from .params import Tree, Parameters
 from .moves import all_moves
@@ -69,7 +71,7 @@ class Sampler(ABC):
 
     def run(self, n_iter, progress_bar = True, quietly = False, current = None):
         """
-        Run the sampler for a specified number of iterations.
+        Run the sampler for a specified number of iterations from `current` or a fresh start.
 
         Parameters:
         n_iter (int): The number of iterations to run the sampler.
@@ -130,6 +132,48 @@ class Sampler(ABC):
         Perform one iteration of the sampler.
         """
         pass
+
+    def continue_run(self, additional_iters, new_data=None, quietly=False, last_state=None):
+            """
+            Continue sampling with updated data from a previous state.
+
+            Parameters:
+                additional_iters: Number of additional iterations
+                new_data: Updated dataset (if None, uses existing data)
+                quietly: Whether to suppress output
+                last_state: Last state from previous run (if None, uses last state in trace)
+
+            Returns:
+                New trace segment
+            """
+            # Get last state
+            if last_state is None:
+                if hasattr(self, 'trace') and self.trace:
+                    last_state = self.trace[-1]
+                else:
+                    raise ValueError("No last_state provided and no trace available")
+
+            # Update parameter state with any new data points if needed
+            if new_data is not None:
+                old_n = self.data.n
+                new_n = new_data.n
+                
+                self.add_data(new_data)
+
+                if new_n > old_n:
+                    new_X = new_data.X[old_n:]
+                    if isinstance(new_data, BCFDataset):
+                        new_z = new_data.z[old_n:]
+                        current_state = last_state.add_data_points(new_X, new_z)
+                    else:
+                        current_state = last_state.add_data_points(new_X)
+                else:
+                    current_state = last_state
+            else:
+                current_state = last_state
+
+            # Run sampler for additional iterations
+            return self.run(additional_iters, quietly=quietly, current=current_state)
 
 class DefaultSampler(Sampler):
     """

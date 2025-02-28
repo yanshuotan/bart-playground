@@ -476,13 +476,13 @@ class Parameters:
             X_new: New feature data to add (np.ndarray)
             
         Returns:
-            A new Parameters object with updated caches for the new data
+            A new Parameters object with updated caches for the new data.
+            Caution: This method shallow copies the trees.
         """
-        new_trees = []
-        for tree in self.trees:
+        new_trees = self.trees.copy()  # Shallow copy the tree list
+        for tree in new_trees:
             # Efficiently add new data points
             tree.add_data_points(X_new)
-            new_trees.append(tree)
         
         # Create new parameters object with the updated trees and same global parameters
         new_state = Parameters(
