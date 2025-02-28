@@ -1,13 +1,13 @@
 
 # bcf_sampler.py
 
+from typing import Optional
 from ..samplers import default_proposal_probs, Sampler, TemperatureSchedule
 from ..moves import all_moves
 from .bcf_params import BCFParams
 from ..params import Tree
 from .bcf_prior import BCFPrior
-from .bcf_util import BCFParamView
-from .bcf_dataset import BCFDataset
+from .bcf_util import BCFEnsembleIndex, EnsembleName, BCFDataset
 
 import numpy as np
 
@@ -17,9 +17,15 @@ class BCFSampler(Sampler):
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
         self.proposals_mu = proposal_probs or default_proposal_probs
         self.proposals_tau = proposal_probs or default_proposal_probs
+        self._data : Optional[BCFDataset] = None
         self.tol = tol
         super().__init__(prior, proposal_probs, generator, temp_schedule)
         
+    @property
+    def data(self) -> BCFDataset:
+        assert self._data, "Data has not been added yet."
+        return self._data
+    
     def add_data(self, data : BCFDataset):
         return super().add_data(data)
     def add_thresholds(self, thresholds):
@@ -33,15 +39,18 @@ class BCFSampler(Sampler):
             The initial state for the sampler.
         """
         mu_trees = [Tree.new(self.data.X) for _ in range(self.prior.mu_prior.n_trees)]
-        tau_trees = [Tree.new(self.data.X[self.data.treated]) for _ in range(self.prior.tau_prior.n_trees)]
+        tau_trees_list = [
+            [Tree.new(self.data.X[self.data.treated_by(i)]) for _ in range(self.prior.tau_prior_list[i].n_trees)]
+            for i in range(self.prior.n_treat_arms)
+            ]
         global_params = self.prior.init_global_params(self.data)
 
-        init_state = BCFParams(mu_trees, tau_trees, global_params)
+        init_state = BCFParams(mu_trees, tau_trees_list, global_params)
         return init_state
 
-    def sample_move(self, ensemble_type):
+    def sample_move(self, ensemble_type : EnsembleName):
         """Sample move type for specified tree ensemble"""
-        if ensemble_type == 'mu':
+        if ensemble_type == EnsembleName.MU:
             moves = list(self.proposals_mu.keys())
             probs = list(self.proposals_mu.values())
         else:
@@ -59,48 +68,58 @@ class BCFSampler(Sampler):
 
         # 1) Update mu (prognostic) ensemble
         remaining_y = self.data.y.copy()
-        remaining_y[self.data.treated] -= iter_current.tau_view.evaluate()
+        for i in range(iter_current.n_treat_arms):
+            remaining_y[self.data.treated_by(i)] -= iter_current.tau_view_list[i].evaluate()
         for k in range(self.prior.mu_prior.n_trees):
-            move_class = self.sample_move("mu")  
+            move_class = self.sample_move(EnsembleName.MU)  
             move = move_class(
                 current=iter_current.mu_view, trees_changed=[k], possible_thresholds = self.possible_thresholds, tol=self.tol
             )
             if move.propose(self.generator): # Check if a valid move was proposed
                 # Metropolis–Hastings
                 Z = self.generator.uniform(0,1)
-                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, data_y = remaining_y, ensemble_id = 'mu')):
-                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, data_y = remaining_y, ensemble_id = 'mu', tree_ids = [k])
+                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, data_y = remaining_y, ensemble_id = BCFEnsembleIndex(EnsembleName.MU))):
+                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, data_y = remaining_y, ensemble_id = BCFEnsembleIndex(EnsembleName.MU), tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     # iter_current.mu_view = move.proposed
                     iter_current = move.proposed.bcf_params
 
-            if return_trace:
+            if iter_trace:
                 iter_trace.append(iter_current)
 
         # 2) Update tau (treatment effect) ensemble
-        remaining_y = (self.data.y - iter_current.mu_view.evaluate())[self.data.treated]
-        from ..util import DefaultPreprocessor
-        prep = DefaultPreprocessor()
-        thresholds_treated = prep.gen_thresholds(self.data.X[self.data.treated])
-        for k in range(self.prior.tau_prior.n_trees):
-            move_class = self.sample_move("tau")  
-            move = move_class(
-                current=iter_current.tau_view, trees_changed=[k], possible_thresholds = thresholds_treated, tol=self.tol
-            )
-            if move.propose(self.generator): # Check if a valid move was proposed
-                # Metropolis–Hastings
-                Z = self.generator.uniform(0,1)
-                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, data_y = remaining_y, ensemble_id = 'tau')):
-                    new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, data_y = remaining_y, ensemble_id = 'tau', tree_ids = [k])
-                    move.proposed.update_leaf_vals([k], new_leaf_vals)
-                    # iter_current.tau_view = move.proposed
-                    iter_current = move.proposed.bcf_params
+        for i in range(iter_current.n_treat_arms):
+            
+            from ..util import DefaultPreprocessor
+            prep = DefaultPreprocessor()
+            thresholds_treated = prep.gen_thresholds(self.data.X[self.data.treated_by(i)])
 
-            if return_trace:
-                iter_trace.append(iter_current)
+            # Advanced indexing, deep copy
+            remaining_y = self.data.y - iter_current.mu_view.evaluate()
+            for j in range(iter_current.n_treat_arms):
+                if j != i:
+                    remaining_y[self.data.treated_by(j)] -= iter_current.tau_view_list[j].evaluate()
+            remaining_y = remaining_y[self.data.treated_by(i)]
+
+            for k in range(self.prior.tau_prior_list[i].n_trees):
+                move_class = self.sample_move(EnsembleName.TAU)  
+                move = move_class(
+                    current=iter_current.tau_view_list[i], trees_changed=[k], possible_thresholds = thresholds_treated, tol=self.tol
+                )
+                if move.propose(self.generator): # Check if a valid move was proposed
+                    # Metropolis–Hastings
+                    Z = self.generator.uniform(0,1)
+                    if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, data_y = remaining_y, ensemble_id=BCFEnsembleIndex(EnsembleName.TAU, i))):
+                        new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, data_y = remaining_y, ensemble_id=BCFEnsembleIndex(EnsembleName.TAU, i), tree_ids = [k])
+                        move.proposed.update_leaf_vals([k], new_leaf_vals)
+                        # iter_current.tau_view = move.proposed
+                        iter_current = move.proposed.bcf_params
+
+                if iter_trace:
+                    iter_trace.append(iter_current)
 
         # 3) Resample global parameters
-        iter_current.global_params = self.prior.resample_global_params(iter_current, data_y = self.data.y, treated=self.data.treated)
+        iter_current.global_params = self.prior.resample_global_params(iter_current, data_y = self.data.y, z=self.data.z)
 
         if return_trace:
             return iter_trace
