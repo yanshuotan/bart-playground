@@ -11,6 +11,7 @@ from .moves import all_moves
 from .util import Dataset
 from .priors import *
 from .priors import *
+from bart_playground import moves
 
 class TemperatureSchedule:
 
@@ -51,6 +52,10 @@ class Sampler(ABC):
         self.temp_schedule = temp_schedule
         self.trace = []
         self.generator = generator
+        # create cache for moves
+        self.moves_cache = None
+        # current move cache iterator
+        self.moves_cache_iterator = None
         
     @property
     def data(self) -> Dataset:
@@ -109,9 +114,16 @@ class Sampler(ABC):
         Returns:
             The selected move from the all_moves list based on the sampled index.
         """
-        moves = list(self.proposals.keys())
-        move_probs = list(self.proposals.values())
-        return all_moves[self.generator.choice(moves, p=move_probs)]
+        if self.moves_cache is None or self.moves_cache_iterator is None:
+            moves = list(self.proposals.keys())
+            move_probs = list(self.proposals.values())
+            self.moves_cache = [all_moves[move] for move in self.generator.choice(moves, size=100, p=move_probs)]
+            self.moves_cache_iterator = 0
+        move = self.moves_cache[self.moves_cache_iterator]
+        self.moves_cache_iterator += 1
+        if self.moves_cache_iterator >= len(self.moves_cache):
+            self.moves_cache = None
+        return move
     
     @abstractmethod
     def get_init_state(self):

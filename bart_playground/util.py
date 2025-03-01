@@ -2,7 +2,15 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 import pandas as pd
-import pandas as pd
+
+# For faster random sampling
+def fast_choice(generator, array):
+    """Fast random selection from an array."""
+    if len(array) == 0:
+        raise ValueError("Cannot choose from empty array")
+    elif len(array) == 1:
+        return array[0]
+    return array[generator.integers(0, len(array))]
 
 class Dataset:
 
