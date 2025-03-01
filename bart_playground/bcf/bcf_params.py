@@ -35,9 +35,9 @@ class BCFParams:
             return BCFParams(
                 [tree.copy() for tree in self.mu_trees],
                 [[tree.copy() for tree in tau_trees] for tau_trees in self.tau_trees_list],
-                copy.deepcopy(self.global_params),
-                mu_cache = copy.deepcopy(self.mu_view.cache),
-                tau_cache_list = [copy.deepcopy(tau_view.cache) for tau_view in self.tau_view_list] 
+                self.global_params,
+                mu_cache = self.mu_view.cache,
+                tau_cache_list = [tau_view.cache for tau_view in self.tau_view_list] 
             )
         
         # Track which tree IDs need to be deep copied
@@ -66,12 +66,14 @@ class BCFParams:
             for tree_id in modified_tau_ids_list[i]:
                 copied_tau_trees_list[i][tree_id] = self.tau_trees_list[i][tree_id].copy()
         
+        # No need to deep copy global_params and cache
+        # because they only contain numerical values (which are immutable)
         return BCFParams(
             copied_mu_trees, 
             copied_tau_trees_list,
-            copy.deepcopy(self.global_params),
-            mu_cache = copy.deepcopy(self.mu_view.cache),
-            tau_cache_list = [copy.deepcopy(tau_view.cache) for tau_view in self.tau_view_list] 
+            self.global_params,
+            mu_cache = self.mu_view.cache,
+            tau_cache_list = [tau_view.cache for tau_view in self.tau_view_list] 
         )
 
     def evaluate(self, z, X=None):

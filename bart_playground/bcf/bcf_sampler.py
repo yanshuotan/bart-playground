@@ -1,4 +1,3 @@
-
 # bcf_sampler.py
 
 from typing import Optional
@@ -19,6 +18,11 @@ class BCFSampler(Sampler):
         self.proposals_tau = proposal_probs or default_proposal_probs
         self._data : Optional[BCFDataset] = None
         self.tol = tol
+        # Initialize move caches for both ensemble types
+        self.moves_cache_mu = None
+        self.moves_cache_mu_iterator = None
+        self.moves_cache_tau = None
+        self.moves_cache_tau_iterator = None
         super().__init__(prior, proposal_probs, generator, temp_schedule)
         
     @property
@@ -51,12 +55,28 @@ class BCFSampler(Sampler):
     def sample_move(self, ensemble_type : EnsembleName):
         """Sample move type for specified tree ensemble"""
         if ensemble_type == EnsembleName.MU:
-            moves = list(self.proposals_mu.keys())
-            probs = list(self.proposals_mu.values())
+            # Use cached moves for mu ensemble
+            if self.moves_cache_mu is None or self.moves_cache_mu_iterator is None:
+                moves = list(self.proposals_mu.keys())
+                probs = list(self.proposals_mu.values())
+                self.moves_cache_mu = [all_moves[move] for move in self.generator.choice(moves, size=100, p=probs)]
+                self.moves_cache_mu_iterator = 0
+            move = self.moves_cache_mu[self.moves_cache_mu_iterator]
+            self.moves_cache_mu_iterator += 1
+            if self.moves_cache_mu_iterator >= len(self.moves_cache_mu):
+                self.moves_cache_mu = None
         else:
-            moves = list(self.proposals_tau.keys())
-            probs = list(self.proposals_tau.values())
-        return all_moves[self.generator.choice(moves, p=probs)]
+            # Use cached moves for tau ensemble
+            if self.moves_cache_tau is None or self.moves_cache_tau_iterator is None:
+                moves = list(self.proposals_tau.keys())
+                probs = list(self.proposals_tau.values())
+                self.moves_cache_tau = [all_moves[move] for move in self.generator.choice(moves, size=100, p=probs)]
+                self.moves_cache_tau_iterator = 0
+            move = self.moves_cache_tau[self.moves_cache_tau_iterator]
+            self.moves_cache_tau_iterator += 1
+            if self.moves_cache_tau_iterator >= len(self.moves_cache_tau):
+                self.moves_cache_tau = None
+        return move
     
     def one_iter(self, current : BCFParams, temp, return_trace=False):
         """One MCMC iteration: Update μ trees -> τ trees -> global params"""
@@ -126,4 +146,3 @@ class BCFSampler(Sampler):
         else:
             del iter_trace
             return iter_current
-    
