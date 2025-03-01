@@ -71,12 +71,12 @@ class Tree:
     def from_existing(cls, other: "Tree"):
         return cls(
             other.dataX,
-            copy.deepcopy(other.vars),
-            copy.deepcopy(other.thresholds),
-            copy.deepcopy(other.leaf_vals),
-            copy.deepcopy(other.n),
-            copy.deepcopy(other.node_indicators),
-            copy.deepcopy(other.evals)
+            np.copy(other.vars),
+            np.copy(other.thresholds),
+            np.copy(other.leaf_vals),
+            np.copy(other.n),
+            np.copy(other.node_indicators),
+            np.copy(other.evals)
         )
 
     def copy(self):
@@ -432,14 +432,14 @@ class Parameters:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, global_params, cache=None):
+    def __init__(self, trees: list, global_params, cache : Optional[float]=None):
         """
         Initializes the parameters for the model.
 
         Parameters:
         - trees (list): A list of trees used in the model.
         - global_params (dict): Global parameters for the model.
-        - data (Dataset): The dataset to be used.
+        - cache (float, optional): Cached evaluation results for the trees.
 
         Attributes:
         - data (Dataset): The dataset to be used.
