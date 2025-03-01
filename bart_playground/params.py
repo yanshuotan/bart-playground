@@ -304,17 +304,23 @@ class Tree:
 
         return is_valid
 
-    def prune_split(self, node_id: int):
+    def prune_split(self, node_id: int, recursive = False):
         """
         Prune a terminal split node, turning it back into a leaf.
 
         Parameters:
         - node_id: int
             Index of the split node to prune.
+        - recursive: bool, default=False
+        If True, recursively prune all descendant split nodes.
         """
         # Check if the node is a split node
-        if not self.is_terminal_split_node(node_id):
-            raise ValueError("Node is not a terminal split node and cannot be pruned.")
+        if not self.is_split_node(node_id):
+            raise ValueError("Node is not a split node and cannot be pruned.")
+        
+        # If recursive is False, ensure the node is a terminal split node
+        if not recursive and not self.is_terminal_split_node(node_id):
+            raise ValueError("Node is not a terminal split node and cannot be pruned (recursive=False).")
 
         # Turn the split node into a leaf
         self.vars[node_id] = -1
@@ -331,6 +337,35 @@ class Tree:
         if self.dataX is not None:
             self.n[left_child] = -2
             self.n[right_child] = -2
+
+        # If recursive, recursively mark all descendant split nodes as -2
+        if recursive:
+            self._prune_descendants(left_child)
+            self._prune_descendants(right_child)
+
+    def _prune_descendants(self, node_id: int):
+        """
+        Recursively mark all descendant split nodes as -2.
+
+        Parameters:
+        - node_id: int
+            Index of the node to start pruning from.
+        """
+        # If node_id is out of bounds, stop recursion
+        if node_id >= len(self.vars):
+            return
+
+        # Mark the current node as -2
+        self.vars[node_id] = -2
+        self.thresholds[node_id] = np.nan
+        self.leaf_vals[node_id] = np.nan
+        self.n[node_id] = -2
+
+        # Recursively prune left and right children
+        left_child = node_id * 2 + 1
+        right_child = node_id * 2 + 2
+        self._prune_descendants(left_child)
+        self._prune_descendants(right_child)
 
     def change_split(self, node_id, var, threshold, update_n=True):
         self.vars[node_id] = var

@@ -77,10 +77,25 @@ class TestTree(unittest.TestCase):
         self.tree.vars = np.array([0, -1, -1, -2, -2, -2, -2, -2], dtype=int)
         self.tree.thresholds = np.array([0.5, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
         self.tree.leaf_vals = np.array([np.nan, 1.0, -1.0, np.nan, np.nan, np.nan, np.nan, np.nan])
-        self.tree.n = np.array([-2, 100, 50, -2, -2, -2, -2, -2], dtype=int)
+        self.tree.n = np.array([100, 50, 50, -2, -2, -2, -2, -2], dtype=int)
 
         self.tree.prune_split(0)
         self.assertEqual(self.tree.vars[0], -1)
+        self.assertEqual(self.tree.vars[1], -2)
+        self.assertTrue(np.isnan(self.tree.thresholds[0]))
+
+    def test_prune_split_recursive(self):
+        self.tree.vars = np.array([0, 1, -1, -1, -1, -2, -2, -2], dtype=int)
+        self.tree.thresholds = np.array([0.5, 0.7, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
+        self.tree.leaf_vals = np.array([np.nan, np.nan, -1.0, 1.0, 2.0, np.nan, np.nan, np.nan])
+        self.tree.n = np.array([100, 50, 50, 24, 26, -2, -2, -2], dtype=int)
+
+        self.tree.prune_split(0, recursive=True)
+        self.assertEqual(self.tree.vars[0], -1)
+        self.assertEqual(self.tree.vars[1], -2)
+        self.assertEqual(self.tree.vars[3], -2)
+        self.assertEqual(self.tree.n[1], -2)
+        self.assertEqual(self.tree.n[3], -2)
         self.assertTrue(np.isnan(self.tree.thresholds[0]))
 
     def test_set_leaf_value(self):

@@ -108,7 +108,10 @@ class DefaultPreprocessor(Preprocessor):
         return dict({k : np.unique(X[:, k]) for k in range(X.shape[1])})
 
     def transform_y(self, y) -> np.ndarray:
-        return (y - self.y_min) / (self.y_max - self.y_min) - 0.5
+        if self.y_max == self.y_min:
+            return y
+        else:
+            return (y - self.y_min) / (self.y_max - self.y_min) - 0.5
     
     def backtransform_y(self, y) -> np.ndarray:
         return (self.y_max - self.y_min) * (y + 0.5) + self.y_min
