@@ -98,8 +98,8 @@ class BCF:
         Returns:
             self
         """
-        if not self.is_fitted:
-            # If not fitted yet, just do a regular fit
+        if not self.is_fitted or self.data is None or self.data.n <= 10:
+            # If not fitted yet, or data is empty, or not enough data, just do a regular fit
             self.fit(X, y, z, quietly=quietly)
             return self
             
