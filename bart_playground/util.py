@@ -60,6 +60,8 @@ class DefaultPreprocessor(Preprocessor):
         self.splits = None
 
     def fit(self, X, y):
+        if X is None or y is None or len(X) == 0 or len(y) == 0:
+            raise ValueError("X and y cannot be None")
         self.y_max = y.max()
         self.y_min = y.min()
         self._thresholds = self.gen_thresholds(X)

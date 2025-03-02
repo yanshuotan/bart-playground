@@ -24,6 +24,18 @@ class BCFDataset(Dataset):
     
 class BCFPreprocessor(DefaultPreprocessor):
     def fit_transform(self, X, y, z):
+        if z is None or len(z) == 0:
+            raise ValueError("Treatment indicator z must be provided and non-empty.")
+        # If z is an integer array of shape (n, ), convert it to a 2D array using one-hot encoding
+        if z.ndim == 1:
+            z = (z == np.arange(1, np.max(z)+1))
+        # Require positivity: any X[z[:, i]] must contain at least one valid sample
+        for i in range(z.shape[1]):
+            if np.sum(z[:, i]) == 0:
+                raise ValueError(f"Treatment arm {i+1} has no samples.")
+        # and the control group (i.e. not in any treatment group) must be present as well
+        if np.sum(z, axis=1).min() == 1:
+                raise ValueError("Control group must be present.")
         dataset = super().fit_transform(X, y)
         return BCFDataset(dataset.X, dataset.y, z)
 class EnsembleName(Enum):
