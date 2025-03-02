@@ -92,6 +92,8 @@ class DefaultPreprocessor(Preprocessor):
         self.splits = None
 
     def fit(self, X, y):
+        if X is None or y is None or len(X) == 0 or len(y) == 0:
+            raise ValueError("X and y cannot be None")
         self.y_max = y.max()
         self.y_min = y.min()
         self._thresholds = self.gen_thresholds(X)
@@ -108,10 +110,6 @@ class DefaultPreprocessor(Preprocessor):
         return dict({k : np.unique(X[:, k]) for k in range(X.shape[1])})
 
     def transform_y(self, y) -> np.ndarray:
-        if self.y_max == self.y_min:
-            return y
-        else:
-            return (y - self.y_min) / (self.y_max - self.y_min) - 0.5
         if self.y_max == self.y_min:
             return y
         else:
