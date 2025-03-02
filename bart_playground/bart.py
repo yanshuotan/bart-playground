@@ -48,7 +48,9 @@ class BART:
         """
         if not self.is_fitted or self.data is None or self.data.n <= 10:
             # If not fitted yet, or data is empty, or not enough data, just do a regular fit
-            self.fit(X, y, quietly=quietly)
+            X_combined = np.vstack((self.data.X, X))
+            y_combined = np.hstack((self.data.y, y))
+            self.fit(X_combined, y_combined, quietly=quietly)
             return self
             
         additional_iters = add_ndpost + add_nskip
