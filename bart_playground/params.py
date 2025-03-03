@@ -299,7 +299,89 @@ class Tree:
         self.change_split(child_id, parent_var, parent_threshold, update_n=False)
         is_valid = self.change_split(parent_id, child_var, child_threshold, update_n=True)
         return is_valid
-    
+
+    def break_new(self, start_index):
+        if start_index >= len(self.thresholds):
+            return []
+        thresholds = []
+        vars = []
+        queue = [start_index]  
+        while queue:
+            current_index = queue.pop(0)  
+            if current_index < len(self.thresholds): 
+                thresholds.append(float(self.thresholds[current_index])) 
+                vars.append(int(self.vars[current_index]))
+            
+                left_index = 2 * current_index + 1
+                right_index = 2 * current_index + 2
+                if left_index < len(self.thresholds):
+                    queue.append(left_index)
+                if right_index < len(self.thresholds):
+                    queue.append(right_index)
+        # To make sure the length is 2^d
+        if len(thresholds) & (len(thresholds) - 1) != 0:
+            thresholds.append(np.nan)
+            vars.append(-2)
+        tree_new = Tree.new(dataX=self.dataX)
+        tree_new.vars = vars
+        tree_new.thresholds = thresholds
+        tree_new.leaf_vals = np.full(len(vars),np.nan)
+        tree_new.node_indicators = np.full((self.dataX.shape[0], len(vars)), 0, dtype=bool)
+        tree_new.node_indicators[:, 0] = True
+        tree_new.n = np.full(len(vars), -2, dtype=int)
+        tree_new.n[0] = self.dataX.shape[0]
+        tree_new.evals = np.zeros(tree_new.n[0])
+        tree_new.update_n()
+
+        return tree_new
+
+
+    def combine_two(self, node_id, tree2):
+        d1 = int(np.ceil(np.log2(np.where(np.array(self.vars) == -1)[0].max() + 2)))
+        d2 = int(np.ceil(np.log2(np.where(np.array(tree2.vars) == -1)[0].max() + 2)))
+        new_size = max(2**(d1 + d2 - 1), len(self.vars))
+        new_thresholds = np.full(new_size, np.nan)
+        new_vars = np.full(new_size, -2)
+        new_leaf_vals = np.full(new_size,np.nan)
+        new_n = np.full(new_size,-2)
+        new_node_indicators = np.full((self.dataX.shape[0],new_size),0,dtype=bool)
+        # Give the corresponding value to new tree
+        new_thresholds[:len(self.thresholds)]=self.thresholds
+        new_vars[:len(self.vars)]=self.vars
+        new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
+        new_n[:len(self.n)]=self.n
+        new_node_indicators[:, :self.node_indicators.shape[1]] = self.node_indicators
+        
+        # Update self with new values
+        self.thresholds = new_thresholds
+        self.vars = new_vars
+        self.leaf_vals = new_leaf_vals
+        self.n = new_n
+        self.node_indicators = new_node_indicators
+
+        
+        # Set the corresponding value of tree 2 to tree 1
+        queue = [node_id]
+        var_index = 0 
+
+        while queue and var_index < len(tree2.vars):
+            current_index = queue.pop(0)  
+            if current_index < len(self.thresholds):  
+            
+                self.vars[current_index] = tree2.vars[var_index]
+                self.thresholds[current_index] = tree2.thresholds[var_index]
+
+                left_index = 2 * current_index + 1
+                right_index = 2 * current_index + 2
+                if left_index >= len(self.vars) or right_index >= len(self.vars):
+                    self._resize_arrays()
+                queue.append(left_index)
+                queue.append(right_index)
+
+                var_index += 1
+
+        return self.update_n(node_id)
+
     def update_n(self, node_id=0):
         """
         Updates the counts of samples reaching each node in the decision tree.

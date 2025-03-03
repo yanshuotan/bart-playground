@@ -145,9 +145,57 @@ class Swap(Move):
             child_id = 2 * parent_id + 3 - lr
         success = tree.swap_split(parent_id, child_id) # If no empty leaves are created
         return success
+
+class Break(Move):
+    """
+    Move to Split a tree into two trees
+    """
+    # Assume that the input is defined in TreeParams Class
+    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
+        super().__init__(current, trees_changed)
+        assert len(trees_changed) == 1
+        self.tol = tol
     
+    def is_feasible(self):
+        tree = self.current.trees[self.trees_changed[0]]
+        return len(tree.split_nodes) > 0
+
+    def try_propose(self, proposed, generator):
+        # find node and collect thresholds
+        tree = proposed.trees[self.trees_changed[0]]
+        node_id = generator.choice(tree.split_nodes)
+        # break to two trees
+        tree_new = tree.break_new(node_id)
+        tree.prune_split(node_id, recursive= True)
+        proposed.trees.append(tree_new)
+        return True
+
+class Combine(Move):
+    """
+    Move to combine two trees into one tree
+    """
+    # Assume that the input is defined in TreeParams Class
+    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
+        super().__init__(current, trees_changed)
+        assert len(trees_changed) == 2
+        self.tol = tol
+
+    def is_feasible(self):
+        return True
+
+    def try_propose(self, proposed, generator):
+        # find node and collect thresholds
+        tree1 = proposed.trees[self.trees_changed[0]]
+        tree2 = proposed.trees[self.trees_changed[1]]
+        node_id = generator.choice(tree1.leaves)
+        success = tree1.combine_two(node_id, tree2)
+        if success: 
+            proposed.trees.remove(tree2)
+        return success    
  
 all_moves = {"grow" : Grow,
             "prune" : Prune,
             "change" : Change,
-            "swap" : Swap}
+            "swap" : Swap,
+            "break": Break,
+            "combine": Combine}
