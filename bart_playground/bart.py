@@ -1,6 +1,6 @@
 import numpy as np
 
-from .samplers import Sampler, DefaultSampler, default_proposal_probs
+from .samplers import Sampler, DefaultSampler, default_proposal_probs, NTreeSampler
 from .priors import *
 from .util import Preprocessor, DefaultPreprocessor
 
@@ -65,11 +65,11 @@ class ChangeNumTreeBART(BART):
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
                  ntreedf = 100, ntreemean = 200,
-                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
+                 proposal_probs=default_proposal_probs, break_prob: float=0.5, tol=100, max_bins=100,
                  random_state=42):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
-        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, ntreemean, ntreedf, eps_q, 
-                             eps_nu, specification, rng)
-        sampler = NtreeSampler(prior = prior, proposal_probs = proposal_probs, generator = rng, tol = tol)
+        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
+                             eps_nu, specification, rng, ntreemean, ntreedf)
+        sampler = NTreeSampler(prior = prior, proposal_probs = proposal_probs, break_prob = break_prob, generator = rng, tol = tol)
         super().__init__(preprocessor, sampler, ndpost, nskip)

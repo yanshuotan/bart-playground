@@ -339,7 +339,7 @@ class Tree:
     def combine_two(self, node_id, tree2):
         d1 = int(np.ceil(np.log2(np.where(np.array(self.vars) == -1)[0].max() + 2)))
         d2 = int(np.ceil(np.log2(np.where(np.array(tree2.vars) == -1)[0].max() + 2)))
-        new_size = max(2**(d1 + d2 - 1), len(self.vars))
+        new_size = max(2**(d1 + d2 - 1), len(self.vars), len(tree2.vars))
         new_thresholds = np.full(new_size, np.nan)
         new_vars = np.full(new_size, -2)
         new_leaf_vals = np.full(new_size,np.nan)
@@ -373,13 +373,12 @@ class Tree:
 
                 left_index = 2 * current_index + 1
                 right_index = 2 * current_index + 2
-                if left_index >= len(self.vars) or right_index >= len(self.vars):
-                    self._resize_arrays()
+                #if left_index >= len(self.vars) or right_index >= len(self.vars):
+                #    self._resize_arrays()
                 queue.append(left_index)
                 queue.append(right_index)
 
                 var_index += 1
-
         return self.update_n(node_id)
 
     def update_n(self, node_id=0):
@@ -611,3 +610,6 @@ class Parameters:
             tree.update_outputs()
             self.cache = self.cache + tree.evals - tree_evals_old
             leaf_counter += tree.n_leaves
+
+    def update_tree_num(self):
+        self.n_trees = len(self.trees)
