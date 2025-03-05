@@ -64,12 +64,12 @@ class ChangeNumTreeBART(BART):
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
-                 ntreedf = 100, ntreemean = 200,
+                 theta_0 = 200, theta_df = 100, 
                  proposal_probs=default_proposal_probs, break_prob: float=0.5, tol=100, max_bins=100,
                  random_state=42):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
-                             eps_nu, specification, rng, ntreemean, ntreedf)
+                             eps_nu, specification, rng, theta_0, theta_df)
         sampler = NTreeSampler(prior = prior, proposal_probs = proposal_probs, break_prob = break_prob, generator = rng, tol = tol)
         super().__init__(preprocessor, sampler, ndpost, nskip)

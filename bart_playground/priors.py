@@ -1,7 +1,7 @@
 import numpy as np
 import math
 
-from scipy.stats import invgamma, chi2
+from scipy.stats import invgamma, chi2, gamma
 from scipy.linalg import sqrtm
 from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
@@ -117,8 +117,8 @@ class GlobalParamPrior:
         eps_q (float, optional): Quantile used for setting the hyperprior for noise sigma2. Defaults to 0.9.
         eps_nu (float, optional): Inverse chi-squared nu hyperparameter for noise sigma2. Defaults to 3.
         specification (str, optional): Specification for a data-driven initial estimate for noise sigma2. Defaults to "linear".
-        ntreemean(int, optional): Help control the number of trees. Defaults to 200.
-        ntreedf(int, optional): control the ntree mean. Defaults to 100.
+        theta_0(int, optional): Control the theta which is the poisson parameter for the number of trees. Defaults to 200.
+        theta_df(int, optional): Control the theta degree of freedom. Defaults to 100.
             
     Attributes:
         eps_q (float): Quantile for noise variance prior
@@ -127,13 +127,13 @@ class GlobalParamPrior:
         specification (str): Method for initial variance estimate
         generator: Random number generator
     """
-    def __init__(self, eps_q=0.9, eps_nu=3.0, ntreemean : int=200, ntreedf :int = 100,
+    def __init__(self, eps_q=0.9, eps_nu=3.0, theta_0 : int=200, theta_df :int = 100,
                  specification="linear", generator=np.random.default_rng()):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda : float
-        self.ntreemean = ntreemean
-        self.ntreedf = ntreedf
+        self.theta_0 = theta_0
+        self.theta_df = theta_df
         self.specification = specification
         self.generator = generator
 
@@ -159,9 +159,9 @@ class GlobalParamPrior:
         """
         self.fit_hyperparameters(data)
         eps_sigma2 = self._sample_eps_sigma2(data.y)
-        ntree_controler = self.ntreemean
+        ntree_theta = self.theta_0
         return {"eps_sigma2" : eps_sigma2,
-                "ntree_controler" : ntree_controler}
+                "ntree_theta" : ntree_theta}
     
     def resample_global_params(self, bart_params : Parameters, data_y):
         """
@@ -179,9 +179,9 @@ class GlobalParamPrior:
             dict: A dictionary containing the resampled global parameters.
         """
         eps_sigma2 = self._sample_eps_sigma2(data_y - bart_params.evaluate())
-        ntree_controler = self._sample_ntree_controler()
+        ntree_theta = self._sample_ntree_theta(bart_params.n_trees)
         return {"eps_sigma2" : eps_sigma2,
-                "ntree_controler" : ntree_controler}
+                "ntree_theta" : ntree_theta}
     
     def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:
         """
@@ -223,22 +223,23 @@ class GlobalParamPrior:
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)# [0]
         return eps_sigma2
     
-    def _sample_ntree_controler(self): # In progress
-        k0 = self.ntreedf
-        c = chi2.rvs(df=k0)
-        theta0 = self.ntreemean
-        return (c*theta0/k0)
+    def _sample_ntree_theta(self, n_trees):
+        alpha_posterior = self.theta_df / 2 + n_trees
+        beta_posterior = self.theta_df / (2 * self.theta_0) + 1
+
+        theta_new = gamma.rvs(alpha_posterior, scale=1 / beta_posterior)
+        return theta_new
     
 class TreeNumPrior:
-    def tree_num_log_prior(self, bart_params: Parameters, ntree_controler):
+    def tree_num_log_prior(self, bart_params: Parameters, ntree_theta):
         m = bart_params.n_trees
-        theta = ntree_controler
+        theta = ntree_theta
         log_prior = m * np.log(theta) - theta - math.lgamma(m + 1)
         return log_prior
 
     def tree_num_log_prior_ratio(self, move: Move):
-        log_prior_current = self.tree_num_log_prior(move.current, move.current.global_params["ntree_controler"])
-        log_prior_proposed = self.tree_num_log_prior(move.proposed, move.proposed.global_params["ntree_controler"])
+        log_prior_current = self.tree_num_log_prior(move.current, move.current.global_params["ntree_theta"])
+        log_prior_proposed = self.tree_num_log_prior(move.proposed, move.proposed.global_params["ntree_theta"])
         return log_prior_proposed - log_prior_current
 
 class BARTLikelihood:
@@ -327,8 +328,8 @@ class BARTLikelihood:
 class ComprehensivePrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, 
                  eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
-                 ntreemean=200, ntreedf=100):
+                 theta_0=200, theta_df=100):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
-        self.global_prior = GlobalParamPrior(eps_q, eps_nu, ntreemean, ntreedf, specification, generator)
+        self.global_prior = GlobalParamPrior(eps_q, eps_nu, theta_0, theta_df, specification, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
         self.tree_num_prior = TreeNumPrior()
