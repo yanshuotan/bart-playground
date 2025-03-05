@@ -24,6 +24,7 @@ class Move(ABC):
         self.trees_changed = trees_changed
         self._possible_thresholds = possible_thresholds
         self.tol = tol
+        self.log_tran_ratio = 0 # The log of remaining transition ratio after cancellations in the MH acceptance probability. 
 
     @property
     def possible_thresholds(self):
@@ -78,7 +79,10 @@ class Grow(Move):
         node_id = generator.choice(tree.leaves)
         var = generator.integers(tree.dataX.shape[1])
         threshold = generator.choice(self.possible_thresholds[var])
+        n_leaves = tree.n_leaves
         success = tree.split_leaf(node_id, var, threshold)
+        n_splits = len(tree.terminal_split_nodes)
+        self.log_tran_ratio = np.log(n_leaves) - np.log(n_splits)
         return success
 
 class Prune(Move):
@@ -97,7 +101,10 @@ class Prune(Move):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         node_id = generator.choice(tree.terminal_split_nodes)
+        n_splits = len(tree.terminal_split_nodes)
         tree.prune_split(node_id)
+        n_leaves = tree.n_leaves
+        self.log_tran_ratio = np.log(n_splits) - np.log(n_leaves)
         return True
 
 class Change(Move):
