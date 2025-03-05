@@ -223,7 +223,7 @@ class GlobalParamPrior:
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)# [0]
         return eps_sigma2
     
-    def _sample_ntree_controler(self):
+    def _sample_ntree_controler(self): # In progress
         k0 = self.ntreedf
         c = chi2.rvs(df=k0)
         theta0 = self.ntreemean

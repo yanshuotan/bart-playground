@@ -323,8 +323,8 @@ class Tree:
             thresholds.append(np.nan)
             vars.append(-2)
         tree_new = Tree.new(dataX=self.dataX)
-        tree_new.vars = vars
-        tree_new.thresholds = thresholds
+        tree_new.vars = np.array(vars)
+        tree_new.thresholds = np.array(thresholds)
         tree_new.leaf_vals = np.full(len(vars),np.nan)
         tree_new.node_indicators = np.full((self.dataX.shape[0], len(vars)), 0, dtype=bool)
         tree_new.node_indicators[:, 0] = True
