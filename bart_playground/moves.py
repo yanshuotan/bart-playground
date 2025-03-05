@@ -171,10 +171,13 @@ class Break(Move):
         # find node and collect thresholds
         tree = proposed.trees[self.trees_changed[0]]
         node_id = generator.choice(tree.split_nodes)
+        n_splits = len(tree.split_nodes)
         # break to two trees
         tree_new = tree.break_new(node_id)
         tree.prune_split(node_id, recursive= True)
+        n_leaves = tree.n_leaves
         proposed.trees.append(tree_new)
+        self.log_tran_ratio = np.log(n_splits) - np.log(n_leaves) - np.log(len(proposed.trees))
         return True
 
 class Combine(Move):
@@ -195,8 +198,14 @@ class Combine(Move):
         tree1 = proposed.trees[self.trees_changed[0]]
         tree2 = proposed.trees[self.trees_changed[1]]
         node_id = generator.choice(tree1.leaves)
+        n_leaves = tree1.n_leaves
         success = tree1.combine_two(node_id, tree2)
         if success: 
+            n_splits = len(tree1.split_nodes)
+            if n_splits == 0:
+                self.log_tran_ratio = -np.inf # Do not accept stump + stump case
+            else:
+                self.log_tran_ratio =  np.log(len(proposed.trees)) + np.log(n_leaves) - np.log(n_splits)
             proposed.trees.remove(tree2)
         return success    
  
