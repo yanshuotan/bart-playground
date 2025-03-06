@@ -98,7 +98,7 @@ class BCFSampler(Sampler):
             if move.propose(self.generator): # Check if a valid move was proposed
                 # Metropolis–Hastings
                 Z = self.generator.uniform(0,1)
-                if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, data_y = remaining_y, ensemble_id = BCFEnsembleIndex(EnsembleName.MU))):
+                if np.log(Z) < temp * self.prior.trees_log_mh_ratio(move, data_y = remaining_y, ensemble_id = BCFEnsembleIndex(EnsembleName.MU)):
                     new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, data_y = remaining_y, ensemble_id = BCFEnsembleIndex(EnsembleName.MU), tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     # iter_current.mu_view = move.proposed
@@ -129,7 +129,7 @@ class BCFSampler(Sampler):
                 if move.propose(self.generator): # Check if a valid move was proposed
                     # Metropolis–Hastings
                     Z = self.generator.uniform(0,1)
-                    if Z < np.exp(temp * self.prior.trees_log_mh_ratio(move, data_y = remaining_y, ensemble_id=BCFEnsembleIndex(EnsembleName.TAU, i))):
+                    if np.log(Z) < temp * self.prior.trees_log_mh_ratio(move, data_y = remaining_y, ensemble_id=BCFEnsembleIndex(EnsembleName.TAU, i)):
                         new_leaf_vals = self.prior.resample_leaf_vals(move.proposed, data_y = remaining_y, ensemble_id=BCFEnsembleIndex(EnsembleName.TAU, i), tree_ids = [k])
                         move.proposed.update_leaf_vals([k], new_leaf_vals)
                         # iter_current.tau_view = move.proposed
