@@ -168,3 +168,12 @@ class BCFParams:
         )
         
         return new_params
+
+    def clear_cache(self):
+        """Clear caches in the BCFParams object"""
+        # Clear cache for mu_view
+        self.mu_view.clear_cache()
+        
+        # Clear cache for each tau_view
+        for tau_view in self.tau_view_list:
+            tau_view.clear_cache()

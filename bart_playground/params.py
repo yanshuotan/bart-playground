@@ -1,8 +1,8 @@
 from functools import cache
 from math import e
+# from memory_profiler import profile
 from typing import Optional
 import numpy as np
-import copy
 from typing import Optional
 from numpy.typing import NDArray
 from .util import Dataset
@@ -104,13 +104,17 @@ class Tree:
         """
         Initialize caching arrays for the tree.
         """
-        assert self.dataX is not None
+        assert self.dataX is not None, "Data matrix is not provided."
         self.node_indicators = np.full((self.dataX.shape[0], 8), False, dtype=bool)
         self.node_indicators[:, 0] = True
         self.n = np.full(8, -2, dtype=int)
         self.n[0] = self.dataX.shape[0]
         self.evals = np.zeros(self.dataX.shape[0])
-
+        
+    @property
+    def cache_exists(self):
+        return self.evals is not None
+    
     @classmethod
     def new(cls, dataX=None):
         # Define the basic tree parameters.
@@ -234,7 +238,7 @@ class Tree:
         new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
         self.leaf_vals = new_leaf_vals
 
-        if self.dataX is not None:
+        if self.cache_exists:
             # Resize n_vals array
             new_n = np.full(new_length, -2, dtype=int)
             new_n[:len(self.n)] = self.n
@@ -289,7 +293,7 @@ class Tree:
         self.leaf_vals[left_child] = left_val
         self.leaf_vals[right_child] = right_val
 
-        if self.dataX is not None:
+        if self.cache_exists:
             # Use the numba-optimized function to update node indicators and counts
             left_count, right_count = _update_split_leaf_indicators(
                 self.dataX, var, threshold, self.node_indicators, node_id, left_child, right_child)
@@ -334,7 +338,7 @@ class Tree:
         self.leaf_vals[left_child] = np.nan
         self.leaf_vals[right_child] = np.nan
 
-        if self.dataX is not None:
+        if self.cache_exists:
             self.n[left_child] = -2
             self.n[right_child] = -2
 
@@ -493,7 +497,7 @@ class Tree:
             )
         
     def _print_node(self, node_id):
-        if self.dataX is not None:
+        if self.cache_exists:
             n_output = self.n[node_id]
         else:
             n_output = "NA"
@@ -566,6 +570,13 @@ class Parameters:
             self.cache = np.sum([tree.evaluate() for tree in self.trees], axis=0)
         else:
             self.cache = cache
+    
+    def clear_cache(self):
+        self.cache = None
+        for tree in self.trees:
+            tree.evals = None
+            tree.node_indicators = None
+            tree.n = None
             
     def copy(self, modified_tree_ids=None):
         if modified_tree_ids is None:
@@ -575,7 +586,9 @@ class Parameters:
             copied_trees[tree_id] = self.trees[tree_id].copy()
         # No need to deep copy global_params and cache
         # because they only contain numerical values (which are immutable)
-        return Parameters(trees=copied_trees, global_params=self.global_params, cache=self.cache)
+        return Parameters(trees=copied_trees, 
+                          global_params=self.global_params.copy(), # shallow copy suffices
+                          cache=self.cache)
 
     def add_data_points(self, X_new):
         """

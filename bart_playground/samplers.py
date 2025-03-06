@@ -3,16 +3,13 @@ from tqdm import tqdm
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 
-from bart_playground.bcf.bcf_params import BCFParams
-from bart_playground.bcf.bcf_util import BCFDataset
-
 from .params import Tree, Parameters
 from .moves import all_moves
 from .util import Dataset
 from .priors import *
 from .priors import *
 from bart_playground import moves
-
+from memory_profiler import profile
 class TemperatureSchedule:
 
     def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
@@ -20,7 +17,7 @@ class TemperatureSchedule:
     
     def __call__(self, t):
         return self.temp_schedule(t)
-
+    
 class Sampler(ABC):
     """
     Base class for the BART sampler.
@@ -73,7 +70,7 @@ class Sampler(ABC):
 
     def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
-
+        
     def run(self, n_iter, progress_bar = True, quietly = False, current = None):
         """
         Run the sampler for a specified number of iterations from `current` or a fresh start.
@@ -99,6 +96,7 @@ class Sampler(ABC):
             # print(self.temp_schedule)
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False)
+            self.trace[-1].clear_cache()
             self.trace.append(current)
         return self.trace
     
@@ -174,7 +172,7 @@ class Sampler(ABC):
 
                 if new_n > old_n:
                     new_X = new_data.X[old_n:]
-                    if isinstance(new_data, BCFDataset):
+                    if hasattr(new_data, 'z'): # check if treatment assignments are available, e.g. for BCFDataset
                         new_z = new_data.z[old_n:]
                         current_state = last_state.add_data_points(new_X, new_z)
                     else:
