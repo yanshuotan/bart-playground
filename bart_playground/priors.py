@@ -241,6 +241,45 @@ class TreeNumPrior:
         log_prior_current = self.tree_num_log_prior(move.current, move.current.global_params["ntree_theta"])
         log_prior_proposed = self.tree_num_log_prior(move.proposed, move.proposed.global_params["ntree_theta"])
         return log_prior_proposed - log_prior_current
+    
+class LeafValPrior:
+    def __init__(self, tau_k = 2.0):
+        self.tau_k = tau_k
+
+    def tau_square_inv(self, m):
+        """
+        Computes the inverse of tau squared (1 / tau^2)
+        """
+        return 4*(self.tau_k**2)*m
+    
+    def leaf_vals_squared_sum(self, bart_params, trees_changed):
+        """
+        Computes the sum of squared leaf values for all trees in bart_params.trees,
+        excluding the trees specified in trees_changed.
+        """    
+        return np.nansum([
+            val ** 2 for idx, tree in enumerate(bart_params.trees) 
+            if idx not in set(trees_changed) for val in tree.leaf_vals
+        ])
+    
+    def total_leaf_count(self, bart_params, trees_changed):
+        """
+        Computes the total number of leaves across all trees in bart_params.trees,
+        excluding the trees specified in trees_changed.
+        """     
+        return sum(
+            tree.n_leaves 
+            for idx, tree in enumerate(bart_params.trees) 
+            if idx not in set(trees_changed)
+        )
+
+
+    def leaf_vals_log_prior_ratio(self, move: Move):
+        m_current = move.current.n_trees
+        m_proposed = move.proposed.n_trees
+        
+        return -0.5*self.total_leaf_count(move.current, move.trees_changed) * np.log(m_current/m_proposed) - \
+            0.5*(self.tau_square_inv(m_proposed) - self.tau_square_inv(m_current)) * self.leaf_vals_squared_sum(move.current, move.trees_changed)
 
 class BARTLikelihood:
     """
@@ -328,8 +367,9 @@ class BARTLikelihood:
 class ComprehensivePrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, 
                  eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
-                 theta_0=200, theta_df=100):
+                 theta_0=200, theta_df=100, tau_k = 2.0):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
         self.global_prior = GlobalParamPrior(eps_q, eps_nu, theta_0, theta_df, specification, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
         self.tree_num_prior = TreeNumPrior()
+        self.leaf_val_prior = LeafValPrior(tau_k)
