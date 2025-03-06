@@ -217,7 +217,8 @@ class DefaultSampler(Sampler):
     def log_mh_ratio(self, move : Move, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
         return self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize)
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
+            move.log_tran_ratio
 
     def one_iter(self, current, temp, return_trace=False):
         """
