@@ -46,11 +46,11 @@ class TestSamplers(unittest.TestCase):
     def test_run_without_data(self):
         """
         Test run() without data
-        The run method should raise AttributeError when data is None.
+        The run method should raise AssertionError when data is None.
         """
         prior = MagicMock()
         sampler = DefaultSampler(prior, default_proposal_probs, np.random.default_rng())
-        with self.assertRaises(AttributeError):
+        with self.assertRaises(AssertionError):
             sampler.run(1)
 
     @patch("bart_playground.samplers.Parameters")
@@ -117,6 +117,7 @@ class TestSamplers(unittest.TestCase):
         mock_move = MagicMock()
         mock_move.proposed = MagicMock()
         mock_move.current = MagicMock()
+        mock_move.log_tran_ratio = 0
         # Construct a mock_move_function that returns mock_move when called
         mock_move_function = MagicMock(return_value=mock_move)
         # When accessing all_moves["grow"], return mock_move_function
@@ -163,6 +164,7 @@ class TestSamplers(unittest.TestCase):
         mock_move = MagicMock()
         mock_move.proposed = MagicMock()
         mock_move.current = MagicMock()
+        mock_move.log_tran_ratio = 0
         mock_move_function = MagicMock(return_value=mock_move)
         mock_all_moves.__getitem__.return_value = mock_move_function
 
@@ -200,6 +202,7 @@ class TestSamplers(unittest.TestCase):
         mock_move = MagicMock()
         mock_move.proposed = MagicMock()
         mock_move.current = MagicMock()
+        mock_move.log_tran_ratio = 0
         mock_move_function = MagicMock(return_value=mock_move)
         mock_all_moves.__getitem__.return_value = mock_move_function
 
@@ -274,6 +277,7 @@ class TestSamplers2(unittest.TestCase):
         mock_move.current = MagicMock()
         mock_move.proposed = MagicMock()
         mock_move.trees_changed = [0]
+        mock_move.log_tran_ratio = 0
 
         self.prior.tree_prior.trees_log_prior_ratio = MagicMock(return_value=-0.3)
         self.prior.likelihood.trees_log_marginal_lkhd_ratio = MagicMock(return_value=0.7)
