@@ -91,7 +91,7 @@ class BCFPrior:
     
     def trees_log_mh_ratio(self, move : Move, data_y, ensemble_id : BCFEnsembleIndex, marginalize : bool=False):
          return self.trees_log_prior_ratio(move, ensemble_id) + \
-            self.trees_log_marginal_lkhd_ratio(move, data_y, ensemble_id, marginalize)
+            self.trees_log_marginal_lkhd_ratio(move, data_y, ensemble_id, marginalize) + move.log_tran_ratio
     
     def init_global_params(self, data : BCFDataset):
         """
