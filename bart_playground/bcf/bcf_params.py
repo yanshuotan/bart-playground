@@ -76,29 +76,29 @@ class BCFParams:
             tau_cache_list = [tau_view.cache for tau_view in self.tau_view_list] 
         )
 
-    def evaluate(self, z, X=None):
-        """μ(x) + z*τ(x)
-        z is the treatment indicator boolean np.ndarray n_sample x n_treat_arms
+    def evaluate(self, Z, X=None):
+        """μ(x) + Z*τ(x)
+        Z is the treatment indicator boolean np.ndarray n_sample x n_treat_arms
         X is the input data np.ndarray n_sample x n_features
         """
-        if z is None:
-            raise ValueError("z is None")
-        z = z.astype(bool)
+        if Z is None:
+            raise ValueError("Z is None")
+        Z = Z.astype(bool)
 
         mu_pred = self.mu_view.evaluate(X=X)
         tau_pred = np.zeros_like(mu_pred)
 
         for i, tau_view in enumerate(self.tau_view_list):
         # z_i: boolean mask for samples receiving treatment arm i.
-            z_i = z[:, i]
-            # Check if z has True values to avoid index error
+            z_i = Z[:, i]
+            # Check if Z has True values to avoid index error
             if np.any(z_i):
                 X_treated = X[z_i] if X is not None else None
                 evaled = tau_view.evaluate(X=X_treated)
                 if z_i.shape[0] != tau_pred.shape[0]:
-                    raise ValueError("z.shape[0] != tau_pred.shape[0]")
+                    raise ValueError("Z.shape[0] != tau_pred.shape[0]")
                 if np.sum(z_i) != evaled.shape[0]:
-                    raise ValueError("np.sum(z) != evaled.shape[0]")
+                    raise ValueError("np.sum(Z) != evaled.shape[0]")
                 tau_pred[z_i] = evaled
             
         return mu_pred + tau_pred

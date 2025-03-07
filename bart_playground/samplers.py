@@ -9,7 +9,6 @@ from .util import Dataset
 from .priors import *
 from .priors import *
 from bart_playground import moves
-from memory_profiler import profile
 class TemperatureSchedule:
 
     def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
@@ -172,8 +171,8 @@ class Sampler(ABC):
 
                 if new_n > old_n:
                     new_X = new_data.X[old_n:]
-                    if hasattr(new_data, 'z'): # check if treatment assignments are available, e.g. for BCFDataset
-                        new_z = new_data.z[old_n:]
+                    if hasattr(new_data, 'Z'): # check if treatment assignments are available, e.g. for BCFDataset
+                        new_z = new_data.Z[old_n:]
                         current_state = last_state.add_data_points(new_X, new_z)
                     else:
                         current_state = last_state.add_data_points(new_X)

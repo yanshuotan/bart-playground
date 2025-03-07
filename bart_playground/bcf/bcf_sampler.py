@@ -139,7 +139,7 @@ class BCFSampler(Sampler):
                     iter_trace.append(iter_current)
 
         # 3) Resample global parameters
-        iter_current.global_params = self.prior.resample_global_params(iter_current, data_y = self.data.y, z=self.data.z)
+        iter_current.global_params = self.prior.resample_global_params(iter_current, data_y = self.data.y, Z=self.data.Z)
 
         if return_trace:
             return iter_trace
