@@ -1,4 +1,3 @@
-
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
@@ -8,7 +7,9 @@ from .params import Tree, Parameters
 from .moves import all_moves
 from .util import Dataset
 from .priors import *
-
+from .priors import *
+from bart_playground import moves
+from memory_profiler import profile
 class TemperatureSchedule:
 
     def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
@@ -16,7 +17,7 @@ class TemperatureSchedule:
     
     def __call__(self, t):
         return self.temp_schedule(t)
-
+    
 class Sampler(ABC):
     """
     Base class for the BART sampler.
@@ -48,6 +49,10 @@ class Sampler(ABC):
         self.temp_schedule = temp_schedule
         self.trace = []
         self.generator = generator
+        # create cache for moves
+        self.moves_cache = None
+        # current move cache iterator
+        self.moves_cache_iterator = None
         
     @property
     def data(self) -> Dataset:
@@ -65,27 +70,33 @@ class Sampler(ABC):
 
     def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
-
-    def run(self, n_iter, progress_bar = True):
+        
+    def run(self, n_iter, progress_bar = True, quietly = False, current = None):
         """
-        Run the sampler for a specified number of iterations.
+        Run the sampler for a specified number of iterations from `current` or a fresh start.
 
         Parameters:
         n_iter (int): The number of iterations to run the sampler.
         """
+        if quietly:
+            progress_bar = False
+
         self.trace = []
         self.n_iter = n_iter
-        current = self.get_init_state()
+        if current is None:
+            current = self.get_init_state()
+        # assert isinstance(current, Parameters), "Current state must be of type Parameters."
         self.trace.append(current) # Add initial state to trace
         
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
     
         for iter in iterator:
-            if not progress_bar and iter % 10 == 0:
+            if not progress_bar and iter % 10 == 0 and not quietly:
                 print(f"Running iteration {iter}/{n_iter}")
             # print(self.temp_schedule)
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False)
+            self.trace[-1].clear_cache()
             self.trace.append(current)
         return self.trace
     
@@ -101,9 +112,16 @@ class Sampler(ABC):
         Returns:
             The selected move from the all_moves list based on the sampled index.
         """
-        moves = list(self.proposals.keys())
-        move_probs = list(self.proposals.values())
-        return all_moves[self.generator.choice(moves, p=move_probs)]
+        if self.moves_cache is None or self.moves_cache_iterator is None:
+            moves = list(self.proposals.keys())
+            move_probs = list(self.proposals.values())
+            self.moves_cache = [all_moves[move] for move in self.generator.choice(moves, size=100, p=move_probs)]
+            self.moves_cache_iterator = 0
+        move = self.moves_cache[self.moves_cache_iterator]
+        self.moves_cache_iterator += 1
+        if self.moves_cache_iterator >= len(self.moves_cache):
+            self.moves_cache = None
+        return move
     
     @abstractmethod
     def get_init_state(self):
@@ -124,6 +142,48 @@ class Sampler(ABC):
         Perform one iteration of the sampler.
         """
         pass
+
+    def continue_run(self, additional_iters, new_data=None, quietly=False, last_state=None):
+            """
+            Continue sampling with updated data from a previous state.
+
+            Parameters:
+                additional_iters: Number of additional iterations
+                new_data: Updated dataset (if None, uses existing data)
+                quietly: Whether to suppress output
+                last_state: Last state from previous run (if None, uses last state in trace)
+
+            Returns:
+                New trace segment
+            """
+            # Get last state
+            if last_state is None:
+                if hasattr(self, 'trace') and self.trace:
+                    last_state = self.trace[-1]
+                else:
+                    raise ValueError("No last_state provided and no trace available")
+
+            # Update parameter state with any new data points if needed
+            if new_data is not None:
+                old_n = self.data.n
+                new_n = new_data.n
+                
+                self.add_data(new_data)
+
+                if new_n > old_n:
+                    new_X = new_data.X[old_n:]
+                    if hasattr(new_data, 'z'): # check if treatment assignments are available, e.g. for BCFDataset
+                        new_z = new_data.z[old_n:]
+                        current_state = last_state.add_data_points(new_X, new_z)
+                    else:
+                        current_state = last_state.add_data_points(new_X)
+                else:
+                    current_state = last_state
+            else:
+                current_state = last_state
+
+            # Run sampler for additional iterations
+            return self.run(additional_iters, quietly=quietly, current=current_state)
 
 class DefaultSampler(Sampler):
     """
@@ -172,7 +232,7 @@ class DefaultSampler(Sampler):
                 )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
-                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                if np.log(Z) < temp * self.log_mh_ratio(move):
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed

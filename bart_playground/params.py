@@ -1,15 +1,79 @@
+from functools import cache
+from math import e
+# from memory_profiler import profile
+from typing import Optional
 import numpy as np
-import copy
 from typing import Optional
 from numpy.typing import NDArray
 from .util import Dataset
+from numba import njit
+
+@njit
+def _compute_leaf_basis(node_indicators, vars):
+    """
+    Numba-optimized function to compute leaf basis matrix.
+    """
+    # Find leaf nodes (where vars == -1)
+    leaves = np.where(vars == -1)[0]
+    
+    # Extract columns corresponding to leaf nodes
+    return node_indicators[:, leaves]
+
+@njit
+def _update_split_leaf_indicators(dataX, var, threshold, node_indicators, node_id, left_child, right_child):
+    """
+    Numba-optimized function to update node indicators and counts when splitting a leaf.
+    """
+    n_samples = dataX.shape[0]
+    left_count = 0
+    right_count = 0
+    
+    for i in range(n_samples):
+        if node_indicators[i, node_id]:
+            if dataX[i, var] > threshold:
+                node_indicators[i, right_child] = True
+                node_indicators[i, left_child] = False
+                right_count += 1
+            else:
+                node_indicators[i, right_child] = False
+                node_indicators[i, left_child] = True
+                left_count += 1
+        else:
+            node_indicators[i, left_child] = False
+            node_indicators[i, right_child] = False
+    
+    return left_count, right_count
+
+@njit
+def _copy_all_tree_arrays(vars, thresholds, leaf_vals, n, node_indicators, evals):
+    """
+    Numba-optimized function to copy all tree arrays in a single call.
+    """
+    # Copy numeric arrays
+    vars_copy = vars.copy()
+    thresholds_copy = thresholds.copy()
+    leaf_vals_copy = leaf_vals.copy()
+    n_copy = n.copy() if n is not None else None
+    evals_copy = evals.copy() if evals is not None else None
+    
+    # Copy boolean array (node_indicators) with special handling
+    if node_indicators is not None:
+        node_indicators_copy = np.empty_like(node_indicators)
+        for i in range(node_indicators.shape[0]):
+            for j in range(node_indicators.shape[1]):
+                node_indicators_copy[i, j] = node_indicators[i, j]
+    else:
+        node_indicators_copy = None
+        
+    return vars_copy, thresholds_copy, leaf_vals_copy, n_copy, node_indicators_copy, evals_copy
 
 class Tree:
     """
     Represents the parameters of a single tree in the BART model, combining both
     the tree structure and leaf values into a single object.
     """
-    def __init__(self, dataX: Optional[np.ndarray], vars, thresholds, leaf_vals, n, node_indicators, evals):
+    def __init__(self, dataX: Optional[np.ndarray], vars : np.ndarray, thresholds : np.ndarray, leaf_vals : np.ndarray,
+                  n, node_indicators, evals):
         """
         Initialize the tree parameters.
 
@@ -36,6 +100,21 @@ class Tree:
         self.node_indicators = node_indicators
         self.evals = evals
 
+    def _init_caching_arrays(self):
+        """
+        Initialize caching arrays for the tree.
+        """
+        assert self.dataX is not None, "Data matrix is not provided."
+        self.node_indicators = np.full((self.dataX.shape[0], 8), False, dtype=bool)
+        self.node_indicators[:, 0] = True
+        self.n = np.full(8, -2, dtype=int)
+        self.n[0] = self.dataX.shape[0]
+        self.evals = np.zeros(self.dataX.shape[0])
+        
+    @property
+    def cache_exists(self):
+        return self.evals is not None
+    
     @classmethod
     def new(cls, dataX=None):
         # Define the basic tree parameters.
@@ -45,31 +124,38 @@ class Tree:
         leaf_vals = np.full(8, np.nan, dtype=float)
         leaf_vals[0] = 0                   # Initialize the leaf value
 
+        new_tree = cls(dataX, vars, thresholds, leaf_vals, n = None, node_indicators = None, evals = None)
         if dataX is not None:
             # If dataX is provided, initialize caching arrays.
-            node_indicators = np.full((dataX.shape[0], 8), False, dtype=bool)
-            node_indicators[:, 0] = True   # All observations go to the root
-            n = np.full(8, -2, dtype=int)
-            n[0] = dataX.shape[0]
-            evals = np.zeros(dataX.shape[0])
-        else:
-            # Otherwise, skip caching.
-            node_indicators = None
-            n = None
-            evals = None
-
-        return cls(dataX, vars, thresholds, leaf_vals, n, node_indicators, evals)
+            new_tree._init_caching_arrays()
+        
+        return new_tree
 
     @classmethod
     def from_existing(cls, other: "Tree"):
+        """
+        Create a new Tree object by copying data from an existing Tree.
+        Uses a single Numba-optimized function call to copy all arrays at once,
+        minimizing Python overhead.
+        """
+        # Use a single optimized function to copy all arrays at once
+        vars_copy, thresholds_copy, leaf_vals_copy, n_copy, node_indicators_copy, evals_copy = _copy_all_tree_arrays(
+            other.vars, 
+            other.thresholds, 
+            other.leaf_vals, 
+            other.n, 
+            other.node_indicators, 
+            other.evals
+        )
+        
         return cls(
-            other.dataX,
-            copy.deepcopy(other.vars),
-            copy.deepcopy(other.thresholds),
-            copy.deepcopy(other.leaf_vals),
-            copy.deepcopy(other.n),
-            copy.deepcopy(other.node_indicators),
-            copy.deepcopy(other.evals)
+            other.dataX,  # dataX is not copied since it's shared across trees
+            vars_copy,
+            thresholds_copy, 
+            leaf_vals_copy,
+            n_copy,
+            node_indicators_copy,
+            evals_copy
         )
 
     def copy(self):
@@ -152,7 +238,7 @@ class Tree:
         new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
         self.leaf_vals = new_leaf_vals
 
-        if self.dataX is not None:
+        if self.cache_exists:
             # Resize n_vals array
             new_n = np.full(new_length, -2, dtype=int)
             new_n[:len(self.n)] = self.n
@@ -203,21 +289,20 @@ class Tree:
         self.vars[right_child] = -1
 
         # Assign the provided values to the new leaf nodes
-
         self.leaf_vals[node_id] = np.nan
         self.leaf_vals[left_child] = left_val
         self.leaf_vals[right_child] = right_val
 
-        if self.dataX is not None:
-            # Update the node indicators and counts
-            x_bigger = self.dataX[:, var] > threshold
-            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & ~x_bigger
-            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & x_bigger
-            # self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & self.data.X[:, var] <= threshold
-            # self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & self.data.X[:, var] > threshold
-            self.n[left_child] = np.sum(self.node_indicators[:, left_child])
-            self.n[right_child] = np.sum(self.node_indicators[:, right_child])
-            is_valid = self.n[left_child] > 0 and self.n[right_child] > 0
+        if self.cache_exists:
+            # Use the numba-optimized function to update node indicators and counts
+            left_count, right_count = _update_split_leaf_indicators(
+                self.dataX, var, threshold, self.node_indicators, node_id, left_child, right_child)
+            
+            # Update the counts in the tree object
+            self.n[left_child] = left_count
+            self.n[right_child] = right_count
+            
+            is_valid = left_count > 0 and right_count > 0
         else:
             is_valid = True
 
@@ -253,7 +338,7 @@ class Tree:
         self.leaf_vals[left_child] = np.nan
         self.leaf_vals[right_child] = np.nan
 
-        if self.dataX is not None:
+        if self.cache_exists:
             self.n[left_child] = -2
             self.n[right_child] = -2
 
@@ -291,7 +376,7 @@ class Tree:
         self.thresholds[node_id] = threshold
         if update_n:
             is_valid = self.update_n(node_id)
-            return is_valid
+        return is_valid if update_n else True
     
     def swap_split(self, parent_id, child_id):
         parent_var, parent_threshold = self.vars[parent_id], self.thresholds[parent_id]
@@ -300,7 +385,7 @@ class Tree:
         is_valid = self.change_split(parent_id, child_var, child_threshold, update_n=True)
         return is_valid
     
-    def update_n(self, node_id=0):
+    def update_n(self, node_id=0, X_range=None):
         """
         Updates the counts of samples reaching each node in the decision tree.
 
@@ -318,6 +403,8 @@ class Tree:
         """
         if self.dataX is None:
             raise ValueError("Data matrix is not provided.")
+        if X_range is None:
+            X_range = np.arange(self.dataX.shape[0])
         
         if self.is_leaf(node_id):
             return self.n[node_id] > 0
@@ -326,8 +413,8 @@ class Tree:
             threshold = self.thresholds[node_id]
             left_child = node_id * 2 + 1
             right_child = node_id * 2 + 2
-            self.node_indicators[:, left_child] = self.node_indicators[:, node_id] & (self.dataX[:, var] <= threshold)
-            self.node_indicators[:, right_child] = self.node_indicators[:, node_id] & (self.dataX[:, var] > threshold)
+            self.node_indicators[X_range, left_child] = self.node_indicators[X_range, node_id] & (self.dataX[X_range, var] <= threshold)
+            self.node_indicators[X_range, right_child] = self.node_indicators[X_range, node_id] & (self.dataX[X_range, var] > threshold)
             self.n[left_child] = np.sum(self.node_indicators[:, left_child])
             self.n[right_child] = np.sum(self.node_indicators[:, right_child])
             is_valid = self.update_n(left_child) and self.update_n(right_child)
@@ -379,7 +466,7 @@ class Tree:
         if self.dataX is None:
             raise ValueError("Data matrix is not provided.")
         
-        return self.node_indicators[:, self.leaves]
+        return _compute_leaf_basis(self.node_indicators, self.vars)
     
     def __str__(self):
         """
@@ -410,7 +497,7 @@ class Tree:
             )
         
     def _print_node(self, node_id):
-        if self.dataX is not None:
+        if self.cache_exists:
             n_output = self.n[node_id]
         else:
             n_output = "NA"
@@ -420,18 +507,52 @@ class Tree:
             return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
                 f" (split, n = {n_output})"
 
+    def add_data_points(self, new_dataX):
+        """
+        Efficiently add new data points to an existing tree structure without
+        rebuilding the entire tree. This method updates only the necessary parts
+        of node_indicators, n, and evals arrays.
+        
+        Parameters:
+            new_dataX: New feature data to add (np.ndarray)
+        """
+        if self.dataX is None:
+            # If no previous data, initialize with the new data
+            self.dataX = new_dataX
+            self._init_caching_arrays()
+            self.update_n()  # Update node indicators for the full tree
+            self.update_outputs()
+            return
+        
+        # Get dimensions
+        # n_old = self.dataX.shape[0]
+        n_new = new_dataX.shape[0]
+        
+        # Update data matrix
+        self.dataX = np.vstack([self.dataX, new_dataX])
+        
+        # Extend node_indicators array
+        extended_indicators = np.full((n_new, len(self.vars)), False, dtype=bool)
+        extended_indicators[:, 0] = 1
+        self.node_indicators = np.vstack([self.node_indicators, extended_indicators])
+        self.update_n()   # Update node indicators for new data, could be improved below
+        # self.update_n(X_range = range(n_old, n_old+n_new))
+        
+        # Update evaluations, could be improved
+        self.update_outputs()
+
 class Parameters:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, global_params, cache=None):
+    def __init__(self, trees: list, global_params, cache : Optional[float]=None):
         """
         Initializes the parameters for the model.
 
         Parameters:
         - trees (list): A list of trees used in the model.
         - global_params (dict): Global parameters for the model.
-        - data (Dataset): The dataset to be used.
+        - cache (float, optional): Cached evaluation results for the trees.
 
         Attributes:
         - data (Dataset): The dataset to be used.
@@ -442,21 +563,59 @@ class Parameters:
         self.trees = trees
         self.n_trees = len(self.trees)
         self.global_params = global_params
+        self.init_cache(cache)
+            
+    def init_cache(self, cache):
         if cache is None:
             self.cache = np.sum([tree.evaluate() for tree in self.trees], axis=0)
         else:
             self.cache = cache
-
+    
+    def clear_cache(self):
+        self.cache = None
+        for tree in self.trees:
+            tree.evals = None
+            tree.node_indicators = None
+            tree.n = None
+            
     def copy(self, modified_tree_ids=None):
         if modified_tree_ids is None:
             modified_tree_ids = range(self.n_trees)
         copied_trees = self.trees.copy() # Shallow copy
         for tree_id in modified_tree_ids:
             copied_trees[tree_id] = self.trees[tree_id].copy()
-        return Parameters(trees=copied_trees, global_params=copy.deepcopy(self.global_params), cache=copy.deepcopy(self.cache))
+        # No need to deep copy global_params and cache
+        # because they only contain numerical values (which are immutable)
+        return Parameters(trees=copied_trees, 
+                          global_params=self.global_params.copy(), # shallow copy suffices
+                          cache=self.cache)
 
-    # def copy(self, modified_tree_ids):
-        # return copy.deepcopy(self)
+    def add_data_points(self, X_new):
+        """
+        Rebuilds the MCMC state to accommodate the new data by efficiently updating
+        the existing tree structures with the new data points.
+        
+        Parameters:
+            current_state: The current MCMC state (Parameters object)
+            X_new: New feature data to add (np.ndarray)
+            
+        Returns:
+            A new Parameters object with updated caches for the new data.
+            Caution: This method shallow copies the trees.
+        """
+        new_trees = self.trees.copy()  # Shallow copy the tree list
+        for tree in new_trees:
+            # Efficiently add new data points
+            tree.add_data_points(X_new)
+        
+        # Create new parameters object with the updated trees and same global parameters
+        new_state = Parameters(
+            trees=new_trees, 
+            global_params=self.global_params.copy(),
+            cache=None  # Let Parameters initialize the cache, could be improved
+        )
+        
+        return new_state
 
     def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float_]:
         """
@@ -473,26 +632,25 @@ class Parameters:
 
         Returns:
         --------
-        float
+        np.ndarray
             The total output of the evaluated trees on the input data.
         """
 
         # Trees to evaluate on
-        if tree_ids is not None:
-            all_except = [i for i in np.arange(self.n_trees) if i not in tree_ids]
-        elif all_except is not None:
-            tree_ids = [i for i in np.arange(self.n_trees) if i not in all_except]
-        else:
+        if tree_ids is None and all_except is None:
             tree_ids = list(np.arange(self.n_trees))
             all_except = []
 
         if X is None:
             total_output = self.cache.copy()
+            if all_except is None:
+                all_except = [i for i in np.arange(self.n_trees) if i not in tree_ids]
             for i in all_except:
                 total_output -= self.trees[i].evals
         else:
             total_output = np.zeros(X.shape[0])
-            # Iterate over all trees
+            if tree_ids is None:
+                tree_ids = [i for i in np.arange(self.n_trees) if i not in all_except]
             for i in tree_ids:
                 total_output += self.trees[i].evaluate(X)  # Add the tree's output to the total
         return total_output
@@ -507,6 +665,8 @@ class Parameters:
         Returns:
         - numpy.ndarray: A horizontally stacked array of leaf basis arrays corresponding to the given tree IDs.
         """
+        if len(tree_ids) == 1:
+            return self.trees[tree_ids[0]].leaf_basis
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
     def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float_]):

@@ -2,8 +2,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional
 from .params import Parameters
-
-
+from .util import fast_choice
 class Move(ABC):
     """
     Base class for moves in the BART sampler.
@@ -76,9 +75,9 @@ class Grow(Move):
     
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
-        node_id = generator.choice(tree.leaves)
+        node_id = fast_choice(generator, tree.leaves)
         var = generator.integers(tree.dataX.shape[1])
-        threshold = generator.choice(self.possible_thresholds[var])
+        threshold = fast_choice(generator, self.possible_thresholds[var])
         n_leaves = tree.n_leaves
         success = tree.split_leaf(node_id, var, threshold)
         n_splits = len(tree.terminal_split_nodes)
@@ -100,7 +99,7 @@ class Prune(Move):
 
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
-        node_id = generator.choice(tree.terminal_split_nodes)
+        node_id = fast_choice(generator, tree.terminal_split_nodes)
         n_splits = len(tree.terminal_split_nodes)
         tree.prune_split(node_id)
         n_leaves = tree.n_leaves
@@ -124,9 +123,10 @@ class Change(Move):
     
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
-        node_id = generator.choice(tree.split_nodes)
+        node_id = fast_choice(generator, tree.split_nodes)
         var = generator.integers(tree.dataX.shape[1])
-        threshold = generator.choice(self.possible_thresholds[var])
+        threshold = fast_choice(generator, self.possible_thresholds[var])
+        
         success = tree.change_split(node_id, var, threshold)
         return success
 
@@ -145,7 +145,7 @@ class Swap(Move):
 
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
-        parent_id = generator.choice(tree.nonterminal_split_nodes)
+        parent_id = fast_choice(generator, tree.nonterminal_split_nodes)
         lr = generator.integers(1, 3) # Choice of left/right child
         child_id = 2 * parent_id + lr
         if tree.vars[child_id] == -1: # Change to the other child if this is a leaf
