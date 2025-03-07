@@ -5,11 +5,81 @@ from scipy.stats import invgamma, chi2, gamma
 from scipy.linalg import sqrtm
 from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
+from numba import njit, jit
 
 from .params import Tree, Parameters
 from .moves import Move
 from .moves import Break, Combine
 from .util import Dataset
+
+# Standalone Numba-optimized functions
+@njit
+def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, random_normal_p):
+    """
+    Numba-optimized function to resample leaf values.
+    """
+    p = leaf_basis.shape[1]
+    # Explicitly convert boolean array to float64
+    num_lbs = leaf_basis.astype(np.float64)
+    post_cov = np.linalg.inv(num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2)
+    post_mean = post_cov @ num_lbs.T @ residuals / eps_sigma2
+    
+    leaf_params_new = np.sqrt(np.diag(post_cov)) * random_normal_p + post_mean
+    return leaf_params_new
+
+@njit
+def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
+    """
+    Numba-optimized function to calculate log marginal likelihood.
+    """
+    # Explicitly convert boolean array to float64
+    leaf_basis_float = leaf_basis.astype(np.float64)
+    
+    # Now use the float64 array with SVD
+    U, S, _ = np.linalg.svd(leaf_basis_float, full_matrices=False)
+    noise_ratio = eps_sigma2 / f_sigma2
+    logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
+    resid_u_coefs = U.T @ resids
+    resids_u = U @ resid_u_coefs
+    ls_resids = np.sum((resids - resids_u) ** 2)
+    ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / noise_ratio + 1))
+    return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
+
+@njit
+def _trees_log_prior_numba(tree_vars, alpha, beta):
+    """
+    Numba-optimized function to calculate log prior probability of a tree.
+    
+    Parameters:
+    -----------
+    tree_vars : numpy.ndarray
+        An array of variables used for splitting at each node.
+    alpha : float
+        Alpha parameter for the tree prior.
+    beta : float
+        Beta parameter for the tree prior.
+        
+    Returns:
+    --------
+    float
+        The log prior probability of the tree.
+    """
+    # Calculate depth for each node
+    d = np.ceil(np.log2(np.arange(len(tree_vars)) + 2)) - 1
+    # Calculate log probability of split
+    log_p_split = np.log(alpha) - beta * np.log(1 + d)
+    
+    # Use loops instead of vectorized operations for better performance with Numba
+    #   and better readability
+    log_prior = 0.0
+    for i in range(len(tree_vars)):
+        if tree_vars[i] == -1:  # Leaf node
+            log_prior += np.log(1 - np.exp(log_p_split[i]))
+        elif tree_vars[i] != -2:  # Split node (not leaf and not empty)
+            log_prior += log_p_split[i]
+    
+    return log_prior
+
 class TreesPrior:
     """
     Prior for tree structure and leaf values.
@@ -52,21 +122,14 @@ class TreesPrior:
         """
         residuals = data_y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
-        # Assuming tree_ids only contain one tree, 
-        # leaf_basis is an n×p binary (0–1) indicator matrix, 
-        # with each row having exactly one 1 (leaf assignment).
-        # num_lbs.T @ num_lbs yields a diagonal matrix with counts per leaf
-        # Similarly, num_lbs.T @ residuals sums residuals per leaf
-
-        p = leaf_basis.shape[1]
-        # leaf_basis should be a numerical type to avoid loss of information
-        num_lbs = leaf_basis.astype(np.float64)
-        post_cov = np.linalg.inv(num_lbs.T @ num_lbs / 
-                                 bart_params.global_params["eps_sigma2"] +
-                                 np.eye(p) / self.f_sigma2)
-        post_mean = post_cov @ num_lbs.T @ residuals / \
-            bart_params.global_params["eps_sigma2"]
-        leaf_params_new = sqrtm(post_cov) @ self.generator.standard_normal(p) + post_mean
+        
+        leaf_params_new = _resample_leaf_vals_numba(
+            leaf_basis, 
+            residuals, 
+            eps_sigma2 = bart_params.global_params["eps_sigma2"], 
+            f_sigma2 = self.f_sigma2,
+            random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1])
+        )
         return leaf_params_new
 
     def trees_log_prior(self, bart_params : Parameters, tree_ids):
@@ -89,12 +152,7 @@ class TreesPrior:
         log_prior = 0
         for tree_id in tree_ids:
             tree = bart_params.trees[tree_id]
-            d = np.ceil(np.log2(np.arange(len(tree.vars)) + 2)) - 1
-            log_p_split = np.log(self.alpha) - self.beta * np.log(1 + d)
-            log_probs = np.where(tree.vars == -1, np.log(1 - np.exp(log_p_split)), 
-                                 log_p_split)
-            is_non_empty = np.where(tree.vars != -2)[0]
-            log_prior += np.sum(log_probs[is_non_empty])
+            log_prior += _trees_log_prior_numba(tree.vars, self.alpha, self.beta)
         return log_prior
     
     def trees_log_prior_ratio(self, move : Move):
@@ -325,15 +383,14 @@ class BARTLikelihood:
         """
         resids = data_y - bart_params.evaluate(all_except=tree_ids)
         leaf_basis = bart_params.leaf_basis(tree_ids)
-        U, S, _ = np.linalg.svd(leaf_basis, full_matrices=False) # Fix shape issue
-        noise_ratio = bart_params.global_params["eps_sigma2"] / self.f_sigma2
-        logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
-        resid_u_coefs = U.T @ resids
-        resids_u = U @ resid_u_coefs
-        ls_resids = np.sum((resids - resids_u) ** 2)
-        ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / noise_ratio + 1))
-        return - (logdet + (ls_resids + ridge_bias) / 
-                  bart_params.global_params["eps_sigma2"]) / 2
+        
+        # Use the standalone numba function instead
+        return _trees_log_marginal_lkhd_numba(
+            leaf_basis, 
+            resids, 
+            bart_params.global_params["eps_sigma2"], 
+            self.f_sigma2
+        )
 
     def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, marginalize: bool=False):
         """
