@@ -3,3 +3,6 @@
 .venv
 notebooks/*.dot
 notebooks/*.prof
+.idea
+.vscode
+
