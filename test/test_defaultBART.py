@@ -14,7 +14,6 @@ class TestDefaultBART(unittest.TestCase):
         self.generator = DataGenerator(n_samples=50, n_features=2, noise=0.1, random_seed=42)
         self.X, self.y = self.generator.generate(scenario="piecewise_linear")
   
-
         # Initialize the DefaultBART with a preprocessor
         self.preprocessor = DefaultPreprocessor(max_bins=10)
         self.preprocessor.fit(self.X, self.y)

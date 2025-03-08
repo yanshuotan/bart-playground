@@ -16,16 +16,18 @@ class TestMoves(unittest.TestCase):
  
         self.generator = DataGenerator(n_samples=100, n_features=3, noise=0.1, random_seed=42)
         self.X, self.y = self.generator.generate(scenario="linear")
-        self.thresholds = self.X # Use all covariate values as potential thresholds
+
+        from bart_playground.util import DefaultPreprocessor
+        self.thresholds = DefaultPreprocessor.test_thresholds(self.X) # Use all covariate values as potential thresholds
 
         # Create dataset and parameters
-        self.dataset = Dataset(self.X, self.y, self.thresholds)
-        self.trees = [Tree(data=self.dataset) for _ in range(5)]
+        self.dataset = Dataset(self.X, self.y)
+        self.trees = [Tree.new(dataX=self.dataset.X) for _ in range(5)]
         self.params = Parameters(self.trees, None, self.dataset)
         self.rng = np.random.default_rng()
 
     def test_grow_move(self):
-        move = Grow(self.params, trees_changed=[0])
+        move = Grow(self.params, trees_changed=[0], possible_thresholds=self.thresholds)
         move.propose(self.rng)
         self.assertTrue(move.proposed.trees[0].is_split_node(0), "Grow move should create a split node.")
 
@@ -41,7 +43,7 @@ class TestMoves(unittest.TestCase):
         # Simulate an initial split
         self.params.trees[0].split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=-1.0)
 
-        move = Change(self.params, trees_changed=[0])
+        move = Change(self.params, trees_changed=[0], possible_thresholds=self.thresholds)
         move.propose(self.rng)
         self.assertNotEqual(move.proposed.trees[0].thresholds[0], 0.5, "Change move should modify the split threshold.")
 

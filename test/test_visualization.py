@@ -2,25 +2,23 @@ import unittest
 import os
 import numpy as np
 from graphviz import Digraph
-from bart_playground import visualize_tree  # Replace with the correct filename
+from bart_playground import visualize_tree
+from bart_playground import Tree
+from bart_playground import Dataset
 
-class TreeStructure:
-    def __init__(self):
-        self.vars = np.array([0, -1, 1, -2, -2, -1, -1], dtype=int)
-        self.thresholds = np.array([0.5, np.nan, 0.7, np.nan, np.nan, np.nan, np.nan])
-
-class TreeParams:
-    def __init__(self):
-        self.leaf_vals = np.array([np.nan, 1.0, np.nan, np.nan, np.nan, 2.0, -2.0])
 
 class TestVisualizeTree(unittest.TestCase):
     def setUp(self):
-        self.tree_structure = TreeStructure()
-        self.tree_params = TreeParams()
+        X, y = np.random.rand(100, 5), np.random.rand(100)
+        dataset = Dataset(X, y, None)
+        self.tree = Tree(data=dataset)
+        self.tree.vars = np.array([0, 1, -1, -1, -1, -2, -2, -2], dtype=int)
+        self.tree.thresholds = np.array([0.5, 0.7, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
+        self.tree.leaf_vals = np.array([np.nan, np.nan, -1.0, 1.0, 2.0, np.nan, np.nan, np.nan])
         self.filename = "test/test_tree"
 
     def test_visualize_tree(self):
-        dot = visualize_tree(self.tree_structure, self.tree_params, filename=self.filename, format="png")
+        dot = visualize_tree(self.tree, filename=self.filename, format="png")
         self.assertIsInstance(dot, Digraph, "The returned object should be a Digraph instance.")
         expected_filepath = f"{self.filename}.png"
         dot.render(self.filename, format="png")
