@@ -14,12 +14,11 @@ class TestDefaultBART(unittest.TestCase):
         self.generator = DataGenerator(n_samples=200, n_features=2, noise=0.1, random_seed=42)
         self.X, self.y = self.generator.generate(scenario="piecewise_linear")
   
-
         # Initialize the DefaultBART with a preprocessor
         self.preprocessor = DefaultPreprocessor(max_bins=10)
         self.preprocessor.fit(self.X, self.y)
-        self.bart = DefaultBART()
-
+        self.bart = DefaultBART(ndpost=200)
+        
     def test_initialization(self):
         self.assertIsNotNone(self.bart.preprocessor, "DefaultBART should have a preprocessor.")
         self.assertIsNotNone(self.bart.sampler, "DefaultBART should have a sampler.")

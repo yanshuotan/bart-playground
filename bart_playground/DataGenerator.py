@@ -26,7 +26,9 @@ class DataGenerator:
         """Add Gaussian noise to target values, do we want to consider other kinds of heavy-tailed noise?"""
         return y + self.rng.normal(0, self.noise, size=len(y))
 
-    def generate(self, scenario="linear", **kwargs):
+
+    def generate(self, scenario:str="linear", **kwargs) -> tuple:
+
         """
         Generate data for a specific scenario.
 
@@ -38,7 +40,10 @@ class DataGenerator:
         """
         func = getattr(self, scenario, None)
         if callable(func):
-            return func(**kwargs)
+            result = func(**kwargs)
+            if not isinstance(result, tuple):
+                raise TypeError(f"Expected tuple return from {scenario}, got {type(result)}")
+            return result
         else:
             raise NotImplementedError(f"No such a scenario supported.")
 
@@ -186,7 +191,7 @@ class DataGenerator:
             self.noise = params["noise"]
 
             for scenario in scenarios:
-                data = self.generate(scenario)
+                data : tuple = self.generate(scenario)
                 if isinstance(data, dict):  # Handle scenarios with multiple cases
                     for key, (X, y) in data.items():
                         if scenario == "distribution_shift":  # Special handling for train/test split

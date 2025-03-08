@@ -1,10 +1,10 @@
 import numpy as np
 
-from .samplers import Sampler, DefaultSampler, default_proposal_probs, NtreeSampler
-from .priors import Prior, DefaultPrior, NTreePrior
+from .samplers import Sampler, DefaultSampler, default_proposal_probs, NTreeSampler
+from .priors import *
+from .priors import *
 from .util import Preprocessor, DefaultPreprocessor
-
-
+from .params import Tree, Parameters
 class BART:
     """
     API for the BART model.
@@ -19,15 +19,58 @@ class BART:
         self.ndpost = ndpost
         self.nskip = nskip
         self.trace = []
+        self.is_fitted = False
+        self.data = None
 
-    def fit(self, X, y):
+    def fit(self, X, y, quietly = False):
         """
         Fit the BART model.
         """
-        data = self.preprocessor.fit_transform(X, y)
-        self.sampler.prior.fit(data)
-        self.sampler.add_data(data)
-        self.trace = self.sampler.run(self.ndpost + self.nskip)
+        self.data = self.preprocessor.fit_transform(X, y)
+        self.sampler.add_data(self.data)
+        self.sampler.add_thresholds(self.preprocessor.thresholds)
+        self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly)
+        self.is_fitted = True
+    
+    def update_fit(self, X, y, add_ndpost=20, add_nskip=10, quietly=False):
+        """
+        Update an existing fitted model with new data points.
+        
+        Parameters:
+            X: New feature data to add
+            y: New target data to add
+            add_ndpost: Number of posterior samples to draw
+            add_nskip: Number of burn-in iterations to skip
+            quietly: Whether to suppress output
+            
+        Returns:
+            self
+        """
+        if not self.is_fitted or self.data is None or self.data.n <= 10:
+            # If not fitted yet, or data is empty, or not enough data, just do a regular fit
+            X_combined = np.vstack((self.data.X, X))
+            y_combined = np.hstack((self.data.y, y))
+            self.fit(X_combined, y_combined, quietly=quietly)
+            return self
+            
+        additional_iters = add_ndpost + add_nskip
+        # Set all previous iterations + add_nskip as burn-in
+        self.nskip += self.ndpost + add_nskip
+        # Set new add_ndpost iterations as post-burn-in
+        self.ndpost = add_ndpost
+        
+        # Update the dataset using the appropriate preprocessor method
+        self.data = self.preprocessor.update_transform(X, y, self.data)
+            
+        # Update thresholds 
+        # if needed TODO
+        self.sampler.add_thresholds(self.preprocessor.thresholds)
+        
+        # Run the sampler for additional iterations
+        new_trace = self.sampler.continue_run(additional_iters, new_data=self.data, quietly=quietly)
+        self.trace = self.trace + new_trace[1:]
+        
+        return self
 
     def posterior_f(self, X):
         """
@@ -35,8 +78,10 @@ class BART:
         """
         preds = np.zeros((X.shape[0], self.ndpost))
         for k in range(self.ndpost):
-            preds[:, k] = self.preprocessor.backtransform_y(
-                self.sampler.trace[self.nskip + k].evaluate(X))
+
+            y_eval = self.trace[self.nskip + k + 1].evaluate(X)
+            preds[:, k] = self.preprocessor.backtransform_y(y_eval)
+
         return preds
     
     def predict(self, X):
@@ -54,22 +99,26 @@ class DefaultBART(BART):
                  random_state=42):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
-        prior = DefaultPrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
+
+        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
+
                              eps_nu, specification, rng)
         sampler = DefaultSampler(prior = prior, proposal_probs = proposal_probs, generator = rng, tol = tol)
         super().__init__(preprocessor, sampler, ndpost, nskip)
+
 
 class ChangeNumTreeBART(BART):
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
-                 ntreedf = 100, ntreemean = 200,
-                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
+                 theta_0 = 200, theta_df = 100, tau_k = 2.0,
+                 proposal_probs=default_proposal_probs, break_prob: float=0.5, tol=100, max_bins=100,
                  random_state=42):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
-        prior = NTreePrior(n_trees, tree_alpha, tree_beta, f_k, ntreemean, ntreedf, eps_q, 
-                             eps_nu, specification, rng)
-        sampler = NtreeSampler(prior = prior, proposal_probs = proposal_probs, generator = rng, tol = tol)
+        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
+                             eps_nu, specification, rng, theta_0, theta_df, tau_k)
+        sampler = NTreeSampler(prior = prior, proposal_probs = proposal_probs, break_prob = break_prob, generator = rng, tol = tol)
         super().__init__(preprocessor, sampler, ndpost, nskip)
+
