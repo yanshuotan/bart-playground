@@ -61,14 +61,15 @@ class LinearOffsetScenario(Scenario):
 class OffsetScenario(Scenario):
     def __init__(self, P, K, sigma2, lambda_val=3):
         super().__init__(P, K, sigma2)
-        
         # Uniformly distributed covariates in unit cube
-        self.mu = np.random.uniform(-1, 1, size=P)
+        self.mu = np.random.uniform(-1, 1, size=(1, P))
         self.lambda_val = lambda_val
+        # Generate a K x 1 matrix of arm-specific offsets uniformly between -5 and 5.
+        self.arm_offsets = np.random.uniform(-5, 5, size=K)
     
     def reward_function(self, x):
         epsilon_t = np.random.normal(0, np.sqrt(self.sigma2), size=self.K)
-        outcome_mean = 10 * np.sum(x*x) + self.lambda_val * np.arange(1, self.K+1)
+        outcome_mean = 10 * np.sin(self.mu.dot(x)) + self.lambda_val * self.arm_offsets
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
 class FriedmanScenario(Scenario):
