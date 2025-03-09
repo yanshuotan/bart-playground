@@ -9,10 +9,4 @@ scripts/
 .hydra/hydra.yaml
 .DS_Store
 *.log
-
-.vscode/*
-.idea/*
-.cursor/*
-
-benchmarks/*.csv
-*.pkl
+notebooks/bandit/results

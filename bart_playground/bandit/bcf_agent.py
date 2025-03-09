@@ -11,7 +11,7 @@ class BCFAgent(BanditAgent):
     def __init__(self, n_arms: int, n_features: int, 
                  ndpost: int = 1000, nskip: int = 100, nadd = 3,
                  n_mu_trees: int = 200, n_tau_trees: Optional[List[int]] = None,
-                 random_state: int = 42, nbatch: int = 1) -> None:
+                 random_state: int = 42, nbatch: int = 1, ps_on = True) -> None:
         """
         Initialize the BCF-based bandit agent.
         
@@ -60,33 +60,23 @@ class BCFAgent(BanditAgent):
         self.nbatch = max(1, nbatch)  # Ensure at least batch size 1
         self.batch_start_idx = 0  # Track the starting index of current batch
 
+        self.ps_on = ps_on
+        self.cnt = 0  # Counter for number of data
+
     @property
     def n_treat_arms(self) -> int:
         '''
         Number of treatment arms (excluding control arm).
         '''
         return self.n_arms - 1
-
-    def choose_arm(self, x: Union[np.ndarray, List[float]], 
-                   thompson_sampling: bool = True) -> int:
+    
+    def _get_action_estimates(self, x: Union[np.ndarray, List[float]],
+                              thompson_sampling: bool = True) -> np.ndarray:
         """
-        Choose an arm based on input features x using the BCF model.
-        
-        Parameters:
-            x (array-like): Feature vector for which to choose an arm
-            binary (bool): Whether the outcome is binary (not used in this implementation)
-            thompson_sampling (bool): Whether to use Thompson sampling
-                                     (if False, uses expected value)
-            
-        Returns:
-            int: The index of the selected arm
+        Get action estimates for all arms based on input features x.
         """
         # Ensure x is a 2D array with one row
         x = np.array(x).reshape(1, -1)
-        
-        # If the model is not fitted yet, choose a random arm
-        if not self.is_model_fitted:
-            return np.random.randint(self.n_arms)
 
         # Create treatment scenarios - one-hot encoded treatment options
         #   with shape (n_arms, n_treat_arms) 
@@ -105,13 +95,44 @@ class BCFAgent(BanditAgent):
             
             # Sample one random draw from the posterior for each arm
             sample_idx = np.random.randint(post_y.shape[1])
-            utility_estimates = post_y[:, sample_idx]
+            action_estimates = post_y[:, sample_idx]
         else:
             # Use expected value (posterior mean)
-            utility_estimates = self.model.predict(x_repeated, treatment_options)
+            action_estimates = self.model.predict(x_repeated, treatment_options)
+
+        return action_estimates
+
+    def choose_arm(self, x: Union[np.ndarray, List[float]], 
+                   thompson_sampling: bool = True) -> int:
+        """
+        Choose an arm based on input features x using the BCF model.
+        
+        Parameters:
+            x (array-like): Feature vector for which to choose an arm
+            binary (bool): Whether the outcome is binary (not used in this implementation)
+            thompson_sampling (bool): Whether to use Thompson sampling
+                                     (if False, uses expected value)
+            
+        Returns:
+            int: The index of the selected arm
+        """
+        # If the model is not fitted yet, choose a random arm
+        if not self.is_model_fitted:
+            return np.random.randint(self.n_arms)
+        
+        action_estimates = self._get_action_estimates(x, thompson_sampling)
         
         # Choose the arm with the highest predicted outcome
-        return int(np.argmax(utility_estimates))
+        return int(np.argmax(action_estimates))
+    
+    def _clear_internal_data(self) -> None:
+        """
+        Clear internal data arrays after model update.
+        """
+        self.features = np.empty((0, self.n_features))
+        self.outcomes = np.empty((0, 1))    
+        self.treatments = np.empty((0, self.n_treat_arms))
+        self.batch_start_idx = 0  # Reset batch index since we cleared arrays
     
     def update_state(self, arm: int, x: Union[np.ndarray, List[float]], 
                      y: Union[float, np.ndarray]) -> "BCFAgent":
@@ -139,22 +160,21 @@ class BCFAgent(BanditAgent):
         self.features = np.vstack([self.features, x])
         self.outcomes = np.vstack([self.outcomes, y.reshape(-1, 1)])
         self.treatments = np.vstack([self.treatments, z])
+        self.cnt += 1
         
         # Calculate current batch size
         current_batch_size = self.features.shape[0] - self.batch_start_idx
-        
-        # Check if we have enough data to update
-        should_update = False
         
         # Check if we have at least one sample for each treatment arm and one control sample
         has_all_treatments = not np.any(np.sum(self.treatments, axis=0) == 0)  # All arms have samples
         has_control = np.any(np.sum(self.treatments, axis=1) == 0)  # At least one control sample
         
         # We need enough samples overall and a complete batch
-        if has_all_treatments and has_control and self.features.shape[0] >= 20:
+        should_update = False
+        if has_all_treatments and has_control and self.cnt >= 20:
             if current_batch_size >= self.nbatch:
                 should_update = True
-        
+                
         if not should_update:
             return self
         
@@ -165,26 +185,28 @@ class BCFAgent(BanditAgent):
                 X=self.features, 
                 y=self.outcomes.flatten(), 
                 Z=self.treatments,
-                quietly=True
+                quietly=True,
+                ps=self.ps_on
             )
             self.is_model_fitted = True
-        else:
-            # Get the current batch data using slicing
-            batch_features = self.features[self.batch_start_idx:]
-            batch_outcomes = self.outcomes[self.batch_start_idx:]
-            batch_treatments = self.treatments[self.batch_start_idx:]
             
-            # Efficiently update the model with new batch data
+            # Clear all data after initial fit since we don't need it anymore
+            self._clear_internal_data()
+        else:
+            # For updates, all current data is batch data since we reset after each update
             self.model.update_fit(
-                X=batch_features, 
-                y=batch_outcomes.flatten(), 
-                Z=batch_treatments,
+                X=self.features, 
+                y=self.outcomes.flatten(), 
+                Z=self.treatments,
                 add_ndpost=self.nadd,
                 add_nskip=0,
-                quietly=True
+                quietly=True,
+                ps=self.ps_on
             )
-        
-        # Update batch start index for next batch
-        self.batch_start_idx = self.features.shape[0]
+            self._clear_internal_data()
         
         return self
+
+from functools import partial
+
+BCFAgentPSOff = partial(BCFAgent, ps_on = False)
