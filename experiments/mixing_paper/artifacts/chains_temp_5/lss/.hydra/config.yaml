@@ -1,0 +1,30 @@
+sample_sizes:
+- 1000
+- 10000
+- 20000
+- 50000
+- 100000
+n_chains_range:
+- 1
+- 2
+- 5
+- 10
+dgp: lss
+n_reps: 10
+dgp_params:
+  noise: 0.1
+  n_samples: 10000
+  n_features: 10
+bart_params:
+  proposal_probs:
+    grow: 0.25
+    prune: 0.25
+    change: 0.1
+    swap: 0.4
+  n_chains: 1
+  ndpost: 100
+  nskip: 5000
+  alpha: 0.05
+  n_trees: 200
+  temperature: 1.0
+artifacts_dir: ./
