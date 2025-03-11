@@ -99,7 +99,7 @@ class DefaultBART(BART):
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
                              eps_nu, specification, rng)
-        sampler = DefaultSampler(prior = prior, proposal_probs = proposal_probs, generator = rng, tol = tol)
+        sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol)
         super().__init__(preprocessor, sampler, ndpost, nskip)
 
 
