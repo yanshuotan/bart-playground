@@ -278,11 +278,16 @@ class NTreeSampler(Sampler):
     
     def log_mh_ratio(self, move : Move, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
-        return self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
-            self.tree_num_prior.tree_num_log_prior_ratio(move) + \
-            move.log_tran_ratio + \
-            self.leaf_val_prior.leaf_vals_log_prior_ratio(move)
+        if isinstance(move, (Break, Combine)):
+            return self.tree_prior.trees_log_prior_ratio(move) + \
+                self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
+                self.tree_num_prior.tree_num_log_prior_ratio(move) + \
+                self.leaf_val_prior.leaf_vals_log_prior_ratio(move) + \
+                move.log_tran_ratio
+        else:
+            return self.tree_prior.trees_log_prior_ratio(move) + \
+                self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
+                move.log_tran_ratio
 
     def one_iter(self, current, temp, return_trace=False):
         """
@@ -297,32 +302,34 @@ class NTreeSampler(Sampler):
             break_id = [self.generator.choice(np.arange(0,self.tree_prior.n_trees))]
             move = Break(iter_current, break_id, self.tol)   
             if move.propose(self.generator):
+                move.proposed.update_tree_num()
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     print(move)
-                    print(np.exp(temp * self.log_mh_ratio(move)))
+                    print(f'Total ratio: {np.exp(temp * self.log_mh_ratio(move))}')
+                    print(f'Transition ratio: {np.exp(move.log_tran_ratio)}')
                     self.tree_prior.n_trees = self.tree_prior.n_trees + 1
                     new_leaf_vals_remain = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = break_id)
                     new_leaf_vals_new = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [-1])
                     move.proposed.update_leaf_vals(break_id, new_leaf_vals_remain)
                     move.proposed.update_leaf_vals([-1], new_leaf_vals_new)
-                    move.proposed.update_tree_num()
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
         
-        else: # Combine move 
+        elif self.tree_prior.n_trees > 1:  # Combine move
             combine_ids = self.generator.choice(np.arange(0,self.tree_prior.n_trees),size=2, replace=False)
             combine_position = combine_ids[0] if combine_ids[0] < combine_ids[1] else combine_ids[0] - 1
             move = Combine(iter_current, combine_ids, self.tol)   
             if move.propose(self.generator):
+                move.proposed.update_tree_num()
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     print(move)
-                    print(np.exp(temp * self.log_mh_ratio(move)))
+                    print(f'Total ratio: {np.exp(temp * self.log_mh_ratio(move))}')
+                    print(f'Transition ratio: {np.exp(move.log_tran_ratio)}')
                     self.tree_prior.n_trees = self.tree_prior.n_trees - 1
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [combine_position])
                     move.proposed.update_leaf_vals([combine_position], new_leaf_vals)
-                    move.proposed.update_tree_num()
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
 
