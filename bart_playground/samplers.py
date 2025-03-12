@@ -307,6 +307,7 @@ class NTreeSampler(Sampler):
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     print(move)
                     print(f'Total ratio: {np.exp(temp * self.log_mh_ratio(move))}')
+                    print(f'Tree prior ratio: {np.exp(self.tree_prior.trees_log_prior_ratio(move))}')
                     print(f'Transition ratio: {np.exp(move.log_tran_ratio)}')
                     self.tree_prior.n_trees = self.tree_prior.n_trees + 1
                     new_leaf_vals_remain = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = break_id)
@@ -326,6 +327,7 @@ class NTreeSampler(Sampler):
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     print(move)
                     print(f'Total ratio: {np.exp(temp * self.log_mh_ratio(move))}')
+                    print(f'Tree prior ratio: {np.exp(self.tree_prior.trees_log_prior_ratio(move))}')
                     print(f'Transition ratio: {np.exp(move.log_tran_ratio)}')
                     self.tree_prior.n_trees = self.tree_prior.n_trees - 1
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [combine_position])
