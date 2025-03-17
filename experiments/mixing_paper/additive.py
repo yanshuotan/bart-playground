@@ -14,6 +14,8 @@ from omegaconf import DictConfig, OmegaConf
 
 from sklearn.model_selection import train_test_split
 
+from experiments import LOGGER
+
 from bart_playground import DataGenerator
 from bart_playground.bart import DefaultBART
 
@@ -74,12 +76,13 @@ def get_bart_rmse_and_coverage(X, y, params):
     upper_bound = np.quantile(preds_chains, upper_quantile, axis=(1, 2))
     
     coverage = np.mean((y_test >= lower_bound) & (y_test <= upper_bound))
-    return rmse, coverage
+    return [rmse, coverage]
 
 def _convert_results_to_df(results):
     data = {}
     for sample_size, _results in results.items():
-        for setup_str, (rmse, coverage) in _results.items():
+        for setup_str, r in _results.items():
+            rmse, coverage = r[0], r[1]
             n_trees = int(setup_str.split("_")[1])
             dgp = setup_str.split("_")[-1]
             new_str = f"s_{sample_size}_t_{n_trees}_dgp_{dgp}"
@@ -93,7 +96,7 @@ def run_main_experiment(cfg: DictConfig):
     dgp_params = cfg.dgp_params
     bart_params = cfg.bart_params
     temperature = cfg.bart_params.temperature
-    artifacts_dir = os.path.join(cfg.artifacts_dir, f"temperature_{temperature}")
+    artifacts_dir = os.path.join(cfg.artifacts_dir, dgp, f"temperature_{temperature}")
     os.makedirs(artifacts_dir, exist_ok=True)
     results = {s: {} for s in sample_sizes}
     for sample_size in sample_sizes:
@@ -101,9 +104,10 @@ def run_main_experiment(cfg: DictConfig):
         os.makedirs(sample_size_dir, exist_ok=True)
         results_yaml_file = os.path.join(sample_size_dir, "results.yaml")
         if os.path.exists(results_yaml_file):
+            # LOGGER.info(f"Loading results from {results_yaml_file}")
             with open(results_yaml_file, "r") as f:
-                results = yaml.load(f)
-                results[sample_size] = results
+                _results  = yaml.safe_load(f)
+                results[sample_size] = _results
                 continue
         _results = {}
         for n_trees in tqdm(n_trees_range, desc="Running Number of Trees"):
@@ -117,11 +121,12 @@ def run_main_experiment(cfg: DictConfig):
             rmse, coverage = get_bart_rmse_and_coverage(X, y, bart_params)
             
             setup_str = f"t_{n_trees}_dgp_{dgp}"
-            _results[setup_str] = (rmse, coverage)
+            _results[setup_str] = {"rmse": float(rmse), "coverage": float(coverage)}
         results[sample_size] = _results
         # Save the results to a YAML file.
         with open(results_yaml_file, "w") as f:
             yaml.dump(_results, f)
+    # LOGGER.info(f"Results: {results}")
     data_df = _convert_results_to_df(results)
     return data_df
 
@@ -129,27 +134,30 @@ def run_and_analyze(cfg: DictConfig):
     artifacts_dir = cfg.artifacts_dir
     os.makedirs(artifacts_dir, exist_ok=True)
 
-    results_file = os.path.join(artifacts_dir, "results.csv")
+    results_file = os.path.join(artifacts_dir, cfg.dgp, f"temperature_{cfg.bart_params.temperature}", "results.csv")
 
     # Load existing results if available.
     if os.path.exists(results_file):
         data = pd.read_csv(results_file, index_col=0)
         data = data.to_dict(orient="index")
     else:
-        data = run_main_experiment(cfg)
+        data = run_main_experiment(cfg).to_dict(orient="index")
         # Convert dictionary to DataFrame for saving.
-        data_df = pd.DataFrame.from_dict(data, orient="index", columns=["rmse", "coverage"])
+        data_df = pd.DataFrame(data, columns=["rmse", "coverage"])
+        # LOGGER.info(f"Saving results to {results_file}")
+        # raise ValueError("Stop here")
         data_df.to_csv(results_file)
 
+    # LOGGER.info(f"Data:\n{data}")
     # Create plots for RMSE and Coverage.
     def _make_plot(quantity, filename):
         fig, ax = plt.subplots()
-        idx = 0 if quantity == "RMSE" else 1
+        idx = "rmse" if quantity == "RMSE" else "coverage"
         # I want a range of blues for the different sample sizes.
         colors = plt.cm.Blues(np.linspace(0.3, 1, len(cfg.sample_sizes)))
         for i, sample_size in enumerate(cfg.sample_sizes):
             values = [
-                data[f"s_{sample_size}_t_{n_trees}_dgp_{cfg.dgp}"][idx]
+                data[f"s_{sample_size}_t_{n_trees}_dgp_additive"][idx]
                 for n_trees in cfg.n_trees_range
             ]
             n_ks = int(sample_size / 1000)
@@ -159,7 +167,7 @@ def run_and_analyze(cfg: DictConfig):
         ax.set_ylabel(quantity)
         ax.legend()
         plt.tight_layout()
-        plt.savefig(os.path.join(artifacts_dir, filename))
+        plt.savefig(os.path.join(artifacts_dir, cfg.dgp, f"temperature_{cfg.bart_params.temperature}", filename))
         plt.close()
 
     _make_plot("RMSE", "rmse_plot.png")

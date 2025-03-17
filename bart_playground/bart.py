@@ -99,12 +99,13 @@ class DefaultBART(BART):
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
                              eps_nu, specification, rng)
-        if type(temperature) == float:
+        is_temperature_number = type(temperature) in [float, int]
+        if is_temperature_number:
             temp_func = lambda x: temperature
             temp_schedule = TemperatureSchedule(temp_func)
         elif type(temperature) == TemperatureSchedule:
             temp_schedule = temperature
         else:
-            raise ValueError("Invalid temperature type")
+            raise ValueError("Invalid temperature type ", type(temperature))
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)

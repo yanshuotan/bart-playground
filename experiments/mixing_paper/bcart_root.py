@@ -1,6 +1,6 @@
 import os
 import hydra
-
+import logging
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -11,10 +11,13 @@ from omegaconf import DictConfig, OmegaConf
 
 from sklearn.model_selection import train_test_split
 
+from experiments import LOGGER
+
 from bart_playground import DataGenerator
 from bart_playground.bart import DefaultBART
 
 FS = 16
+logging.basicConfig(level=logging.INFO)
 
 # set seaborn stype for an academic paper
 sns.set_context("paper")
@@ -96,10 +99,11 @@ def run_main_experiment(cfg: DictConfig):
     return results
 
 def run_and_analyze(cfg: DictConfig):
-    artifacts_dir = cfg.artifacts_dir
+    artifacts_dir = os.path.join(cfg.artifacts_dir, f"temperature_{cfg.bart_params.temperature}", cfg.dgp)
+
     os.makedirs(artifacts_dir, exist_ok=True)
     results_file = os.path.join(artifacts_dir, "results.yaml")
-
+    LOGGER.info(f"Results file: {results_file}")
     # Load existing results if available.
     if os.path.exists(results_file):
         data = OmegaConf.load(results_file)
@@ -113,14 +117,15 @@ def run_and_analyze(cfg: DictConfig):
         # do a histogram of the number of changes in the first split
         # change to integer
         changes_in_first_split = [int(x) for x in data["changes_in_first_split"][str(sample_size)]]
-        sns.histplot(changes_in_first_split, label=f"{sample_size} samples", color=colors[i])
+        # iwant to truncate the histogram to be beween 0 and 100
+        sns.kdeplot(changes_in_first_split, label=f"{sample_size} samples", color=colors[i], clip=[0, 100])
     ax.legend()
-    plt.savefig(os.path.join(artifacts_dir, "changes_in_first_split_histogram.png"))
+    plt.savefig(os.path.join(artifacts_dir, "changes_in_first_split_density.png"))
     plt.close()
 
     fig, ax = plt.subplots()
     for i, sample_size in enumerate(cfg.sample_sizes):
-        sns.kdeplot(data["pct_correct"][str(sample_size)], label=f"{sample_size} samples", color=colors[i])
+        sns.kdeplot(data["pct_correct"][str(sample_size)], label=f"{sample_size} samples", color=colors[i], clip=[0, 1])
     ax.legend()
     plt.savefig(os.path.join(artifacts_dir, "pct_correct_density.png"))
     plt.close()

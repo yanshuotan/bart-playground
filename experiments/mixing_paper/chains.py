@@ -1,7 +1,7 @@
 import os
 import yaml
 import hydra
-
+import logging
 import numpy as np
 import pandas as pd
 
@@ -13,13 +13,16 @@ from omegaconf import DictConfig, OmegaConf
 
 from sklearn.model_selection import train_test_split
 
+
+from experiments import LOGGER
+
 from bart_playground import DataGenerator
 from bart_playground.bart import DefaultBART
 
 
 # set seaborn stype for an academic paper
 sns.set_context("paper")
-
+logging.basicConfig(level=logging.INFO)
 FS = 16
 
 plt.rcParams.update({
@@ -84,7 +87,7 @@ def run_main_experiment(cfg: DictConfig):
     n_chains_range = cfg.n_chains_range
     results = {sample_size: {} for sample_size in sample_sizes}
     for sample_size in sample_sizes:
-        chains_results = {"rmse": [], "coverage": []}
+        chains_results = {"rmse": {c: [] for c in n_chains_range}, "coverage": {c: [] for c in n_chains_range}}
         for n_chains in n_chains_range:
             coverage_results = []
             rmse_results = []
@@ -94,30 +97,35 @@ def run_main_experiment(cfg: DictConfig):
                 X, y = generator.generate(scenario=dgp)
                 bart_params["n_chains"] = n_chains
                 rmse, coverage = get_bart_rmse_and_coverage(X, y, bart_params)
-                rmse_results.append(rmse)
-                coverage_results.append(coverage)
-            chains_results["rmse"] = rmse_results
-            chains_results["coverage"] = coverage_results
+                rmse_results.append(float(rmse))
+                coverage_results.append(float(coverage))
+            chains_results["rmse"][n_chains] = rmse_results
+            chains_results["coverage"][n_chains] = coverage_results
         results[sample_size] = chains_results
     return results
 
 def run_and_analyze(cfg: DictConfig):
     artifacts_dir = cfg.artifacts_dir
     os.makedirs(artifacts_dir, exist_ok=True)
-    experiment_dir = os.path.join(artifacts_dir, cfg.dgp)   
+    experiment_dir = os.path.join(artifacts_dir, f"temperature_{cfg.bart_params.temperature}", cfg.dgp)   
     os.makedirs(experiment_dir, exist_ok=True)
     results_file = os.path.join(experiment_dir, "results.yaml")
 
     # Load existing results if available.
     if os.path.exists(results_file):
-        results = yaml.load(results_file)
+        LOGGER.info("Loading results from %s", results_file)
+        with open(results_file, "r") as f:
+            results = yaml.load(f, Loader=yaml.SafeLoader)
+        LOGGER.info("Results loaded")
+        LOGGER.info(results)
     else:
         results = run_main_experiment(cfg)
         with open(results_file, "w") as f:
             yaml.dump(results, f)
-
     # make for every number of chains plot of rmse and coverage as a function of sample size
     colors = plt.cm.Blues(np.linspace(0.3, 1, len(cfg.n_chains_range)))
+    LOGGER.info("print results")
+    LOGGER.info(results)
     rmse_vec_one_chain = [results[sample_size][1]["rmse"] for sample_size in cfg.sample_sizes]
     fig, ax = plt.subplots()
     for n_chains, color in zip(cfg.n_chains_range, colors):

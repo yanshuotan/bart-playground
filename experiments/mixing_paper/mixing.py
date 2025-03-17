@@ -1,6 +1,7 @@
 import os
 
 import yaml
+from experiments import LOGGER
 import hydra
 
 import numpy as np
@@ -80,7 +81,7 @@ def run_main_experiment(cfg: DictConfig):
     dgp_params = cfg.dgp_params
     bart_params = cfg.bart_params
     n_reps = cfg.n_reps
-    temperature = cfg.temperature
+    temperature = cfg.bart_params.temperature
 
     artifacts_dir = os.path.join(cfg.artifacts_dir, f"temperature_{temperature}")
     os.makedirs(artifacts_dir, exist_ok=True)
@@ -92,8 +93,9 @@ def run_main_experiment(cfg: DictConfig):
             os.makedirs(sample_size_dir, exist_ok=True)
             results_file = os.path.join(sample_size_dir, "results.yaml")
             if os.path.exists(results_file):
+                # LOGGER.info(f"Loading results from {results_file}")
                 with open(results_file, "r") as f:
-                    data = yaml.load(f)
+                    data = yaml.load(f, Loader=yaml.SafeLoader)
                     results[str(dgp)][str(sample_size)] = data
                     continue
             gr_vec = []
@@ -101,31 +103,30 @@ def run_main_experiment(cfg: DictConfig):
             for rep in tqdm(range(n_reps), desc="Running Repetitions"):
                 generator = DataGenerator(**dgp_params)
                 X, y = generator.generate(scenario=dgp)
-                gr_vec.append(get_gelman_rubin(X, y, bart_params))
+                gr_vec.append(float(get_gelman_rubin(X, y, bart_params)))
             results[str(dgp)][str(sample_size)] = gr_vec
             with open(results_file, "w") as f:
                 yaml.dump(gr_vec, f)
-    return results
+    results_out = {}
+    for dgp in dgps:
+        results_out[str(dgp)] = {s: np.mean(results[str(dgp)][str(s)]) for s in sample_sizes}
+    return results_out
 
 def run_and_analyze(cfg: DictConfig):
     artifacts_dir = cfg.artifacts_dir
-    os.makedirs(artifacts_dir, exist_ok=True)
-    results_file = os.path.join(artifacts_dir, "results.yaml")
 
-    # Load existing results if available.
-    if os.path.exists(results_file):
-        with open(results_file, "r") as f:
-            data = yaml.load(f)
-    else:
-        data = run_main_experiment(cfg)
-        with open(results_file, "w") as f:
-            yaml.dump(data, f)
-
+    results = run_main_experiment(cfg)
+    LOGGER.info(results)
     fig, ax = plt.subplots()
     for dgp in cfg.dgps:
-        sns.lineplot(x=cfg.sample_sizes, y=data[str(dgp)], label=dgp)
+        r_dgp = results[str(dgp)]
+        samples = list(r_dgp.keys())
+        gr_values = list(r_dgp.values())
+        sns.lineplot(x=samples, y=gr_values, label=dgp)
+    ax.set_xlabel("Sample Size")
+    ax.set_ylabel("Gelman-Rubin Statistic")
     ax.legend()
-    plt.savefig(os.path.join(artifacts_dir, "gelman_rubin_density.png"))
+    plt.savefig(os.path.join(artifacts_dir, f"temperature_{cfg.bart_params.temperature}", "gelman_rubin_density.png"))
     plt.close()
 
 @hydra.main(config_path="configs", config_name="mixing")

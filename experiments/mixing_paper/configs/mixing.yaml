@@ -14,7 +14,7 @@ bart_params:
     swap: 0.4
   n_chains: 5
   ndpost: 100
-  nskip: 0
+  nskip: 500
   n_trees: 10  # default; will be overridden in the loop
   temperature: 5.0
 artifacts_dir: "./"
