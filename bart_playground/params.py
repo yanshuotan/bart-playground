@@ -464,6 +464,15 @@ class Tree:
                 queue.append(right_index)
 
                 var_index += 1
+
+        while np.where(self.vars == -1)[0].max() < (half_size := len(self.vars) // 2):
+            # Truncate arrays to the first half
+            self.thresholds = self.thresholds[:half_size]
+            self.vars = self.vars[:half_size]
+            self.leaf_vals = self.leaf_vals[:half_size]
+            self.n = self.n[:half_size]
+            self.node_indicators = self.node_indicators[:, :half_size]
+            
         return self.update_n(node_id)
     
     def update_n(self, node_id=0, X_range=None):
