@@ -486,13 +486,7 @@ class Tree:
 
                 var_index += 1
 
-        while np.where(self.vars == -1)[0].max() < (half_size := len(self.vars) // 2):
-            # Truncate arrays to the first half
-            self.thresholds = self.thresholds[:half_size]
-            self.vars = self.vars[:half_size]
-            self.leaf_vals = self.leaf_vals[:half_size]
-            self.n = self.n[:half_size]
-            self.node_indicators = self.node_indicators[:, :half_size]
+        self._truncate_tree_arrays()
             
         return self.update_n(node_id)
     
