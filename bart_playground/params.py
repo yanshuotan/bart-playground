@@ -250,6 +250,26 @@ class Tree:
             new_node_indicators[:, :old_length] = self.node_indicators
             self.node_indicators = new_node_indicators
 
+    def _truncate_tree_arrays(self):
+        """
+        Recursively trims the tree arrays to remove unnecessary space.
+
+        This method ensures that if the last occurrence of -1 in `self.vars` 
+        appears too early (less than half of the array length), the arrays 
+        are truncated to half their size. The process continues until the 
+        last -1 index is at least in the second half of the array. 
+
+        A minimum size of 2 is enforced to prevent excessive truncation 
+        that could lead to an invalid tree structure.
+        """
+        while len(self.vars) > 2 and np.where(self.vars == -1)[0].max() < (half_size := len(self.vars) // 2):
+            # Truncate arrays to the first half
+            self.thresholds = self.thresholds[:half_size]
+            self.vars = self.vars[:half_size]
+            self.leaf_vals = self.leaf_vals[:half_size]
+            self.n = self.n[:half_size]
+            self.node_indicators = self.node_indicators[:, :half_size]
+
     def split_leaf(self, node_id: int, var: int, threshold: float, left_val: float=np.nan, 
                    right_val: float=np.nan):
         """
@@ -346,6 +366,7 @@ class Tree:
         if recursive:
             self._prune_descendants(left_child)
             self._prune_descendants(right_child)
+        self._truncate_tree_arrays()
 
     def _prune_descendants(self, node_id: int):
         """
