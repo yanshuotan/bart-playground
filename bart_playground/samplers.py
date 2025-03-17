@@ -252,6 +252,11 @@ class NTreeSampler(Sampler):
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(), break_prob : float = 0.5, tol=100):
         self.break_prob = break_prob
         self.tol = tol
+         # Record tree prior ratios and transition ratios
+        self.break_prior_ratios = []
+        self.break_transition_ratios = []
+        self.combine_prior_ratios = []
+        self.combine_transition_ratios = []
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
@@ -303,12 +308,10 @@ class NTreeSampler(Sampler):
             move = Break(iter_current, break_id, self.tol)   
             if move.propose(self.generator):
                 move.proposed.update_tree_num()
+                self.break_prior_ratios.append(self.tree_prior.trees_log_prior_ratio(move))
+                self.break_transition_ratios.append(move.log_tran_ratio)
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
-                    print(move)
-                    print(f'Total ratio: {np.exp(temp * self.log_mh_ratio(move))}')
-                    print(f'Tree prior ratio: {np.exp(self.tree_prior.trees_log_prior_ratio(move))}')
-                    print(f'Transition ratio: {np.exp(move.log_tran_ratio)}')
                     self.tree_prior.n_trees = self.tree_prior.n_trees + 1
                     new_leaf_vals_remain = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = break_id)
                     new_leaf_vals_new = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [-1])
@@ -323,12 +326,10 @@ class NTreeSampler(Sampler):
             move = Combine(iter_current, combine_ids, self.tol)   
             if move.propose(self.generator):
                 move.proposed.update_tree_num()
+                self.combine_prior_ratios.append(self.tree_prior.trees_log_prior_ratio(move))
+                self.combine_transition_ratios.append(move.log_tran_ratio)
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
-                    print(move)
-                    print(f'Total ratio: {np.exp(temp * self.log_mh_ratio(move))}')
-                    print(f'Tree prior ratio: {np.exp(self.tree_prior.trees_log_prior_ratio(move))}')
-                    print(f'Transition ratio: {np.exp(move.log_tran_ratio)}')
                     self.tree_prior.n_trees = self.tree_prior.n_trees - 1
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [combine_position])
                     move.proposed.update_leaf_vals([combine_position], new_leaf_vals)
