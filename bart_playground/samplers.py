@@ -301,10 +301,14 @@ class NTreeSampler(Sampler):
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
 
+        # Randomly permute the positions of all trees in iter_current.trees
+        permuted_indices = self.generator.permutation(len(iter_current.trees))
+        iter_current.trees = [iter_current.trees[i] for i in permuted_indices]
+
         # Break and Combine
         U = self.generator.uniform(0,1)
         if U < self.break_prob: # Break move
-            break_id = [self.generator.choice(np.arange(0,self.tree_prior.n_trees))]
+            break_id = [0] # Select the first tree after permutation
             move = Break(iter_current, break_id, self.tol)   
             if move.propose(self.generator):
                 move.proposed.update_tree_num()
@@ -321,7 +325,7 @@ class NTreeSampler(Sampler):
                     iter_trace.append((1, move.proposed))
         
         elif self.tree_prior.n_trees > 1:  # Combine move
-            combine_ids = self.generator.choice(np.arange(0,self.tree_prior.n_trees),size=2, replace=False)
+            combine_ids = [0, 1] # Select the first two trees after permutation
             combine_position = combine_ids[0] if combine_ids[0] < combine_ids[1] else combine_ids[0] - 1
             move = Combine(iter_current, combine_ids, self.tol)   
             if move.propose(self.generator):

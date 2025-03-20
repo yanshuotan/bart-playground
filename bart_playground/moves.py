@@ -177,7 +177,7 @@ class Break(Move):
         tree.prune_split(node_id, recursive= True)
         n_leaves = tree.n_leaves
         proposed.trees.append(tree_new)
-        self.log_tran_ratio = np.log(n_splits) - np.log(n_leaves) - np.log(len(proposed.trees))
+        self.log_tran_ratio = np.log(n_splits) - np.log(n_leaves)
         return True
 
 class Combine(Move):
@@ -205,7 +205,7 @@ class Combine(Move):
             if n_splits == 0:
                 self.log_tran_ratio = -np.inf # Do not accept stump + stump case
             else:
-                self.log_tran_ratio =  np.log(len(proposed.trees)) + np.log(n_leaves) - np.log(n_splits)
+                self.log_tran_ratio =  np.log(n_leaves) - np.log(n_splits)
             proposed.trees.remove(tree2)
         return success    
  
