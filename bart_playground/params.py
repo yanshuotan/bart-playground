@@ -392,35 +392,6 @@ class Tree:
         self._prune_descendants(left_child)
         self._prune_descendants(right_child)
 
-        # If recursive, recursively mark all descendant split nodes as -2
-        if recursive:
-            self._prune_descendants(left_child)
-            self._prune_descendants(right_child)
-
-    def _prune_descendants(self, node_id: int):
-        """
-        Recursively mark all descendant split nodes as -2.
-
-        Parameters:
-        - node_id: int
-            Index of the node to start pruning from.
-        """
-        # If node_id is out of bounds, stop recursion
-        if node_id >= len(self.vars):
-            return
-
-        # Mark the current node as -2
-        self.vars[node_id] = -2
-        self.thresholds[node_id] = np.nan
-        self.leaf_vals[node_id] = np.nan
-        self.n[node_id] = -2
-
-        # Recursively prune left and right children
-        left_child = node_id * 2 + 1
-        right_child = node_id * 2 + 2
-        self._prune_descendants(left_child)
-        self._prune_descendants(right_child)
-
     def change_split(self, node_id, var, threshold, update_n=True):
         self.vars[node_id] = var
         self.thresholds[node_id] = threshold
