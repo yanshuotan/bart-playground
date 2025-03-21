@@ -1,6 +1,6 @@
 import numpy as np
 
-from .samplers import Sampler, DefaultSampler, default_proposal_probs
+from .samplers import Sampler, DefaultSampler, TemperatureSchedule, default_proposal_probs
 from .priors import *
 from .priors import *
 from .util import Preprocessor, DefaultPreprocessor
@@ -29,7 +29,7 @@ class BART:
         self.data = self.preprocessor.fit_transform(X, y)
         self.sampler.add_data(self.data)
         self.sampler.add_thresholds(self.preprocessor.thresholds)
-        self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly)
+        self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly, n_skip=self.nskip)
         self.is_fitted = True
     
     def update_fit(self, X, y, add_ndpost=20, add_nskip=10, quietly=False):
@@ -78,7 +78,7 @@ class BART:
         """
         preds = np.zeros((X.shape[0], self.ndpost))
         for k in range(self.ndpost):
-            y_eval = self.trace[self.nskip + k + 1].evaluate(X)
+            y_eval = self.trace[k].evaluate(X)
             preds[:, k] = self.preprocessor.backtransform_y(y_eval)
         return preds
     
@@ -94,10 +94,18 @@ class DefaultBART(BART):
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
-                 random_state=42):
+                 random_state=42, temperature=1.0):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
                              eps_nu, specification, rng)
-        sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol)
+        is_temperature_number = type(temperature) in [float, int]
+        if is_temperature_number:
+            temp_func = lambda x: temperature
+            temp_schedule = TemperatureSchedule(temp_func)
+        elif type(temperature) == TemperatureSchedule:
+            temp_schedule = temperature
+        else:
+            raise ValueError("Invalid temperature type ", type(temperature))
+        sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)

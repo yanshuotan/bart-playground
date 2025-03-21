@@ -3,3 +3,7 @@
 .venv
 notebooks/*.dot
 notebooks/*.prof
+scripts/
+.hydra/hydra.yaml
+.DS_Store
+*.log

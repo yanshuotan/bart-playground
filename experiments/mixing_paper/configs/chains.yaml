@@ -1,0 +1,25 @@
+# conf/config.yaml
+sample_sizes: [50, 100, 500, 1000, 5000]
+n_chains_range: [1, 5,  10]
+dgp: "dgp_1"  # Specify the DGP scenario to use
+n_reps: 10
+dgp_params:
+  noise: 0.1
+  n_samples: 10000 # default; will be overridden in the loop
+  n_features: 10
+bart_params:
+  proposal_probs:
+    grow: 0.25
+    prune: 0.25
+    change: 0.1
+    swap: 0.4
+  n_chains: 1  # default; will be overridden in the loop
+  ndpost: 100
+  nskip: 500
+  alpha: 0.05
+  n_trees: 10  # default; will be overridden in the loop
+  temperature: 1.0
+artifacts_dir: "./"
+hydra:
+  run:
+    dir: experiments/mixing_paper/artifacts/new_configs/chains
