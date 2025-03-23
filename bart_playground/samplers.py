@@ -2,14 +2,10 @@ import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
-
 from .params import Tree, Parameters
 from .moves import all_moves
 from .util import Dataset
-from .priors import *
-from .priors import *
-from bart_playground import moves
-
+from .priors import ComprehensivePrior
 
 class TemperatureSchedule:
     def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
@@ -18,17 +14,9 @@ class TemperatureSchedule:
     def __call__(self, t):
         return self.temp_schedule(t)
 
-
 class Sampler(ABC):
-    """
-    Base class for the BART sampler.
-    """
-
     def __init__(self, prior, proposal_probs: dict,
                  generator: np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule()):
-        """
-        Initialize the sampler.
-        """
         self._data: Optional[Dataset] = None
         self.prior = prior
         self.n_iter = None
@@ -36,9 +24,7 @@ class Sampler(ABC):
         self.temp_schedule = temp_schedule
         self.trace = []
         self.generator = generator
-        # create cache for moves
         self.moves_cache = None
-        # current move cache iterator
         self.moves_cache_iterator = None
 
     @property
@@ -47,42 +33,30 @@ class Sampler(ABC):
         return self._data
 
     def add_data(self, data: Dataset):
-        """
-        Adds data to the sampler.
-        """
         self._data = data
 
     def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
 
     def run(self, n_iter, progress_bar=True, quietly=False, current=None):
-        """
-        Run the sampler for a specified number of iterations.
-        """
         if quietly:
             progress_bar = False
-
         self.trace = []
         self.n_iter = n_iter
         if current is None:
             current = self.get_init_state()
-        self.trace.append(current)  # Add initial state to trace
-
+        self.trace.append(current)
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
-
         for iter in iterator:
             if not progress_bar and iter % 10 == 0 and not quietly:
                 print(f"Running iteration {iter}/{n_iter}")
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False)
-            self.trace[-1].clear_cache()
+            current.clear_cache()
             self.trace.append(current)
         return self.trace
 
     def sample_move(self):
-        """
-        Samples a move based on the proposal probabilities.
-        """
         if self.moves_cache is None or self.moves_cache_iterator is None:
             moves_list = list(self.proposals.keys())
             move_probs = list(self.proposals.values())
@@ -96,36 +70,22 @@ class Sampler(ABC):
 
     @abstractmethod
     def get_init_state(self):
-        """
-        Retrieve the initial state for the sampler.
-        """
         pass
 
     @abstractmethod
     def one_iter(self, current, temp, return_trace=False):
-        """
-        Perform one iteration of the sampler.
-        """
         pass
 
     def continue_run(self, additional_iters, new_data=None, quietly=False, last_state=None):
-        """
-        Continue sampling with updated data from a previous state.
-        """
-        # Get last state
         if last_state is None:
             if hasattr(self, 'trace') and self.trace:
                 last_state = self.trace[-1]
             else:
                 raise ValueError("No last_state provided and no trace available")
-
-        # Update parameter state with any new data points if needed
         if new_data is not None:
             old_n = self.data.n
             new_n = new_data.n
-
             self.add_data(new_data)
-
             if new_n > old_n:
                 new_X = new_data.X[old_n:]
                 if hasattr(new_data, 'Z'):
@@ -137,75 +97,50 @@ class Sampler(ABC):
                 current_state = last_state
         else:
             current_state = last_state
-
-        # Run sampler for additional iterations
         return self.run(additional_iters, quietly=quietly, current=current_state)
 
-
 class DefaultSampler(Sampler):
-    """
-    Default implementation of the BART sampler.
-    """
-
     def __init__(self, prior: ComprehensivePrior, proposal_probs: dict,
                  generator: np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100,
                  marginalize: bool = False):
         self.tol = tol
-        self.marginalize = marginalize  # Store the flag for marginalization
+        self.marginalize = marginalize
         if proposal_probs is None:
-            proposal_probs = {"grow": 0.5,
-                              "prune": 0.5}
+            proposal_probs = {"grow": 0.5, "prune": 0.5}
         self.tree_prior = prior.tree_prior
         self.global_prior = prior.global_prior
         self.likelihood = prior.likelihood
         super().__init__(prior, proposal_probs, generator, temp_schedule)
 
     def get_init_state(self) -> Parameters:
-        """
-        Retrieve the initial state for the sampler.
-        """
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
         trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
         global_params = self.global_prior.init_global_params(self.data)
-        init_state = Parameters(trees, global_params)
+        init_state = Parameters(trees, global_params, cache=None)
+        # Initialize cache as sum over evaluations.
+        init_state.cache = np.sum([tree.evaluate() for tree in init_state.trees], axis=0)
         return init_state
 
     def log_mh_ratio(self, move, marginalize: bool = False):
-        """Calculate total log Metropolis–Hastings ratio"""
         return self.tree_prior.trees_log_prior_ratio(move) + \
                self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
                move.log_tran_ratio
 
     def one_iter(self, current, temp, return_trace=False):
-        """
-        Perform one iteration of the sampler.
-        """
-        iter_current = current.copy()  # First make a copy
-        iter_trace = [(0, iter_current)]
+        iter_current = current  # Use current state
+        if iter_current.cache is None:
+            iter_current.cache = np.sum([tree.evaluate() for tree in iter_current.trees], axis=0)
         for k in range(self.tree_prior.n_trees):
-            move = self.sample_move()(
-                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
-            )
-            if move.propose(self.generator):  # Check if a valid move was proposed
-                Z = self.generator.uniform(0, 1)
-                if np.log(Z) < temp * self.log_mh_ratio(move, marginalize=self.marginalize):
-                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y=self.data.y, tree_ids=[k])
-                    move.proposed.update_leaf_vals([k], new_leaf_vals)
-                    iter_current = move.proposed
-                    if return_trace:
-                        iter_trace.append((k + 1, move.proposed))
+            move = self.sample_move()(iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol)
+            if move.propose(self.generator):
+                new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y=self.data.y, tree_ids=[k])
+                move.proposed.update_leaf_vals([k], new_leaf_vals)
+                # Instead of copying all trees, only copy tree k.
+                iter_current.update_tree(k, move.proposed.trees[k])
+                iter_current = iter_current.copy(modified_tree_ids=[k])
         iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y=self.data.y)
         if return_trace:
-            return iter_trace
+            return [(k, iter_current) for k in range(self.tree_prior.n_trees)]
         else:
-            del iter_trace
             return iter_current
-
-
-all_samplers = {"default": DefaultSampler}
-
-default_proposal_probs = {"grow": 0.25,
-                          "prune": 0.25,
-                          "change": 0.4,
-                          "swap": 0.1}
