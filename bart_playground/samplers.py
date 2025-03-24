@@ -231,7 +231,7 @@ class DefaultSampler(Sampler):
                 )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
-                if np.log(Z) < temp * self.log_mh_ratio(move):
+                if np.log(Z) < self.log_mh_ratio(move) / temp:
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
