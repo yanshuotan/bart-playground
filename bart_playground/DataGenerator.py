@@ -1,4 +1,12 @@
+import os
+import pickle
+import logging
+
 import numpy as np
+from sklearn.tree import DecisionTreeRegressor
+
+LOGGER = logging.getLogger("DataGenerator")
+logging.basicConfig(level=logging.INFO)
 
 
 class DataGenerator:
@@ -233,6 +241,212 @@ class DataGenerator:
         y = np.arctan(frac)
         y = self._add_noise(y)
         return X, y
+    
+    def linear_additive(self):
+        X = self.rng.normal(0, 1, (self.n_samples, self.n_features))
+        weights = np.array([0.2, -1, 0.6, -0.9, 0.85, 0, 0, 0, 0, 0])
+        y = X @ weights
+        y = self._add_noise(y)
+        return X, y
+    
+    def smooth_additive(self):
+        X = self.rng.normal(0, 1, (self.n_samples, self.n_features))
+        X[:, 0] = X[:, 0] ** 2
+        X[:, 2] = np.cos(X[:, 2])
+        X[:, 3] = np.sqrt(np.abs(X[:, 3]))
+        X[:, 4] = np.sin(X[:, 4])
+        weights = np.array([0.2, -1, 0.6, -0.9, 0.85, 0, 0, 0, 0, 0])
+        y = X @ weights
+        y = self._add_noise(y)
+        return X, y
+    
+    def dgp_1(self):
+        """
+        Generates data according to the DGP 1 decision tree in your image.
+        x1, x2, x3 correspond to X[:, 0], X[:, 1], X[:, 2], respectively.
+        Leaves: 6, 3, 9, 12
+        """
+        X = self.rng.normal(0, 1, (self.n_samples, self.n_features))
+        y = np.zeros(self.n_samples)
+
+        for i in range(self.n_samples):
+            x1, x2, x3 = X[i, 0], X[i, 1], X[i, 2]
+            
+            if x1 <= 0.1:
+                if x3 <= -0.2:
+                    y[i] = 6
+                else:
+                    y[i] = 3
+            else:  # x1 > 0.1
+                if x2 <= 0.7:
+                    y[i] = 9
+                else:
+                    y[i] = 12
+        
+        # Optionally add noise
+        y = self._add_noise(y)
+        return X, y
+
+    def dgp_2(self):
+        """
+        Generates data according to the DGP 2 decision tree in your image.
+        x1, x2, x3, x4, x5, x6, x7 correspond to X[:, 0..6].
+        Leaves: 1, 2, 4, 3, 4, 3, 9, 12
+        """
+        if not self.n_features == 7:
+            LOGGER.debug("n_features is not 7, using 7 for dgp_2")
+            self.n_features = 7
+        X = self.rng.normal(0, 1, (self.n_samples, self.n_features))
+        y = np.zeros(self.n_samples)
+
+        for i in range(self.n_samples):
+            x1 = X[i, 0]
+            x2 = X[i, 1]
+            x3 = X[i, 2]
+            x4 = X[i, 3]
+            x5 = X[i, 4]
+            x6 = X[i, 5]
+            x7 = X[i, 6]
+
+            if x1 <= 0.1:
+                if x3 <= -0.2:
+                    if x7 <= 0.15:
+                        y[i] = 1
+                    else:
+                        y[i] = 2
+                else:
+                    if x6 <= 0.2:
+                        y[i] = 4
+                    else:
+                        y[i] = 3
+            else:  # x1 > 0.1
+                if x2 <= 0.7:
+                    if x5 <= 0.1:
+                        y[i] = 4
+                    else:
+                        y[i] = 3
+                else:  # x2 > 0.7
+                    if x4 <= 0.1:
+                        y[i] = 9
+                    else:
+                        y[i] = 12
+        
+        # Optionally add noise
+        y = self._add_noise(y)
+        return X, y
+
+    def low_lei_candes(self):
+        # we generate data with multinormal covariates with mean zero and covariance matrix with1 on and diag and 0.01
+        # the response is equal to g(x_0) * g(x_1) + noise. g(x) = 2/(1+exp(-12(x-0.5)))
+        if not self.n_features == 10:
+            LOGGER.debug("n_features is not 10, using 10 for low_lei_candes")
+            self.n_features = 10
+        X = self.rng.multivariate_normal(mean=np.zeros(self.n_features), cov=np.eye(self.n_features) + 0.01 - 0.01 * np.eye(self.n_features), size=self.n_samples)
+        x_0, x_1 = X[:, 0], X[:, 1]
+        def g(x):
+            return 2 / (1 + np.exp(-12 * (x - 0.5)))
+        y = g(x_0) * g(x_1) + self.rng.normal(0, self.noise, size=self.n_samples)
+        return X, y
+    
+    def high_lei_candes(self):
+        # same as low_lei_candes but with 100 features
+        if not self.n_features == 100:
+            LOGGER.debug("n_features is not 100, using 100 for high_lei_candes")
+            self.n_features = 100
+        np.random.seed(self.random_seed)
+        X = self.rng.multivariate_normal(mean=np.zeros(self.n_features), cov=np.eye(self.n_features) + 0.01 - 0.01 * np.eye(self.n_features), size=self.n_samples)
+        x_0, x_1 = X[:, 0], X[:, 1]
+        def g(x):
+            return 2 / (1 + np.exp(-12 * (x - 0.5)))
+        np.random.seed(self.random_seed)
+        y = g(x_0) * g(x_1) + self.rng.normal(0, self.noise, size=self.n_samples)
+        return X, y
+
+    def lss(self):
+        # local sparse spiky model (behr et al 2021)
+        # the covaiares are generated similar to low_lei_candes
+        # the response is generated as follows: f(x) = 2*1_{x_0<0 & x_2>0} -3 * 1_{x_4> 0 & x_5 > 1} + 0.8 * 1_{x_2<1.5 & x_4<1}
+        if not self.n_features == 10:
+            LOGGER.debug("n_features is not 10, using 10 for lss")
+            self.n_features = 10
+        X = self.rng.multivariate_normal(mean=np.zeros(self.n_features), cov=np.eye(self.n_features) + 0.01 - 0.01 * np.eye(self.n_features), size=self.n_samples)
+        x_0, x_2, x_4, x_5 = X[:, 0], X[:, 2], X[:, 4], X[:, 5]
+        y = 2 * (x_0 < 0) * (x_2 > 0) - 3 * (x_4 > 0) * (x_5 > 1) + 0.8 * (x_2 < 1.5) * (x_4 < 1)
+        return X, y
+
+    def piecewise_linear(self):
+        # piecese wise linear function from Kunzel et al 2019
+        # the covariates are 20 dimentional with the same mean and variance as in low_lei_candes
+        # the is linear with the three pieces x_19 > 4 x_19 < -4 and 4 <= x_19 <= -4
+        # the coeffcients anre sampled uniformly from [-15, 15]
+        if not self.n_features == 20:
+            LOGGER.debug("n_features is not 20, using 20 for piecewise_linear")
+            self.n_features = 20
+        X = self.rng.multivariate_normal(mean=np.zeros(self.n_features), cov=np.eye(self.n_features) + 0.01 - 0.01 * np.eye(self.n_features), size=self.n_samples)
+        x_19 = X[:, 19]
+        y = np.zeros(self.n_samples)
+        idx_1 = x_19 > 4
+        idx_2 = x_19 < -4
+        idx_3 = (x_19 >= -4) & (x_19 <= 4)
+        # set the seed for reproducibility
+        # set the seed to 1, 2, 3 for the three pieces
+        np.random.seed(1)
+        coefs1 = np.random.uniform(-15, 15, size=self.n_features)
+        np.random.seed(2)
+        coefs2 = np.random.uniform(-15, 15, size=self.n_features)
+        np.random.seed(3)
+        coefs3 = np.random.uniform(-15, 15, size=self.n_features)
+        y[idx_1] = X[idx_1] @ coefs1
+        y[idx_2] = X[idx_2] @ coefs2
+        y[idx_3] = X[idx_3] @ coefs3
+        y += self.rng.normal(0, self.noise, size=self.n_samples)
+        return X, y
+    
+    def sum(self):
+        # the covariates are 10 dimentional  with mean 0 variance 1 and covariance 0.01 if i = j+10 otherwise 0
+        cov_matrix = np.eye(self.n_features)
+        for i in range(self.n_features):
+            for j in range(self.n_features):
+                if i == j + 10:
+                    cov_matrix[i, j] = 0.01
+        X = self.rng.multivariate_normal(mean=np.zeros(self.n_features), cov=cov_matrix, size=self.n_samples)
+        y = np.sum(X, axis=1)
+        y+= self.rng.normal(0, self.noise, size=self.n_samples)
+        return X, y
+
+    def tree(self):
+        # the covariates are 10 dimentional  with mean 0 variance 1 and covariance 0.01 like in low_lei_candes
+        # the response is generated as follows: f(x) = 2*1_{x_0<0 & x_2>0} -3 * 1_{x_4> 0 & x_5 > 1} + 0.8 * 1_{x_2<1.5 & x_4<1}
+        if not self.n_features == 10:
+            LOGGER.debug("n_features is not 10, using 10 for tree")
+            self.n_features = 10
+        np.random.seed(self.random_seed)
+        X = self.rng.multivariate_normal(mean=np.zeros(self.n_features), cov=np.eye(self.n_features) + 0.01 - 0.01 * np.eye(self.n_features), size=self.n_samples)
+        # fit a cart tree on standard normal data with max depth 7
+        np.random.seed(self.random_seed)
+        y_cart = self.rng.normal(0, 1, size=self.n_samples)
+        tree_file = os.path.join( "models", "tree_model.pkl")
+        # create the directory if it doesn't exist
+        os.makedirs(os.path.dirname(tree_file), exist_ok=True)
+        if os.path.exists(tree_file):
+            with open(tree_file, 'rb') as file:
+                tree = pickle.load(file)
+        else:
+            tree = DecisionTreeRegressor(max_depth=7, random_state=self.random_seed)
+
+            tree.fit(X, y_cart)
+            # Save the model using pickle
+            with open(tree_file, 'wb') as file:
+                pickle.dump(tree, file)
+
+
+        # print the tree splits and feature indices
+        LOGGER.info(f"Tree splits: {tree.tree_.threshold[0:10]}")
+        LOGGER.info(f"Tree feature indices: {tree.tree_.feature[0:10]}")
+        # set the seed 
+        np.random.seed(self.random_seed)
+        y = tree.predict(X) + self.rng.normal(0, self.noise, size=self.n_samples)
+        return X, y
 
     def self_test(self):
         """
@@ -250,6 +464,7 @@ class DataGenerator:
             "spiky_vs_smooth", "cyclic", "distribution_shift", "multimodal",
             "imbalanced", "piecewise_linear", "tied_y", "tied_x",
             "friedman1", "friedman2", "friedman3"
+            "imbalanced", "piecewise_linear", "tied_y", "tied_x", "tree", "sum", "piecewise_linear", "low_lei_candes", "high_lei_candes", "lss"
         ]
 
         for params in test_params:

@@ -70,7 +70,7 @@ class Sampler(ABC):
     def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
         
-    def run(self, n_iter, progress_bar = True, quietly = False, current = None):
+    def run(self, n_iter, progress_bar = True, quietly = False, current = None, n_skip = 0):
         """
         Run the sampler for a specified number of iterations from `current` or a fresh start.
 
@@ -85,7 +85,8 @@ class Sampler(ABC):
         if current is None:
             current = self.get_init_state()
         # assert isinstance(current, Parameters), "Current state must be of type Parameters."
-        self.trace.append(current) # Add initial state to trace
+        if n_skip == 0:
+            self.trace.append(current) # Add initial state to trace
         
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
     
@@ -95,8 +96,11 @@ class Sampler(ABC):
             # print(self.temp_schedule)
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False)
-            self.trace[-1].clear_cache()
-            self.trace.append(current)
+            if iter >= n_skip:
+                if len(self.trace) > 0:
+                    self.trace[-1].clear_cache()
+                self.trace.append(current)
+
         return self.trace
     
     def sample_move(self):
@@ -231,7 +235,7 @@ class DefaultSampler(Sampler):
                 )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
-                if np.log(Z) < temp * self.log_mh_ratio(move):
+                if np.log(Z) < self.log_mh_ratio(move) / temp:
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
