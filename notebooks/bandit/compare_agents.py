@@ -2,14 +2,85 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Any
 from tqdm import tqdm
+from joblib import Parallel, delayed
 
+from bart_playground.bandit.ensemble_agent import EnsembleAgent
 from bart_playground.bandit.sim_util import simulate, Scenario, LinearScenario, LinearOffsetScenario, OffsetScenario, FriedmanScenario
-from bart_playground.bandit.bcf_agent import BCFAgent
+from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
 from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.agent import BanditAgent
 
 
-def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditAgent], agent_names: List[str], n_simulations: int = 10, n_draws: int = 500):
+def _run_single_simulation(sim, scenario, agent_classes, agent_names, n_draws):
+    """
+    Run a single simulation with the given scenario and agents.
+    
+    Args:
+        sim (int): Simulation number (used for random seed)
+        scenario (Scenario): The scenario instance to use for simulation
+        agent_classes (List): List of agent classes to instantiate
+        agent_names (List[str]): Names for each agent
+        n_draws (int): Number of draws per simulation
+        
+    Returns:
+        Tuple: (sim_index, regrets, computation_times)
+    """
+    # Create agents with different seeds for this simulation
+    sim_agents = []
+    for agent_cls in agent_classes:
+        if agent_cls == BCFAgent:
+            # BCFAgent with fixed parameters (nadd=2, nbatch=1)
+            agent = BCFAgent(
+                n_arms=scenario.K,
+                n_features=scenario.P,
+                nskip=100,
+                ndpost=10,
+                nadd=2,
+                nbatch=1,
+                random_state=1000 + sim
+            )
+        elif agent_cls == EnsembleAgent:
+            agent = EnsembleAgent(
+                n_arms=scenario.K,
+                n_features=scenario.P,
+                bcf_kwargs = dict(nskip=100,
+                ndpost=10,
+                nadd=2,
+                nbatch=1,
+                random_state=1000 + sim),
+                linear_ts_kwargs = dict(v=1)
+            )
+        elif agent_cls == BCFAgentPSOff:
+            agent = BCFAgentPSOff(
+                n_arms=scenario.K,
+                n_features=scenario.P,
+                nskip=100,
+                ndpost=10,
+                nadd=2,
+                nbatch=1,
+                random_state=1000 + sim
+            )
+        elif agent_cls == LinearTSAgent:
+            agent = LinearTSAgent(
+                n_arms=scenario.K,
+                n_features=scenario.P,
+                v = 1
+            )
+        else:
+            # For other agents, just initialize with standard params
+            agent = agent_cls(
+                n_arms=scenario.K,
+                n_features=scenario.P
+            )
+        sim_agents.append(agent)
+    
+    # Run simulation
+    cum_regrets, time_agents = simulate(scenario, sim_agents, n_draws=n_draws)
+    
+    # Return results for this simulation
+    return sim, cum_regrets, time_agents
+
+def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditAgent], agent_names: List[str], n_simulations: int = 10, n_draws: int = 500, n_jobs=6):
     """
     Generate simulation data for multiple agents on a given scenario.
     
@@ -19,6 +90,7 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
         agent_names (List[str]): Names for each agent for display purposes
         n_simulations (int): Number of simulation runs
         n_draws (int): Number of draws per simulation
+        n_jobs (int): Number of parallel jobs to run. -1 means using all processors.
         
     Returns:
         Dict: Dictionary containing simulation results
@@ -27,39 +99,15 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
     all_regrets = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
     all_times = {name: np.zeros(n_simulations) for name in agent_names}
     
-    for sim in tqdm(range(n_simulations), desc=f"Simulating"):
-        # Create agents with different seeds for each simulation
-        sim_agents = []
-        for agent_cls in agents:
-            if agent_cls == BCFAgent:
-                # BCFAgent with fixed parameters (nadd=2, nbatch=1)
-                agent = BCFAgent(
-                    n_arms=scenario.K,
-                    n_features=scenario.P,
-                    nskip=100,
-                    ndpost=10,
-                    nadd=2,
-                    nbatch=1,
-                    random_state=1000 + sim
-                )
-            elif agent_cls == LinearTSAgent:
-                agent = LinearTSAgent(
-                    n_arms=scenario.K,
-                    n_features=scenario.P,
-                    v = 1
-                    #R=10.0
-                )
-            else:
-                # For other agents, just initialize with standard params
-                agent = agent_cls(
-                    n_arms=scenario.K,
-                    n_features=scenario.P
-                )
-            sim_agents.append(agent)
-        
-        # Run simulation
-        cum_regrets, time_agents = simulate(scenario, sim_agents, n_draws=n_draws)
-        
+    # Run simulations in parallel
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(_run_single_simulation)(
+            sim, scenario, agents, agent_names, n_draws
+        ) for sim in range(n_simulations) # tqdm(range(n_simulations), desc="Simulating")
+    )
+    
+    # Process results from parallel jobs
+    for sim, cum_regrets, time_agents in results:
         # Store results
         for i, name in enumerate(agent_names):
             all_regrets[name][sim, :] = cum_regrets[:, i]
@@ -71,7 +119,9 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
     }
 
 
-def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulations: int = 10, n_draws: int = 500):
+def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulations: int = 10, n_draws: int = 500, 
+    agent_classes = [SillyAgent, LinearTSAgent, BCFAgent], 
+    agent_names = ["Random", "LinearTS", "BCF"]):
     """
     Compare multiple agents across different scenarios.
     
@@ -84,8 +134,6 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulation
         Dict: Results for each scenario and agent
     """
     # Define agents to compare
-    agent_classes = [SillyAgent, LinearTSAgent, BCFAgent]
-    agent_names = ["Random", "LinearTS", "BCF"]
     
     results = {}
     
@@ -103,7 +151,7 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulation
     return results
 
 
-def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: str = None):
+def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: str = None, show_time = True):
     """
     Plot comparison results across all scenarios and agents.
     
@@ -121,12 +169,17 @@ def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: s
     if n_rows == 1:
         axes = [axes]
     
-    # Define colors for each agent
-    agent_colors = {
-        'Random': '#1f77b4',
-        'LinearTS': '#ff7f0e',
-        'BCF': '#2ca02c',
-    }
+    # Get all agent names and generate a consistent color mapping
+    all_agent_names = set()
+    for scenario_results in results.values():
+        all_agent_names.update(scenario_results['regrets'].keys())
+    
+    # Use the default color cycle from matplotlib
+    prop_cycle = plt.rcParams['axes.prop_cycle']
+    colors = prop_cycle.by_key()['color']
+    
+    # Map each agent to a color
+    agent_colors = {name: colors[i % len(colors)] for i, name in enumerate(sorted(all_agent_names))}
     
     # Plot each scenario
     scenario_idx = 0
@@ -153,14 +206,15 @@ def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: s
             ax.fill_between(range(n_draws), lower_ci, upper_ci, 
                           color=agent_colors[agent_name], alpha=0.2)
         
-        # Add computation time annotations
-        for agent_name, agent_times in times.items():
-            mean_time = np.mean(agent_times)
-            ax.annotate(f"{agent_name}: {mean_time:.2f}s", 
-                       xy=(0.5, 0.02 + list(times.keys()).index(agent_name) * 0.05),
-                       xycoords='axes fraction',
-                       ha='center', va='bottom',
-                       bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.3))
+        if show_time:
+            # Add computation time annotations
+            for agent_name, agent_times in times.items():
+                mean_time = np.mean(agent_times)
+                ax.annotate(f"{agent_name}: {mean_time:.2f}s", 
+                           xy=(0.5, 0.02 + list(times.keys()).index(agent_name) * 0.05),
+                           xycoords='axes fraction',
+                           ha='center', va='bottom',
+                           bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.3))
         
         ax.set_title(f"{scenario_name} Scenario", fontsize=14)
         ax.set_xlabel("Draw", fontsize=12)
