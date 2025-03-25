@@ -75,15 +75,9 @@ class LinearTSAgent(BanditAgent):
         self.B_inv_sqrt = [np.eye(n_features) for _ in range(n_arms)]
         self.mean = [np.zeros((n_features, 1)) for _ in range(n_arms)]
     
-    def choose_arm(self, x: Union[np.ndarray, List[float]], **kwargs: Dict[str, Any]) -> int:
+    def _get_action_estimates(self, x: np.ndarray) -> List[float]:
         """
-        Choose an arm using Thompson Sampling.
-        
-        Parameters:
-            x (array-like): Feature vector.
-            
-        Returns:
-            int: The index of the selected arm.
+        Get action estimates for all arms based on input features x.
         """
         x = np.array(x).reshape(-1, 1)  # Ensure column vector
         
@@ -95,6 +89,19 @@ class LinearTSAgent(BanditAgent):
         
         # Compute the expected reward for each arm
         u = [(w[i].T @ x)[0, 0] for i in range(self.n_arms)]
+        return u
+
+    def choose_arm(self, x: Union[np.ndarray, List[float]], **kwargs: Dict[str, Any]) -> int:
+        """
+        Choose an arm using Thompson Sampling.
+        
+        Parameters:
+            x (array-like): Feature vector.
+            
+        Returns:
+            int: The index of the selected arm.
+        """
+        u = self._get_action_estimates(x)
         
         # Return the arm with the highest expected reward
         return int(np.argmax(u))
