@@ -338,59 +338,57 @@ class Tree:
         - recursive: bool, default=False
         If True, recursively prune all descendant split nodes.
         """
-        # Check if the node is a split node
-        if not self.is_split_node(node_id):
-            raise ValueError("Node is not a split node and cannot be pruned.")
-        
+
         # If recursive is False, ensure the node is a terminal split node
         if not recursive and not self.is_terminal_split_node(node_id):
             raise ValueError("Node is not a terminal split node and cannot be pruned (recursive=False).")
 
-        # Turn the split node into a leaf
+        # Check if the node is a split node
+        if not self.is_split_node(node_id):
+            raise ValueError("Node is not a split node and cannot be pruned.")
+
+        # Use a stack to manage nodes to prune
+        stack = [node_id]
+
+        while stack:
+            current_node = stack.pop()
+
+            # Check if the current node is a terminal split node
+            if self.is_terminal_split_node(current_node):
+                # If terminal, directly prune its children
+                left_child = current_node * 2 + 1
+                right_child = current_node * 2 + 2
+                self.vars[left_child] = -2
+                self.vars[right_child] = -2
+                self.leaf_vals[left_child] = np.nan
+                self.leaf_vals[right_child] = np.nan
+
+                if self.cache_exists:
+                    self.n[left_child] = -2
+                    self.n[right_child] = -2
+            elif not self.is_leaf(current_node):
+                # If not terminal or leaf, add children to the stack for further pruning
+                left_child = current_node * 2 + 1
+                right_child = current_node * 2 + 2
+
+                if left_child < len(self.vars):
+                    stack.append(left_child)
+                if right_child < len(self.vars):
+                    stack.append(right_child)
+
+            # After processing children, mark the current node as -2
+            self.vars[current_node] = -2
+            self.thresholds[current_node] = np.nan
+            self.leaf_vals[current_node] = np.nan
+
+            if self.cache_exists:
+                self.n[current_node] = -2
+
+        # Finally, turn the original node into a leaf
         self.vars[node_id] = -1
-        self.thresholds[node_id] = np.nan
 
-        # Delete previous leaf nodes
-        left_child = node_id * 2 + 1
-        right_child = node_id * 2 + 2
-        self.vars[left_child] = -2
-        self.vars[right_child] = -2
-        self.leaf_vals[left_child] = np.nan
-        self.leaf_vals[right_child] = np.nan
-
-        if self.cache_exists:
-            self.n[left_child] = -2
-            self.n[right_child] = -2
-
-        # If recursive, recursively mark all descendant split nodes as -2
-        if recursive:
-            self._prune_descendants(left_child)
-            self._prune_descendants(right_child)
+        # Truncate unnecessary space in the tree arrays
         self._truncate_tree_arrays()
-
-    def _prune_descendants(self, node_id: int):
-        """
-        Recursively mark all descendant split nodes as -2.
-
-        Parameters:
-        - node_id: int
-            Index of the node to start pruning from.
-        """
-        # If node_id is out of bounds, stop recursion
-        if node_id >= len(self.vars):
-            return
-
-        # Mark the current node as -2
-        self.vars[node_id] = -2
-        self.thresholds[node_id] = np.nan
-        self.leaf_vals[node_id] = np.nan
-        self.n[node_id] = -2
-
-        # Recursively prune left and right children
-        left_child = node_id * 2 + 1
-        right_child = node_id * 2 + 2
-        self._prune_descendants(left_child)
-        self._prune_descendants(right_child)
 
     def change_split(self, node_id, var, threshold, update_n=True):
         self.vars[node_id] = var
