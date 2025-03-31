@@ -253,10 +253,14 @@ class NTreeSampler(Sampler):
     Change the number of trees implementation of the BART sampler.
     """
     def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
-                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), break_prob : float = 0.5, tol=100):
-        self.break_prob = break_prob
+                 generator: np.random.Generator, temp_schedule=TemperatureSchedule(),
+                 special_probs: dict = None, tol=100):
         self.tol = tol
-         # Record tree prior ratios and transition ratios
+        # Default probabilities for special moves
+        if special_probs is None:
+            special_probs = {"birth": 0.25, "death": 0.25, "break": 0.25, "combine": 0.25}
+        self.special_probs = special_probs
+        # Record tree prior ratios and transition ratios
         self.break_prior_ratios = []
         self.break_transition_ratios = []
         self.combine_prior_ratios = []
@@ -287,7 +291,7 @@ class NTreeSampler(Sampler):
     
     def log_mh_ratio(self, move : Move, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
-        if isinstance(move, (Break, Combine)):
+        if isinstance(move, (Break, Combine, Birth, Death)):
             return self.tree_prior.trees_log_prior_ratio(move) + \
                 self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
                 self.tree_num_prior.tree_num_log_prior_ratio(move) + \
@@ -309,9 +313,42 @@ class NTreeSampler(Sampler):
         permuted_indices = self.generator.permutation(len(iter_current.trees))
         iter_current.trees = [iter_current.trees[i] for i in permuted_indices]
 
-        # Break and Combine
-        U = self.generator.uniform(0,1)
-        if U < self.break_prob: # Break move
+        # Special moves: Birth, Death, Break, Combine
+        special_moves = ["birth", "death", "break", "combine"]
+        special_probs = [self.special_probs.get(move, 0) for move in special_moves]
+        selected_move = self.generator.choice(special_moves, p=special_probs)
+
+        if selected_move == "birth":
+            birth_id = self.generator.integers(0, len(iter_current.trees))
+            move = Birth(iter_current, [birth_id], tol=self.tol)
+            if move.propose(self.generator):
+                move.proposed.update_tree_num()
+                Z = self.generator.uniform(0, 1)
+                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                    self.tree_prior.n_trees += 1
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [birth_id])
+                    move.proposed.update_leaf_vals([birth_id], new_leaf_vals)
+                    iter_current = move.proposed
+                    iter_trace.append((1, move.proposed))
+
+        elif selected_move == "death" and self.tree_prior.n_trees > 1:
+            # Find all root trees
+            root_indices = [i for i, tree in enumerate(iter_current.trees) if tree.only_root]
+            if root_indices:
+                # Randomly select one of the root trees to delete
+                death_id = self.generator.choice(root_indices)
+                possible_indices = [i for i in range(len(iter_current.trees)) if i != death_id]
+                random_id = self.generator.choice(possible_indices)
+                move = Death(iter_current, [random_id, death_id], tol=self.tol)
+                if move.propose(self.generator):
+                    move.proposed.update_tree_num()
+                    Z = self.generator.uniform(0, 1)
+                    if Z < np.exp(temp * self.log_mh_ratio(move)):
+                        self.tree_prior.n_trees -= 1
+                        iter_current = move.proposed
+                        iter_trace.append((1, move.proposed))
+
+        elif selected_move == "break":
             break_id = [0] # Select the first tree after permutation
             move = Break(iter_current, break_id, self.tol)   
             if move.propose(self.generator):
@@ -320,7 +357,7 @@ class NTreeSampler(Sampler):
                 self.break_transition_ratios.append(move.log_tran_ratio)
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
-                    self.tree_prior.n_trees = self.tree_prior.n_trees + 1
+                    self.tree_prior.n_trees += 1
                     new_leaf_vals_remain = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = break_id)
                     new_leaf_vals_new = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [-1])
                     move.proposed.update_leaf_vals(break_id, new_leaf_vals_remain)
@@ -328,7 +365,7 @@ class NTreeSampler(Sampler):
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
         
-        elif self.tree_prior.n_trees > 1:  # Combine move
+        elif selected_move == "combine" and self.tree_prior.n_trees > 1:
             combine_ids = [0, 1] # Select the first two trees after permutation
             combine_position = combine_ids[0] if combine_ids[0] < combine_ids[1] else combine_ids[0] - 1
             move = Combine(iter_current, combine_ids, self.tol)   
@@ -338,7 +375,7 @@ class NTreeSampler(Sampler):
                 self.combine_transition_ratios.append(move.log_tran_ratio)
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
-                    self.tree_prior.n_trees = self.tree_prior.n_trees - 1
+                    self.tree_prior.n_trees -= 1
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [combine_position])
                     move.proposed.update_leaf_vals([combine_position], new_leaf_vals)
                     iter_current = move.proposed
@@ -371,3 +408,8 @@ default_proposal_probs = {"grow" : 0.25,
                           "prune" : 0.25,
                           "change" : 0.4,
                           "swap" : 0.1}
+
+default_special_probs = {"birth": 0.25, 
+                         "death": 0.25, 
+                         "break": 0.25, 
+                         "combine": 0.25}

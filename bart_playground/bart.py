@@ -1,6 +1,6 @@
 import numpy as np
 
-from .samplers import Sampler, DefaultSampler, TemperatureSchedule, default_proposal_probs, NTreeSampler
+from .samplers import Sampler, DefaultSampler, TemperatureSchedule, default_proposal_probs, NTreeSampler, default_special_probs
 from .priors import *
 from .priors import *
 from .util import Preprocessor, DefaultPreprocessor
@@ -116,7 +116,7 @@ class ChangeNumTreeBART(BART):
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
                  theta_0 = 200, theta_df = 100, tau_k = 2.0,
-                 proposal_probs=default_proposal_probs, break_prob: float=0.5, tol=100, max_bins=100,
+                 proposal_probs=default_proposal_probs, special_probs=default_special_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
@@ -130,5 +130,5 @@ class ChangeNumTreeBART(BART):
             temp_schedule = temperature
         else:
             raise ValueError("Invalid temperature type ", type(temperature))
-        sampler = NTreeSampler(prior = prior, proposal_probs = proposal_probs, break_prob = break_prob, generator = rng, tol = tol, temp_schedule=temp_schedule)
+        sampler = NTreeSampler(prior = prior, proposal_probs = proposal_probs, special_probs = special_probs, generator = rng, tol = tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)

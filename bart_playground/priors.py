@@ -9,7 +9,7 @@ from numba import njit, jit
 
 from .params import Tree, Parameters
 from .moves import Move
-from .moves import Break, Combine
+from .moves import Break, Combine, Birth, Death
 from .util import Dataset
 
 # Standalone Numba-optimized functions
@@ -158,9 +158,9 @@ class TreesPrior:
     def trees_log_prior_ratio(self, move : Move):
         """Calculate log prior ratio for proposed move"""
         log_prior_current = self.trees_log_prior(move.current, move.trees_changed)
-        if isinstance(move, Break):
+        if isinstance(move, Break) or isinstance(move, Birth):
             trees_proposed_ids = move.trees_changed + [-1]
-        elif isinstance(move, Combine):
+        elif isinstance(move, Combine) or isinstance(move, Death):
             trees_proposed_ids = [move.trees_changed[0] if move.trees_changed[0] < move.trees_changed[1] else move.trees_changed[0] - 1]
         else:
             trees_proposed_ids = move.trees_changed
@@ -408,9 +408,9 @@ class BARTLikelihood:
             Marginal likelihood ratio.
         """
         if not marginalize:
-            if isinstance(move, Break):
+            if isinstance(move, Break) or isinstance(move, Birth):
                 trees_proposed_ids = move.trees_changed + [-1]
-            elif isinstance(move, Combine):
+            elif isinstance(move, Combine) or isinstance(move, Death):
                 trees_proposed_ids = [move.trees_changed[0] if move.trees_changed[0] < move.trees_changed[1] else move.trees_changed[0] - 1]
             else:
                 trees_proposed_ids = move.trees_changed

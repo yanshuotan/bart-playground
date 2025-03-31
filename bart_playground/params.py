@@ -571,6 +571,13 @@ class Tree:
         
         return _compute_leaf_basis(self.node_indicators, self.vars)
     
+    @property
+    def only_root(self):
+        """
+        Returns True if the tree is a root (i.e., the first value in vars is -1).
+        """
+        return self.vars[0] == -1
+    
     def __str__(self):
         """
         Return a string representation of the TreeParams object.

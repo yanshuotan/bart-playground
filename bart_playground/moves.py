@@ -1,7 +1,7 @@
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional
-from .params import Parameters
+from .params import Parameters, Tree
 from .util import fast_choice
 class Move(ABC):
     """
@@ -165,14 +165,13 @@ class Break(Move):
     
     def is_feasible(self):
         tree = self.current.trees[self.trees_changed[0]]
-        return len(tree.split_nodes) > 0
+        return len(tree.split_nodes) > 1
 
     def try_propose(self, proposed, generator):
-        # find node and collect thresholds
         tree = proposed.trees[self.trees_changed[0]]
-        node_id = generator.choice(tree.split_nodes)
-        n_splits = len(tree.split_nodes)
-        # break to two trees
+        valid_split_nodes = [node for node in tree.split_nodes if node != 0]
+        node_id = generator.choice(valid_split_nodes)
+        n_splits = len(tree.split_nodes)-1
         tree_new = tree.break_new(node_id)
         tree.prune_split(node_id, recursive= True)
         n_leaves = tree.n_leaves
@@ -191,10 +190,13 @@ class Combine(Move):
         self.tol = tol
 
     def is_feasible(self):
-        return True
+        # Check if both trees have split nodes
+        tree1 = self.current.trees[self.trees_changed[0]]
+        tree2 = self.current.trees[self.trees_changed[1]]
+        return len(tree1.split_nodes) > 0 and len(tree2.split_nodes) > 0
+
 
     def try_propose(self, proposed, generator):
-        # find node and collect thresholds
         tree1 = proposed.trees[self.trees_changed[0]]
         tree2 = proposed.trees[self.trees_changed[1]]
         node_id = generator.choice(tree1.leaves)
@@ -202,16 +204,61 @@ class Combine(Move):
         success = tree1.combine_two(node_id, tree2)
         if success: 
             n_splits = len(tree1.split_nodes)
-            if n_splits == 0:
-                self.log_tran_ratio = -np.inf # Do not accept stump + stump case
-            else:
-                self.log_tran_ratio =  np.log(n_leaves) - np.log(n_splits)
+            self.log_tran_ratio =  np.log(n_leaves) - np.log(n_splits-1)
             proposed.trees.remove(tree2)
         return success    
+    
+class Birth(Move):
+    """
+    Add a new root to the ensemble. Use the same logic as the Break move for easier implementation.
+    """
+    def __init__(self, current : Parameters, trees_changed: np.ndarray, tol=100):
+        super().__init__(current, trees_changed)
+        assert len(trees_changed) == 1
+        self.tol = tol
+    
+    def is_feasible(self):
+        return True
+
+    def try_propose(self, proposed, generator):
+        m = proposed.n_trees
+        # Create a new root tree
+        tree = proposed.trees[self.trees_changed[0]]
+        proposed.trees.append(tree) # Add a copy
+        if not tree.only_root:
+            tree.prune_split(0, recursive= True) # Prune to the root
+        num_root = sum(1 for tree in proposed.trees if tree.only_root)
+        self.log_tran_ratio = np.log(m+1) - np.log(num_root)
+        return True
+
+class Death(Move):
+    """
+    Remove a root tree from the ensemble. Use the same logic as the Combine move for easier implementation.
+    """
+    def __init__(self, current: Parameters, trees_changed: np.ndarray, tol=100):
+        super().__init__(current, trees_changed)
+        assert len(trees_changed) == 2
+        self.tol = tol
+
+    def is_feasible(self):
+        tree = self.current.trees[self.trees_changed[1]]
+        return tree.only_root
+
+    def try_propose(self, proposed, generator):
+        num_root = sum(1 for tree in proposed.trees if tree.only_root)
+        # Remove the selected root tree
+        tree = proposed.trees[self.trees_changed[1]] # The root tree
+        proposed.trees.remove(tree)
+        m = proposed.n_trees
+        # Update log transition ratio
+        self.log_tran_ratio = np.log(num_root) - np.log(m+1)
+        return True
  
 all_moves = {"grow" : Grow,
             "prune" : Prune,
             "change" : Change,
             "swap" : Swap,
             "break": Break,
-            "combine": Combine}
+            "combine": Combine,
+            "birth": Birth,
+            "death": Death}
