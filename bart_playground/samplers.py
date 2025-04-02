@@ -1,3 +1,4 @@
+from matplotlib.pylab import f
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
@@ -220,7 +221,6 @@ class DefaultSampler(Sampler):
     def log_mh_ratio(self, move : Move, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
         return self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
             move.log_tran_ratio
 
     def one_iter(self, current, temp, return_trace=False):
@@ -291,13 +291,11 @@ class NTreeSampler(Sampler):
     
     def log_mh_ratio(self, move : Move, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
-        if isinstance(move, (Break, Combine, Birth, Death)):
+        if isinstance(move, (Break, Combine, Birth, Death)): # Omit likelihood and leaf value prior for special moves
             return self.tree_prior.trees_log_prior_ratio(move) + \
-                self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
                 self.tree_num_prior.tree_num_log_prior_ratio(move) + \
-                self.leaf_val_prior.leaf_vals_log_prior_ratio(move) + \
                 move.log_tran_ratio
-        else:
+        else: # Default BART moves containing likelihood
             return self.tree_prior.trees_log_prior_ratio(move) + \
                 self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
                 move.log_tran_ratio

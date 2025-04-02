@@ -237,7 +237,11 @@ class GlobalParamPrior:
             dict: A dictionary containing the resampled global parameters.
         """
         eps_sigma2 = self._sample_eps_sigma2(data_y - bart_params.evaluate())
-        ntree_theta = self._sample_ntree_theta(bart_params.n_trees)
+        if self.theta_df == np.inf:
+            # If theta_df is infinite, we don't need to sample ntree_theta
+            ntree_theta = self.theta_0
+        else:
+            ntree_theta = self._sample_ntree_theta(bart_params.n_trees)
         return {"eps_sigma2" : eps_sigma2,
                 "ntree_theta" : ntree_theta}
     
