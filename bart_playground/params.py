@@ -381,9 +381,6 @@ class Tree:
             self.thresholds[current_node] = np.nan
             self.leaf_vals[current_node] = np.nan
 
-            if self.cache_exists:
-                self.n[current_node] = -2
-
         # Finally, turn the original node into a leaf
         self.vars[node_id] = -1
 
