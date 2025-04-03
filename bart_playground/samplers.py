@@ -86,7 +86,7 @@ class Sampler(ABC):
             current = self.get_init_state()
         # assert isinstance(current, Parameters), "Current state must be of type Parameters."
         if n_skip == 0:
-            self.trace.append(current) # Add initial state to trace
+            self.trace.append(current) # Default: Add initial state to trace
         
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
     
