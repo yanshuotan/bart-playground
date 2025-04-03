@@ -293,10 +293,32 @@ class GlobalParamPrior:
         return theta_new
     
 class TreeNumPrior:
+    def __init__(self, prior_type="poisson"):
+        """
+        Initialize the TreeNumPrior.
+
+        Parameters:
+        - prior_type: str, default="poisson"
+            The type of prior to use for the number of trees. Options are:
+            - "poisson": Poisson distribution (default).
+            - "bernoulli": Bernoulli distribution with m = 1 or 2, each with probability 0.5.
+        """
+        if prior_type not in ["poisson", "bernoulli"]:
+            raise ValueError("Invalid prior_type. Must be 'poisson' or 'bernoulli'.")
+        self.prior_type = prior_type
+
     def tree_num_log_prior(self, bart_params: Parameters, ntree_theta):
         m = bart_params.n_trees
-        theta = ntree_theta
-        log_prior = m * np.log(theta) - theta - math.lgamma(m + 1)
+
+        if self.prior_type == "poisson":
+            # Poisson prior
+            theta = ntree_theta
+            log_prior = m * np.log(theta) - theta - math.lgamma(m + 1)
+        elif self.prior_type == "bernoulli":
+            # Bernoulli prior: m = 1 or 2, each with probability 0.5
+            if m not in [1, 2]:
+                return -np.inf  # Log probability of 0 for invalid m
+            log_prior = np.log(0.5)  # Both m=1 and m=2 have equal probability
         return log_prior
 
     def tree_num_log_prior_ratio(self, move: Move):
@@ -428,9 +450,9 @@ class BARTLikelihood:
 class ComprehensivePrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, 
                  eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
-                 theta_0=200, theta_df=100, tau_k = 2.0):
+                 theta_0=200, theta_df=100, tau_k = 2.0, tree_num_prior_type="poisson"):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
         self.global_prior = GlobalParamPrior(eps_q, eps_nu, theta_0, theta_df, specification, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
-        self.tree_num_prior = TreeNumPrior()
+        self.tree_num_prior = TreeNumPrior(prior_type=tree_num_prior_type)
         self.leaf_val_prior = LeafValPrior(tau_k)

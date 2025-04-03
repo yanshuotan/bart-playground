@@ -117,11 +117,12 @@ class ChangeNumTreeBART(BART):
                  eps_nu: float=3, specification="linear", 
                  theta_0 = 200, theta_df = 100, tau_k = 2.0,
                  proposal_probs=default_proposal_probs, special_probs=default_special_probs, tol=100, max_bins=100,
-                 random_state=42, temperature=1.0):
+                 random_state=42, temperature=1.0, tree_num_prior_type="poisson"):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
-                             eps_nu, specification, rng, theta_0, theta_df, tau_k)
+                                   eps_nu, specification, rng, theta_0, theta_df, tau_k,
+                                   tree_num_prior_type=tree_num_prior_type)
         is_temperature_number = type(temperature) in [float, int]
         if is_temperature_number:
             temp_func = lambda x: temperature
