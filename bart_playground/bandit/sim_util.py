@@ -21,7 +21,7 @@ class Scenario:
 
     def generate_covariates(self):
         # Generate a vector of P covariates (features) sampled from a normal distribution.
-        return np.random.normal(0, 1, size=self.P)
+        return np.random.normal(0, 1, size=self.P).astype(np.float32)
 
     def reward_function(self, x):
         """

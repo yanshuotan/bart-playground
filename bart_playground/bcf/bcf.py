@@ -1,3 +1,4 @@
+from sys import prefix
 from bart_playground.bcf.bcf_params import BCFParams
 from .bcf_prior import BCFPrior
 from .bcf_sampler import BCFSampler
@@ -60,7 +61,9 @@ class BCF:
         self._data = self.preprocessor.fit_transform(X, y, Z, ps)  # Store data attribute
         self.sampler.add_data(self.data)
         self.sampler.add_thresholds(self.preprocessor.thresholds)
-        self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly)  # Store trace
+        full_trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly)
+        # Only store post burn-in samples
+        self.trace = full_trace[self.nskip+1:]  
         self.is_fitted = True  # Set is_fitted flag
 
     def predict_all(self, X, Z, ps=None):
@@ -89,10 +92,13 @@ class BCF:
         post_tau = np.zeros((X.shape[0], self.n_treat_arms, self.ndpost))
         post_y = np.zeros_like(post_mu)
         
+        # debug
+        # print(len(self.trace), "trace length")
+        # print(self.ndpost, "ndpost")
+        # print(self.nskip, "nskip")
         for k in range(self.ndpost):
-            params : BCFParams = self.trace[self.nskip + k + 1]
+            params : BCFParams = self.trace[k-self.ndpost]
             
-            # np.sum([t.evaluate(X) for t in params.mu_trees], axis=0)
             post_mu[:,k] = params.mu_view.evaluate(X)
             for i in range(self.n_treat_arms):
                 post_tau[:, i, k] = params.tau_view_list[i].evaluate(X)
@@ -159,7 +165,6 @@ class BCF:
                 self.fit(X, y, Z, ps=ps, quietly=quietly)
             return self
             
-        additional_iters = add_ndpost + add_nskip
         # Set all previous iterations + add_nskip as burn-in
         self.nskip += self.ndpost + add_nskip
         # Set new add_ndpost iterations as post-burn-in
@@ -172,7 +177,8 @@ class BCF:
         self.sampler.add_thresholds(self.preprocessor.thresholds)
         
         # Run the sampler for additional iterations
-        new_trace = self.sampler.continue_run(additional_iters, new_data=self.data, quietly=quietly)
+        new_trace = self.sampler.continue_run(add_ndpost + add_nskip, new_data=self.data, quietly=quietly)
         self.trace = self.trace + new_trace[1:]
+        # self.trace = self.trace + new_trace[add_nskip+1:]  # Only keep post burn-in samples
         
         return self

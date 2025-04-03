@@ -10,22 +10,15 @@ from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
 from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.agent import BanditAgent
 
-
-def _run_single_simulation(sim, scenario, agent_classes, agent_names, n_draws):
+def class_to_agents(sim, scenario, agent_classes: List[Any]) -> Tuple[List[BanditAgent], List[str]]:
     """
-    Run a single simulation with the given scenario and agents.
+    Convert agent classes to instances and names.
     
     Args:
-        sim (int): Simulation number (used for random seed)
-        scenario (Scenario): The scenario instance to use for simulation
-        agent_classes (List): List of agent classes to instantiate
-        agent_names (List[str]): Names for each agent
-        n_draws (int): Number of draws per simulation
-        
-    Returns:
-        Tuple: (sim_index, regrets, computation_times)
+        agent_classes (List[Any]): List of agent classes to instantiate
+        agent_names (List[str]): List of names for each agent
     """
-    # Create agents with different seeds for this simulation
+        # Create agents with different seeds for this simulation
     sim_agents = []
     for agent_cls in agent_classes:
         if agent_cls == BCFAgent:
@@ -74,6 +67,25 @@ def _run_single_simulation(sim, scenario, agent_classes, agent_names, n_draws):
             )
         sim_agents.append(agent)
     
+    return sim_agents
+
+def _run_single_simulation(sim, scenario, agent_classes, agent_names, n_draws):
+    """
+    Run a single simulation with the given scenario and agents.
+    
+    Args:
+        sim (int): Simulation number (used for random seed)
+        scenario (Scenario): The scenario instance to use for simulation
+        agent_classes (List): List of agent classes to instantiate
+        agent_names (List[str]): Names for each agent
+        n_draws (int): Number of draws per simulation
+        
+    Returns:
+        Tuple: (sim_index, regrets, computation_times)
+    """
+    # Create agents with different seeds for this simulation
+    sim_agents = class_to_agents(sim=sim, scenario=scenario, agent_classes=agent_classes)
+    
     # Run simulation
     cum_regrets, time_agents = simulate(scenario, sim_agents, n_draws=n_draws)
     
@@ -99,12 +111,19 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
     all_regrets = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
     all_times = {name: np.zeros(n_simulations) for name in agent_names}
     
-    # Run simulations in parallel
-    results = Parallel(n_jobs=n_jobs)(
-        delayed(_run_single_simulation)(
-            sim, scenario, agents, agent_names, n_draws
-        ) for sim in range(n_simulations) # tqdm(range(n_simulations), desc="Simulating")
-    )
+    if n_jobs != 1:
+        # Run simulations in parallel
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(_run_single_simulation)(
+                sim, scenario, agents, agent_names, n_draws
+            ) for sim in range(n_simulations) # tqdm(range(n_simulations), desc="Simulating")
+        )
+    else:
+        # Run simulations sequentially
+        results = []
+        for sim in tqdm(range(n_simulations), desc="Simulating sequentially"):
+            result = _run_single_simulation(sim, scenario, agents, agent_names, n_draws)
+            results.append(result)
     
     # Process results from parallel jobs
     for sim, cum_regrets, time_agents in results:
@@ -121,7 +140,8 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
 
 def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulations: int = 10, n_draws: int = 500, 
     agent_classes = [SillyAgent, LinearTSAgent, BCFAgent], 
-    agent_names = ["Random", "LinearTS", "BCF"]):
+    agent_names = ["Random", "LinearTS", "BCF"],
+    n_jobs=6):
     """
     Compare multiple agents across different scenarios.
     
@@ -144,7 +164,8 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulation
             agents=agent_classes,
             agent_names=agent_names,
             n_simulations=n_simulations,
-            n_draws=n_draws
+            n_draws=n_draws,
+            n_jobs=n_jobs
         )
         results[scenario_name] = scenario_results
     
