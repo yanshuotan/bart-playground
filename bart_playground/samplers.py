@@ -316,7 +316,7 @@ class NTreeSampler(Sampler):
         special_probs = [self.special_probs.get(move, 0) for move in special_moves]
         selected_move = self.generator.choice(special_moves, p=special_probs)
 
-        if selected_move == "birth":
+        if selected_move == "birth" and (self.tree_num_prior.prior_type != "bernoulli" or self.tree_prior.n_trees < 2):
             birth_id = self.generator.integers(0, len(iter_current.trees))
             move = Birth(iter_current, [birth_id], tol=self.tol)
             if move.propose(self.generator):
