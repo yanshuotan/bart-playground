@@ -228,7 +228,7 @@ class Birth(Move):
         if not tree.only_root:
             tree.prune_split(0, recursive= True) # Prune to the root
         num_root = sum(1 for tree in proposed.trees if tree.only_root)
-        self.log_tran_ratio = np.log(m+1) - np.log(num_root)
+        self.log_tran_ratio = 0 #np.log(m+1) - np.log(num_root)
         return True
 
 class Death(Move):
@@ -251,7 +251,7 @@ class Death(Move):
         proposed.trees.remove(tree)
         m = proposed.n_trees
         # Update log transition ratio
-        self.log_tran_ratio = np.log(num_root) - np.log(m+1)
+        self.log_tran_ratio = 0 #np.log(num_root) - np.log(m+1)
         return True
  
 all_moves = {"grow" : Grow,

@@ -100,6 +100,13 @@ class TreesPrior:
         self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.generator = generator
 
+    def update_f_sigma2(self, n_trees):
+        """
+        Update f_sigma2 based on the current number of trees.
+        """
+        self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
+        print(self.f_sigma2)
+
     def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """
         Resample the values of the leaf nodes for the specified trees.

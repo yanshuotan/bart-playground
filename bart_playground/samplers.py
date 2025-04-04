@@ -221,6 +221,7 @@ class DefaultSampler(Sampler):
     def log_mh_ratio(self, move : Move, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
         return self.tree_prior.trees_log_prior_ratio(move) + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
             move.log_tran_ratio
 
     def one_iter(self, current, temp, return_trace=False):
@@ -294,6 +295,8 @@ class NTreeSampler(Sampler):
         if isinstance(move, (Break, Combine, Birth, Death)): # Omit likelihood and leaf value prior for special moves
             return self.tree_prior.trees_log_prior_ratio(move) + \
                 self.tree_num_prior.tree_num_log_prior_ratio(move) + \
+                self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
+                self.leaf_val_prior.leaf_vals_log_prior_ratio(move) + \
                 move.log_tran_ratio
         else: # Default BART moves containing likelihood
             return self.tree_prior.trees_log_prior_ratio(move) + \
@@ -324,27 +327,25 @@ class NTreeSampler(Sampler):
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees += 1
+                    self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [birth_id])
                     move.proposed.update_leaf_vals([birth_id], new_leaf_vals)
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
 
         elif selected_move == "death" and self.tree_prior.n_trees > 1:
-            # Find all root trees
-            root_indices = [i for i, tree in enumerate(iter_current.trees) if tree.only_root]
-            if root_indices:
-                # Randomly select one of the root trees to delete
-                death_id = self.generator.choice(root_indices)
-                possible_indices = [i for i in range(len(iter_current.trees)) if i != death_id]
-                random_id = self.generator.choice(possible_indices)
-                move = Death(iter_current, [random_id, death_id], tol=self.tol)
-                if move.propose(self.generator):
-                    move.proposed.update_tree_num()
-                    Z = self.generator.uniform(0, 1)
-                    if Z < np.exp(temp * self.log_mh_ratio(move)):
-                        self.tree_prior.n_trees -= 1
-                        iter_current = move.proposed
-                        iter_trace.append((1, move.proposed))
+            death_id = 0 # Select the first tree after permutation (might not be only_root)
+            possible_indices = [i for i in range(len(iter_current.trees)) if i != death_id]
+            random_id = self.generator.choice(possible_indices)
+            move = Death(iter_current, [random_id, death_id], tol=self.tol)
+            if move.propose(self.generator):
+                move.proposed.update_tree_num()
+                Z = self.generator.uniform(0, 1)
+                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                    self.tree_prior.n_trees -= 1
+                    self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
+                    iter_current = move.proposed
+                    iter_trace.append((1, move.proposed))
 
         elif selected_move == "break":
             break_id = [0] # Select the first tree after permutation
@@ -356,6 +357,7 @@ class NTreeSampler(Sampler):
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees += 1
+                    self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     new_leaf_vals_remain = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = break_id)
                     new_leaf_vals_new = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [-1])
                     move.proposed.update_leaf_vals(break_id, new_leaf_vals_remain)
@@ -374,6 +376,7 @@ class NTreeSampler(Sampler):
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees -= 1
+                    self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [combine_position])
                     move.proposed.update_leaf_vals([combine_position], new_leaf_vals)
                     iter_current = move.proposed
