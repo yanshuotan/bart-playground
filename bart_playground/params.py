@@ -137,10 +137,10 @@ class Tree:
         - leaf_ids : np.ndarray, optional
             Array indicating which leaf each data example belongs to. Default is None.
         """
-        self.dataX: Optional[NDArray[Float32Or64]] = dataX
-        self.vars: NDArray[np.int32] = vars
-        self.thresholds: NDArray[Float32Or64] = thresholds
-        self.leaf_vals: NDArray[Float32Or64] = leaf_vals
+        self.dataX = dataX
+        self.vars = vars
+        self.thresholds = thresholds
+        self.leaf_vals : NDArray[np.float64] = leaf_vals
 
         self.n: NDArray[np.int32] = n
         self.leaf_ids: NDArray[np.int32] = leaf_ids
@@ -222,7 +222,7 @@ class Tree:
         """
         return _traverse_tree_numba(X, self.vars, self.thresholds)
 
-    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[Float32Or64]:
+    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float64]:
         """
         Evaluate the tree for a given input data matrix.
 
@@ -634,7 +634,7 @@ class Parameters:
         
         return new_state
 
-    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[Float32Or64]:
+    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float64]:
         """
         Evaluate the model on the given data.
 
@@ -688,7 +688,7 @@ class Parameters:
             return self.trees[tree_ids[0]].leaf_basis
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
-    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[Float32Or64]):
+    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float64]):
         """
         Update the leaf values of specified trees.
 
