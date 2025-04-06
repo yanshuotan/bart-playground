@@ -94,7 +94,7 @@ class Tree:
         self.dataX = dataX
         self.vars = vars
         self.thresholds = thresholds
-        self.leaf_vals : NDArray[np.float64] = leaf_vals
+        self.leaf_vals : NDArray[np.float32] = leaf_vals
 
         self.n = n
         self.node_indicators = node_indicators
@@ -120,8 +120,8 @@ class Tree:
         # Define the basic tree parameters.
         vars = np.full(8, -2, dtype=int)  # -2 represents an inexistent node
         vars[0] = -1                      # -1 represents a leaf node
-        thresholds = np.full(8, np.nan, dtype=float)
-        leaf_vals = np.full(8, np.nan, dtype=float)
+        thresholds = np.full(8, np.nan, dtype=np.float32)
+        leaf_vals = np.full(8, np.nan, dtype=np.float32)
         leaf_vals[0] = 0                   # Initialize the leaf value
 
         new_tree = cls(dataX, vars, thresholds, leaf_vals, n = None, node_indicators = None, evals = None)
@@ -185,7 +185,7 @@ class Tree:
                 split_node_counter += 1
         return node_ids
 
-    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float64]:
+    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float32]:
         """
         Evaluate the tree for a given input data matrix.
 
@@ -229,12 +229,12 @@ class Tree:
         self.vars = new_vars
 
         # Resize split array
-        new_thresholds = np.full(new_length, np.nan, dtype=float)
+        new_thresholds = np.full(new_length, np.nan, dtype=np.float32)
         new_thresholds[:len(self.thresholds)] = self.thresholds
         self.thresholds = new_thresholds
 
         # Resize leaf_vals array
-        new_leaf_vals = np.full(new_length, np.nan, dtype=float)
+        new_leaf_vals = np.full(new_length, np.nan, dtype=np.float32)
         new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
         self.leaf_vals = new_leaf_vals
 
@@ -270,8 +270,8 @@ class Tree:
             self.n = self.n[:half_size]
             self.node_indicators = self.node_indicators[:, :half_size]
 
-    def split_leaf(self, node_id: int, var: int, threshold: float, left_val: float=np.nan, 
-                   right_val: float=np.nan):
+    def split_leaf(self, node_id: int, var: int, threshold: np.float32, left_val: np.float32=np.float32(np.nan), 
+                   right_val: np.float32 = np.float32(np.nan)):
         """
         Split a leaf node into two child nodes.
 
@@ -633,7 +633,7 @@ class Parameters:
         
         return new_state
 
-    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float64]:
+    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float32]:
         """
         Evaluate the model on the given data.
 
@@ -685,7 +685,7 @@ class Parameters:
             return self.trees[tree_ids[0]].leaf_basis
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
-    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float64]):
+    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float32]):
         """
         Update the leaf values of specified trees.
 
