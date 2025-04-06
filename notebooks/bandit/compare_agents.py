@@ -122,10 +122,10 @@ def _run_scenario_simulation(scenario_name, scenario, sim, agent_classes, agent_
     # Run simulation
     scenario.set_seed(sim)
     scenario.init_params()
-    cum_regrets, time_agents = simulate(scenario, sim_agents, n_draws=n_draws)
+    cum_regrets, time_agents, mem_agents = simulate(scenario, sim_agents, n_draws=n_draws)
     
     # Return results for this simulation, including scenario name
-    return scenario_name, sim, cum_regrets, time_agents
+    return scenario_name, sim, cum_regrets, time_agents, mem_agents
 
 def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulations: int = 10, n_draws: int = 500, 
     agent_classes = [SillyAgent, LinearTSAgent, BCFAgent], 
@@ -152,7 +152,8 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulation
     for scenario_name in scenarios.keys():
         results[scenario_name] = {
             'regrets': {name: np.zeros((n_simulations, n_draws)) for name in agent_names},
-            'times': {name: np.zeros(n_simulations) for name in agent_names}
+            'times': {name: np.zeros(n_simulations) for name in agent_names},
+            'memory usage': {name: np.zeros(n_simulations) for name in agent_names}
         }
     
     # Process scenarios by batches
@@ -198,10 +199,11 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulation
                 batch_results.append(result)
         
         # Process results
-        for scenario_name, sim, cum_regrets, time_agents in batch_results:
+        for scenario_name, sim, cum_regrets, time_agents, mem_agents in batch_results:
             for i, name in enumerate(agent_names):
                 results[scenario_name]['regrets'][name][sim, :] = cum_regrets[:, i]
                 results[scenario_name]['times'][name][sim] = time_agents[i]
+                results[scenario_name]['memory usage'][name][sim] = mem_agents[i]
     
     return results
 
@@ -311,6 +313,7 @@ def print_summary_results(results: Dict[str, Dict]):
         print(f"\n=== {scenario_name} Scenario ===")
         regrets = scenario_results['regrets']
         times = scenario_results['times']
+        mems = scenario_results['memory usage']
         
         # Print final regrets
         print("\nFinal cumulative regrets (mean ± std):")
@@ -322,5 +325,12 @@ def print_summary_results(results: Dict[str, Dict]):
         print("\nAverage computation times (seconds):")
         for agent_name, agent_times in times.items():
             print(f"  {agent_name}: {np.mean(agent_times):.4f} (±{np.std(agent_times):.4f})")
+
+        # Print memory usage if exists (i.e. any agent has non-"zero" memory usage)
+        has_memory_data = any(np.any(agent_memory > 0) for agent_memory in mems.values())
+        if has_memory_data:
+            print("\nAverage memory usage (bytes):")
+            for agent_name, agent_memory in scenario_results['memory usage'].items():
+                print(f"  {agent_name}: {np.mean(agent_memory):.2f} (±{np.std(agent_memory):.2f})")
         
         print("\n" + "=" * 40)

@@ -124,7 +124,7 @@ class Friedman2Scenario(Scenario):
         outcome_mean = 10 * np.sin(np.pi * x[0] * x[1]) + \
                       20 * (x[2] - 0.5) ** 2 + \
                       10 * x[3] + 5 * x[4] + \
-                      self.arm_offsets * (
+                      self.lambda_val * self.arm_offsets * (
                         10 * np.sin(np.pi * x[self.indices[0]] * x[self.indices[1]]) + \
                         20 * (x[self.indices[2]] - 0.5) ** 2 + \
                         10 * x[self.indices[3]] + 5 * x[self.indices[4]]
@@ -144,6 +144,7 @@ The `simulate` function takes a scenario, a list of agents, and the number of dr
 
 We use `tqdm` to track progress.
 '''
+from pympler import asizeof
 def simulate(scenario, agents, n_draws):
     """
     Simulate a bandit problem using the provided scenario and agents.
@@ -159,7 +160,8 @@ def simulate(scenario, agents, n_draws):
     """
     n_agents = len(agents)
     cum_regrets = np.zeros((n_draws, n_agents))
-    time_agent = np.zeros(n_agents)
+    time_agents = np.zeros(n_agents)
+    mem_agents = np.zeros(n_agents)
     
     for draw in tqdm(range(n_draws), desc="Simulating", miniters=1):
         x = scenario.generate_covariates()
@@ -177,5 +179,9 @@ def simulate(scenario, agents, n_draws):
                 cum_regrets[draw, i] = cum_regrets[draw - 1, i] + inst_regret
             # Update agent's state with the chosen arm's data.
             agent.update_state(arm, x, u["reward"][arm])
-            time_agent[i] += time.time() - t0
-    return cum_regrets, time_agent
+            time_agents[i] += time.time() - t0
+
+            # suppress memory usage for now
+            mem_usage = 0 # asizeof.asizeof(agent)
+            mem_agents[i] = mem_usage
+    return cum_regrets, time_agents, mem_agents
