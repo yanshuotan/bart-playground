@@ -8,20 +8,32 @@ import time
 We define a base `Scenario` class and a `LinearScenario` subclass. The `generate_covariates` method produces a vector of features (here, sampled from a standard normal distribution), and the `reward_function` computes the expected reward for each arm and adds noise.
 '''
 class Scenario:
-    def __init__(self, P, K, sigma2):
+    def __init__(self, P, K, sigma2, random_generator=None):
         """
         Parameters:
             P (int): Number of covariates (features).
             K (int): Number of arms (including control).
             sigma2 (float): Noise variance.
+            random_generator: Random number generator instance. If None, np.random is used.
         """
         self.P = P
         self.K = K
         self.sigma2 = sigma2
+        self.rng = random_generator if random_generator is not None else np.random
+        self.init_params()
+
+    def init_params(self):
+        pass 
+
+    def set_seed(self, seed):
+        """
+        Set the random seed for reproducibility.
+        """
+        self.rng.seed(seed)
 
     def generate_covariates(self):
         # Generate a vector of P covariates (features) sampled from a normal distribution.
-        return np.random.normal(0, 1, size=self.P).astype(np.float32)
+        return self.rng.normal(0, 1, size=self.P).astype(np.float32)
 
     def reward_function(self, x):
         """
@@ -33,59 +45,90 @@ class Scenario:
         raise NotImplementedError("This method should be implemented in subclasses.")
 
 class LinearScenario(Scenario):
-    def __init__(self, P, K, sigma2):
-        super().__init__(P, K, sigma2)
+    def __init__(self, P, K, sigma2, random_generator=None):
+        super().__init__(P, K, sigma2, random_generator)
+
+    def init_params(self):
         # Generate a K x P matrix of arm-specific coefficients uniformly between -1 and 1.
-        self.mu_a = np.random.uniform(-1, 1, size=(K, P))
+        self.mu_a = self.rng.uniform(-1, 1, size=(self.K, self.P))
     
     def reward_function(self, x):
         # Compute noise for each arm.
-        epsilon_t = np.random.normal(0, np.sqrt(self.sigma2), size=self.K)
+        epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
         # Compute expected rewards (outcome means) for each arm.
         outcome_mean = 10 * self.mu_a.dot(x)
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
     
 class LinearOffsetScenario(Scenario):
-    def __init__(self, P, K, sigma2):
-        super().__init__(P, K, sigma2)
-        # Generate a 1 x P matrix of global coefficients uniformly between -1 and 1.
-        self.mu = np.random.uniform(-1, 1, size=(1, P))
+    def __init__(self, P, K, sigma2, random_generator=None):
+        super().__init__(P, K, sigma2, random_generator)
+        
+    def init_params(self):
+        # Uniformly distributed covariates in unit cube
+        self.mu = self.rng.uniform(-1, 1, size=(1, self.P))
         # Generate a K x 1 matrix of arm-specific offsets uniformly between -5 and 5.
-        self.arm_offsets = np.random.uniform(-5, 5, size=K)
+        self.arm_offsets = self.rng.uniform(-5, 5, size=self.K)
     
     def reward_function(self, x):
-        epsilon_t = np.random.normal(0, np.sqrt(self.sigma2), size=self.K)
+        epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
         outcome_mean = 10 * self.mu.dot(x) + self.arm_offsets
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
 class OffsetScenario(Scenario):
-    def __init__(self, P, K, sigma2, lambda_val=3):
-        super().__init__(P, K, sigma2)
-        # Uniformly distributed covariates in unit cube
-        self.mu = np.random.uniform(-1, 1, size=(1, P))
+    def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
         self.lambda_val = lambda_val
+        super().__init__(P, K, sigma2, random_generator)
+
+    def init_params(self):
+        # Uniformly distributed covariates in unit cube
+        self.mu = self.rng.uniform(-1, 1, size=(1, self.P))
         # Generate a K x 1 matrix of arm-specific offsets uniformly between -5 and 5.
-        self.arm_offsets = np.random.uniform(-5, 5, size=K)
+        self.arm_offsets = self.rng.uniform(-5, 5, size=self.K)
     
     def reward_function(self, x):
-        epsilon_t = np.random.normal(0, np.sqrt(self.sigma2), size=self.K)
+        epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
         outcome_mean = 10 * np.sin(self.mu.dot(x)) + self.lambda_val * self.arm_offsets
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
 class FriedmanScenario(Scenario):
-    def __init__(self, P, K, sigma2, lambda_val=3):
-        super().__init__(P, K, sigma2)
+    def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
         if P < 5:
             raise ValueError("Friedman is for P>=5")
-        
         self.lambda_val = lambda_val
+        super().__init__(P, K, sigma2, random_generator)
     
+    def init_params(self):
+        self.arm_offsets = self.rng.uniform(-5, 5, size=self.K)
+
     def reward_function(self, x):
-        epsilon_t = np.random.normal(0, np.sqrt(self.sigma2), size=self.K)
+        epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
         outcome_mean = 10 * np.sin(np.pi * x[0] * x[1]) + \
                       20 * (x[2] - 0.5) ** 2 + \
                       10 * x[3] + 5 * x[4] + \
-                      self.lambda_val * np.arange(1, self.K+1)
+                      self.lambda_val * self.arm_offsets
+        return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
+
+class Friedman2Scenario(Scenario):
+    def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
+        if P < 5:
+            raise ValueError("Friedman is for P>=5")
+        self.lambda_val = lambda_val
+        super().__init__(P, K, sigma2, random_generator)
+    
+    def init_params(self):
+        self.arm_offsets = self.rng.uniform(-5, 5, size=self.K)
+        self.indices = self.rng.choice(self.P, size=5, replace=False)
+    
+    def reward_function(self, x):
+        epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
+        outcome_mean = 10 * np.sin(np.pi * x[0] * x[1]) + \
+                      20 * (x[2] - 0.5) ** 2 + \
+                      10 * x[3] + 5 * x[4] + \
+                      self.arm_offsets * (
+                        10 * np.sin(np.pi * x[self.indices[0]] * x[self.indices[1]]) + \
+                        20 * (x[self.indices[2]] - 0.5) ** 2 + \
+                        10 * x[self.indices[3]] + 5 * x[self.indices[4]]
+                      )
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
 '''
