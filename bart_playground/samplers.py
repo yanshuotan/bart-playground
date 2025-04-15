@@ -266,6 +266,12 @@ class NTreeSampler(Sampler):
         self.break_transition_ratios = []
         self.combine_prior_ratios = []
         self.combine_transition_ratios = []
+
+        self.birth_mh_ratios = []
+        self.death_mh_ratios = []
+
+        self.birth_likelihood_ratios = []
+
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
@@ -325,6 +331,8 @@ class NTreeSampler(Sampler):
             if move.propose(self.generator):
                 move.proposed.update_tree_num()
                 Z = self.generator.uniform(0, 1)
+                self.birth_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
+                self.birth_likelihood_ratios.append(np.exp(self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y)))
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees += 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
@@ -341,6 +349,7 @@ class NTreeSampler(Sampler):
             if move.propose(self.generator):
                 move.proposed.update_tree_num()
                 Z = self.generator.uniform(0, 1)
+                self.death_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees -= 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
@@ -358,10 +367,8 @@ class NTreeSampler(Sampler):
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees += 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
-                    new_leaf_vals_remain = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = break_id)
-                    new_leaf_vals_new = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [-1])
-                    move.proposed.update_leaf_vals(break_id, new_leaf_vals_remain)
-                    move.proposed.update_leaf_vals([-1], new_leaf_vals_new)
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = break_id + [-1])
+                    move.proposed.update_leaf_vals(break_id + [-1], new_leaf_vals)
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
         
