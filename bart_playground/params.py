@@ -350,6 +350,9 @@ class Tree:
         # Use a stack to manage nodes to prune
         stack = [node_id]
 
+        # Store the original node .n
+        ori_n = self.n[node_id]
+
         while stack:
             current_node = stack.pop()
 
@@ -380,9 +383,11 @@ class Tree:
             self.vars[current_node] = -2
             self.thresholds[current_node] = np.nan
             self.leaf_vals[current_node] = np.nan
+            self.n[current_node] = -2
 
-        # Finally, turn the original node into a leaf
+        # Finally, turn the original node into a leaf and set the n correctly
         self.vars[node_id] = -1
+        self.n[node_id] = ori_n
 
         # Truncate unnecessary space in the tree arrays
         self._truncate_tree_arrays()
