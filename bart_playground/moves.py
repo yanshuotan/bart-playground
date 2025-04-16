@@ -223,10 +223,10 @@ class Birth(Move):
     def try_propose(self, proposed, generator):
         m = proposed.n_trees
         # Create a new root tree
-        tree = proposed.trees[self.trees_changed[0]]
-        proposed.trees.append(tree.copy()) # Add a copy
+        tree = proposed.trees[self.trees_changed[0]].copy()
         if not tree.only_root:
             tree.prune_split(0, recursive= True) # Prune to the root
+        proposed.trees.append(tree)
         num_root = sum(1 for tree in proposed.trees if tree.only_root)
         self.log_tran_ratio = 0 #np.log(m+1) - np.log(num_root)
         return True

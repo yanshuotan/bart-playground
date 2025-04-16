@@ -96,7 +96,7 @@ class Sampler(ABC):
                 print(f"Running iteration {iter}/{n_iter}")
             # print(self.temp_schedule)
             temp = self.temp_schedule(iter)
-            current = self.one_iter(current, temp, return_trace=False)
+            current = self.one_iter(current, temp, return_trace=False, iteration=iter)
             if iter >= n_skip:
                 if len(self.trace) > 0:
                     self.trace[-1].clear_cache()
@@ -224,7 +224,7 @@ class DefaultSampler(Sampler):
             self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
             move.log_tran_ratio
 
-    def one_iter(self, current, temp, return_trace=False):
+    def one_iter(self, current, temp, return_trace=False, iteration=None):
         """
         Perform one iteration of the sampler.
         """
@@ -255,22 +255,23 @@ class NTreeSampler(Sampler):
     """
     def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
                  generator: np.random.Generator, temp_schedule=TemperatureSchedule(),
-                 special_probs: dict = None, tol=100):
+                 special_probs: dict = None, tol=100, special_move_interval=10):
         self.tol = tol
+        # Number of iterations of default moves before considering special moves.
+        self.special_move_interval = special_move_interval 
         # Default probabilities for special moves
         if special_probs is None:
             special_probs = {"birth": 0.25, "death": 0.25, "break": 0.25, "combine": 0.25}
         self.special_probs = special_probs
-        # Record tree prior ratios and transition ratios
-        self.break_prior_ratios = []
-        self.break_transition_ratios = []
-        self.combine_prior_ratios = []
-        self.combine_transition_ratios = []
 
+        # Record tree mh ratios
+        self.break_mh_ratios = []
+        self.combine_mh_ratios = []
         self.birth_mh_ratios = []
         self.death_mh_ratios = []
 
         self.birth_likelihood_ratios = []
+        self.break_likelihood_ratios = []
 
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
@@ -308,14 +309,11 @@ class NTreeSampler(Sampler):
             return self.tree_prior.trees_log_prior_ratio(move) + \
                 self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
                 move.log_tran_ratio
-
-    def one_iter(self, current, temp, return_trace=False):
+        
+    def special_moves(self, iter_current, temp, iter_trace):
         """
-        Perform one iteration of the sampler.
+        Perform special moves: birth, death, break, combine.
         """
-        iter_current = current.copy() # First make a copy
-        iter_trace = [(0, iter_current)]
-
         # Randomly permute the positions of all trees in iter_current.trees
         permuted_indices = self.generator.permutation(len(iter_current.trees))
         iter_current.trees = [iter_current.trees[i] for i in permuted_indices]
@@ -326,7 +324,7 @@ class NTreeSampler(Sampler):
         selected_move = self.generator.choice(special_moves, p=special_probs)
 
         if selected_move == "birth" and (self.tree_num_prior.prior_type != "bernoulli" or self.tree_prior.n_trees < 2):
-            birth_id = self.generator.integers(0, len(iter_current.trees))
+            birth_id = self.generator.integers(0, len(iter_current.trees)) # Just a dummy id for easier mh ratio calculation
             move = Birth(iter_current, [birth_id], tol=self.tol)
             if move.propose(self.generator):
                 move.proposed.update_tree_num()
@@ -336,15 +334,15 @@ class NTreeSampler(Sampler):
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees += 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
-                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [birth_id])
-                    move.proposed.update_leaf_vals([birth_id], new_leaf_vals)
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [-1])
+                    move.proposed.update_leaf_vals([-1], new_leaf_vals)
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
 
         elif selected_move == "death" and self.tree_prior.n_trees > 1:
             death_id = 0 # Select the first tree after permutation (might not be only_root)
             possible_indices = [i for i in range(len(iter_current.trees)) if i != death_id]
-            random_id = self.generator.choice(possible_indices)
+            random_id = self.generator.choice(possible_indices) # Just a dummy id for easier mh ratio calculation
             move = Death(iter_current, [random_id, death_id], tol=self.tol)
             if move.propose(self.generator):
                 move.proposed.update_tree_num()
@@ -361,8 +359,8 @@ class NTreeSampler(Sampler):
             move = Break(iter_current, break_id, self.tol)   
             if move.propose(self.generator):
                 move.proposed.update_tree_num()
-                self.break_prior_ratios.append(self.tree_prior.trees_log_prior_ratio(move))
-                self.break_transition_ratios.append(move.log_tran_ratio)
+                self.break_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
+                self.break_likelihood_ratios.append(np.exp(self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y)))
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees += 1
@@ -378,8 +376,7 @@ class NTreeSampler(Sampler):
             move = Combine(iter_current, combine_ids, self.tol)   
             if move.propose(self.generator):
                 move.proposed.update_tree_num()
-                self.combine_prior_ratios.append(self.tree_prior.trees_log_prior_ratio(move))
-                self.combine_transition_ratios.append(move.log_tran_ratio)
+                self.combine_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees -= 1
@@ -388,6 +385,18 @@ class NTreeSampler(Sampler):
                     move.proposed.update_leaf_vals([combine_position], new_leaf_vals)
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
+        return iter_current
+
+    def one_iter(self, current, temp, return_trace=False, iteration=0):
+        """
+        Perform one iteration of the sampler.
+        """
+        iter_current = current.copy() # First make a copy
+        iter_trace = [(0, iter_current)]
+
+        # Perform special moves if the iteration is a multiple of special_move_interval
+        if iteration % self.special_move_interval == 0:
+            iter_current = self.special_moves(iter_current, temp, iter_trace)
 
         # Default BART
         for k in range(self.tree_prior.n_trees):
