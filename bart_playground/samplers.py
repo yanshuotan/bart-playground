@@ -281,6 +281,10 @@ class NTreeSampler(Sampler):
         self.likelihood = prior.likelihood
         self.tree_num_prior = prior.tree_num_prior
         self.leaf_val_prior = prior.leaf_val_prior
+
+        # Initial number of trees
+        self.ini_ntrees = self.tree_prior.n_trees
+
         super().__init__(prior, proposal_probs, generator, temp_schedule)
 
     def get_init_state(self) -> Parameters:
@@ -323,7 +327,10 @@ class NTreeSampler(Sampler):
         special_probs = [self.special_probs.get(move, 0) for move in special_moves]
         selected_move = self.generator.choice(special_moves, p=special_probs)
 
-        if selected_move == "birth" and (self.tree_num_prior.prior_type != "bernoulli" or self.tree_prior.n_trees < 2):
+        if selected_move == "birth" and (
+            self.tree_num_prior.prior_type != "bernoulli" or 
+            self.tree_prior.n_trees < self.ini_ntrees + 1
+        ):
             birth_id = self.generator.integers(0, len(iter_current.trees)) # Just a dummy id for easier mh ratio calculation
             move = Birth(iter_current, [birth_id], tol=self.tol)
             if move.propose(self.generator):
@@ -339,7 +346,10 @@ class NTreeSampler(Sampler):
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
 
-        elif selected_move == "death" and self.tree_prior.n_trees > 1:
+        elif selected_move == "death" and (
+            (self.tree_num_prior.prior_type != "bernoulli" and self.tree_prior.n_trees > 1) or
+            (self.tree_num_prior.prior_type == "bernoulli" and self.tree_prior.n_trees > self.ini_ntrees)
+        ):
             death_id = 0 # Select the first tree after permutation (might not be only_root)
             possible_indices = [i for i in range(len(iter_current.trees)) if i != death_id]
             random_id = self.generator.choice(possible_indices) # Just a dummy id for easier mh ratio calculation
@@ -354,7 +364,10 @@ class NTreeSampler(Sampler):
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
 
-        elif selected_move == "break":
+        elif selected_move == "break" and (
+            self.tree_num_prior.prior_type != "bernoulli" or 
+            self.tree_prior.n_trees < self.ini_ntrees + 1
+        ):
             break_id = [0] # Select the first tree after permutation
             move = Break(iter_current, break_id, self.tol)   
             if move.propose(self.generator):
@@ -370,7 +383,10 @@ class NTreeSampler(Sampler):
                     iter_current = move.proposed
                     iter_trace.append((1, move.proposed))
         
-        elif selected_move == "combine" and self.tree_prior.n_trees > 1:
+        elif selected_move == "combine" and (
+            (self.tree_num_prior.prior_type != "bernoulli" and self.tree_prior.n_trees > 1) or
+            (self.tree_num_prior.prior_type == "bernoulli" and self.tree_prior.n_trees > self.ini_ntrees)
+        ):
             combine_ids = [0, 1] # Select the first two trees after permutation
             combine_position = combine_ids[0] if combine_ids[0] < combine_ids[1] else combine_ids[0] - 1
             move = Combine(iter_current, combine_ids, self.tol)   

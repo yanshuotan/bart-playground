@@ -321,10 +321,7 @@ class TreeNumPrior:
             theta = ntree_theta
             log_prior = m * np.log(theta) - theta - math.lgamma(m + 1)
         elif self.prior_type == "bernoulli":
-            # Bernoulli prior: m = 1 or 2, each with probability 0.5
-            if m not in [1, 2]:
-                return -np.inf  # Log probability of 0 for invalid m
-            log_prior = np.log(0.5)  # Both m=1 and m=2 have equal probability
+            log_prior = np.log(0.5)  # Both m have equal probability
         return log_prior
 
     def tree_num_log_prior_ratio(self, move: Move):
