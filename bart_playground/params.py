@@ -439,6 +439,8 @@ class Tree:
         tree_new.evals = np.zeros(tree_new.n[0])
         tree_new.update_n()
 
+        tree_new.update_outputs()
+
         return tree_new
 
 
@@ -487,6 +489,8 @@ class Tree:
                 var_index += 1
 
         self._truncate_tree_arrays()
+
+        self.update_outputs()
             
         return self.update_n(node_id)
     
