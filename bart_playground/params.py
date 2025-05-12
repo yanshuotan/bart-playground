@@ -262,7 +262,7 @@ class Tree:
         A minimum size of 2 is enforced to prevent excessive truncation 
         that could lead to an invalid tree structure.
         """
-        while len(self.vars) > 2 and np.where(self.vars == -1)[0].max() < (half_size := len(self.vars) // 2):
+        while len(self.vars) > 8 and np.where(self.vars == -1)[0].max() < (half_size := len(self.vars) // 2):
             # Truncate arrays to the first half
             self.thresholds = self.thresholds[:half_size]
             self.vars = self.vars[:half_size]
@@ -439,8 +439,6 @@ class Tree:
         tree_new.evals = np.zeros(tree_new.n[0])
         tree_new.update_n()
 
-        tree_new.update_outputs()
-
         return tree_new
 
 
@@ -489,8 +487,6 @@ class Tree:
                 var_index += 1
 
         self._truncate_tree_arrays()
-
-        self.update_outputs()
             
         return self.update_n(node_id)
     
@@ -693,6 +689,18 @@ class Parameters:
             tree.evals = None
             tree.node_indicators = None
             tree.n = None
+
+    def update_cache(self, add_ids: Optional[list[int]] = None, delete_ids: Optional[list[int]] = None):
+        """
+        Update the cache by adding or subtracting the evaluations of specific trees.
+        """
+        if add_ids is not None:
+            for tree_id in add_ids:
+                self.cache = self.cache + self.trees[tree_id].evals
+
+        if delete_ids is not None:
+            for tree_id in delete_ids:
+                self.cache = self.cache - self.trees[tree_id].evals
             
     def copy(self, modified_tree_ids=None):
         if modified_tree_ids is None:

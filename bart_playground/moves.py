@@ -176,6 +176,8 @@ class Break(Move):
         tree.prune_split(node_id, recursive= True)
         n_leaves = tree.n_leaves
         proposed.trees.append(tree_new)
+        proposed.update_tree_num()
+        proposed.update_cache(add_ids = [proposed.n_trees-1])
         self.log_tran_ratio = np.log(n_splits) - np.log(n_leaves)
         return True
 
@@ -205,7 +207,9 @@ class Combine(Move):
         if success: 
             n_splits = len(tree1.split_nodes)
             self.log_tran_ratio =  np.log(n_leaves) - np.log(n_splits-1)
+            proposed.update_cache(delete_ids = [self.trees_changed[1]])
             proposed.trees.remove(tree2)
+            proposed.update_tree_num()
         return success    
     
 class Birth(Move):
@@ -223,10 +227,10 @@ class Birth(Move):
     def try_propose(self, proposed, generator):
         m = proposed.n_trees
         # Create a new root tree
-        tree = proposed.trees[self.trees_changed[0]].copy()
-        if not tree.only_root:
-            tree.prune_split(0, recursive= True) # Prune to the root
+        tree = Tree.new(dataX = proposed.trees[0].dataX)
         proposed.trees.append(tree)
+        proposed.update_tree_num()
+        proposed.update_cache(add_ids = [proposed.n_trees-1])
         num_root = sum(1 for tree in proposed.trees if tree.only_root)
         self.log_tran_ratio = 0 #np.log(m+1) - np.log(num_root)
         return True
@@ -248,7 +252,9 @@ class Death(Move):
         num_root = sum(1 for tree in proposed.trees if tree.only_root)
         # Remove the selected root tree
         tree = proposed.trees[self.trees_changed[1]] # The root tree
+        proposed.update_cache(delete_ids = [self.trees_changed[1]])
         proposed.trees.remove(tree)
+        proposed.update_tree_num()
         m = proposed.n_trees
         # Update log transition ratio
         self.log_tran_ratio = 0 #np.log(num_root) - np.log(m+1)

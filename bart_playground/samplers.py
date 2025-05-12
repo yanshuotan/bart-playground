@@ -270,9 +270,6 @@ class NTreeSampler(Sampler):
         self.birth_mh_ratios = []
         self.death_mh_ratios = []
 
-        self.birth_likelihood_ratios = []
-        self.break_likelihood_ratios = []
-
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
@@ -334,10 +331,8 @@ class NTreeSampler(Sampler):
             birth_id = self.generator.integers(0, len(iter_current.trees)) # Just a dummy id for easier mh ratio calculation
             move = Birth(iter_current, [birth_id], tol=self.tol)
             if move.propose(self.generator):
-                move.proposed.update_tree_num()
                 Z = self.generator.uniform(0, 1)
                 self.birth_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
-                self.birth_likelihood_ratios.append(np.exp(self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y)))
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees += 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
@@ -355,7 +350,6 @@ class NTreeSampler(Sampler):
             random_id = self.generator.choice(possible_indices) # Just a dummy id for easier mh ratio calculation
             move = Death(iter_current, [random_id, death_id], tol=self.tol)
             if move.propose(self.generator):
-                move.proposed.update_tree_num()
                 Z = self.generator.uniform(0, 1)
                 self.death_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
@@ -371,9 +365,7 @@ class NTreeSampler(Sampler):
             break_id = [0] # Select the first tree after permutation
             move = Break(iter_current, break_id, self.tol)   
             if move.propose(self.generator):
-                move.proposed.update_tree_num()
                 self.break_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
-                self.break_likelihood_ratios.append(np.exp(self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y)))
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
                     self.tree_prior.n_trees += 1
@@ -391,7 +383,6 @@ class NTreeSampler(Sampler):
             combine_position = combine_ids[0] if combine_ids[0] < combine_ids[1] else combine_ids[0] - 1
             move = Combine(iter_current, combine_ids, self.tol)   
             if move.propose(self.generator):
-                move.proposed.update_tree_num()
                 self.combine_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
                 Z = self.generator.uniform(0, 1)
                 if Z < np.exp(temp * self.log_mh_ratio(move)):
