@@ -115,13 +115,13 @@ class ChangeNumTreeBART(BART):
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
-                 theta_0 = 200, theta_df = 100, tau_k = 2.0,
+                 theta_0_ini = 200, theta_0_min = 10, theta_df = 100, tau_k = 2.0,
                  proposal_probs=default_proposal_probs, special_probs=default_special_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, tree_num_prior_type="poisson", special_move_interval = 1):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
-                                   eps_nu, specification, rng, theta_0, theta_df, tau_k,
+                                   eps_nu, specification, rng, theta_0_ini, theta_df, tau_k,
                                    tree_num_prior_type=tree_num_prior_type)
         is_temperature_number = type(temperature) in [float, int]
         if is_temperature_number:
@@ -132,5 +132,6 @@ class ChangeNumTreeBART(BART):
         else:
             raise ValueError("Invalid temperature type ", type(temperature))
         sampler = NTreeSampler(prior = prior, proposal_probs = proposal_probs, special_probs = special_probs, 
-                               generator = rng, tol = tol, temp_schedule=temp_schedule, special_move_interval=special_move_interval)
+                               generator = rng, tol = tol, temp_schedule=temp_schedule, 
+                               special_move_interval=special_move_interval, min_theta_0=theta_0_min)
         super().__init__(preprocessor, sampler, ndpost, nskip)

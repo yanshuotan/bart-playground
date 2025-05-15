@@ -23,7 +23,8 @@ class Sampler(ABC):
     Base class for the BART sampler.
     """
     def __init__(self, prior, proposal_probs: dict,  
-                 generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule()):
+                 generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule(),
+                 use_theta_0: bool = False, min_theta_0: float = 10):
         """
         Initialize the sampler with the given parameters.
 
@@ -32,6 +33,8 @@ class Sampler(ABC):
             proposal_probs (dict): A dictionary containing proposal probabilities.
             generator (np.random.Generator): A random number generator.
             temp_schedule (TemperatureSchedule): Temperature schedule for the sampler.
+            use_theta_0 (bool): Whether to enable theta_0 functionality.
+            min_theta_0 (float): Minimum value for theta_0 during updates (if enabled).
 
         Attributes:
             data: Placeholder for data, initially set to None.
@@ -49,10 +52,19 @@ class Sampler(ABC):
         self.temp_schedule = temp_schedule
         self.trace = []
         self.generator = generator
+        self.use_theta_0 = use_theta_0  # Enable or disable theta_0 functionality
+        self.min_theta_0 = min_theta_0  # Minimum theta_0 value if enabled
+
         # create cache for moves
         self.moves_cache = None
         # current move cache iterator
         self.moves_cache_iterator = None
+
+       # Save the initial value of theta_0 if enabled
+        if self.use_theta_0 and hasattr(prior.global_prior, 'theta_0'):
+            self.initial_theta_0 = prior.global_prior.theta_0  # Save the initial value
+        else:
+            self.initial_theta_0 = None  # Handle cases where theta_0 is not defined
         
     @property
     def data(self) -> Dataset:
@@ -70,6 +82,25 @@ class Sampler(ABC):
 
     def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
+
+    def update_theta_0(self, iteration, total_iterations):
+        """
+        Linearly decrease theta_0 in self.global_prior as iterations progress.
+
+        Parameters:
+            iteration (int): Current iteration number.
+            total_iterations (int): Total number of iterations.
+        """
+        if not self.use_theta_0:
+            return  # Skip if theta_0 functionality is disabled
+
+        if self.initial_theta_0 is not None and total_iterations > 0:
+            max_theta_0 = self.initial_theta_0  # Use the saved initial value
+            # Use the user-defined minimum theta_0
+            self.global_prior.theta_0 = max(
+                self.min_theta_0,
+                max_theta_0 - (max_theta_0 - self.min_theta_0) * (iteration / total_iterations)
+            )
         
     def run(self, n_iter, progress_bar = True, quietly = False, current = None, n_skip = 0):
         """
@@ -97,6 +128,9 @@ class Sampler(ABC):
             # print(self.temp_schedule)
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False, iteration=iter)
+            # Update theta_0
+            if iter <= int(0.8*n_skip):
+                self.update_theta_0(iter, int(0.8*n_skip)) #TODO: Make this 0.8 a parameter
             if iter >= n_skip:
                 if len(self.trace) > 0:
                     self.trace[-1].clear_cache()
@@ -255,7 +289,7 @@ class NTreeSampler(Sampler):
     """
     def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
                  generator: np.random.Generator, temp_schedule=TemperatureSchedule(),
-                 special_probs: dict = None, tol=100, special_move_interval=10):
+                 special_probs: dict = None, tol=100, special_move_interval=10, min_theta_0=10):
         self.tol = tol
         # Number of iterations of default moves before considering special moves.
         self.special_move_interval = special_move_interval 
@@ -282,7 +316,7 @@ class NTreeSampler(Sampler):
         # Initial number of trees
         self.ini_ntrees = self.tree_prior.n_trees
 
-        super().__init__(prior, proposal_probs, generator, temp_schedule)
+        super().__init__(prior, proposal_probs, generator, temp_schedule, use_theta_0=True, min_theta_0=min_theta_0)
 
     def get_init_state(self) -> Parameters:
         """
@@ -333,7 +367,7 @@ class NTreeSampler(Sampler):
             if move.propose(self.generator):
                 Z = self.generator.uniform(0, 1)
                 self.birth_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
-                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                if np.log(Z) < self.log_mh_ratio(move) / temp:
                     self.tree_prior.n_trees += 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [-1])
@@ -352,7 +386,7 @@ class NTreeSampler(Sampler):
             if move.propose(self.generator):
                 Z = self.generator.uniform(0, 1)
                 self.death_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
-                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                if np.log(Z) < self.log_mh_ratio(move) / temp:
                     self.tree_prior.n_trees -= 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     iter_current = move.proposed
@@ -367,7 +401,7 @@ class NTreeSampler(Sampler):
             if move.propose(self.generator):
                 self.break_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
                 Z = self.generator.uniform(0, 1)
-                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                if np.log(Z) < self.log_mh_ratio(move) / temp:
                     self.tree_prior.n_trees += 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = break_id + [-1])
@@ -385,7 +419,7 @@ class NTreeSampler(Sampler):
             if move.propose(self.generator):
                 self.combine_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
                 Z = self.generator.uniform(0, 1)
-                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                if np.log(Z) < self.log_mh_ratio(move) / temp:
                     self.tree_prior.n_trees -= 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [combine_position])
@@ -412,7 +446,7 @@ class NTreeSampler(Sampler):
                 )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
-                if Z < np.exp(temp * self.log_mh_ratio(move)):
+                if np.log(Z) < self.log_mh_ratio(move) / temp:
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
