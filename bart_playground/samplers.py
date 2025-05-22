@@ -24,7 +24,7 @@ class Sampler(ABC):
     """
     def __init__(self, prior, proposal_probs: dict,  
                  generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule(),
-                 use_theta_0: bool = False, min_theta_0: float = 10):
+                 change_theta_0: bool = False, min_theta_0: float = 10, theta_0_nskip_prop: float = 0.5):
         """
         Initialize the sampler with the given parameters.
 
@@ -33,7 +33,7 @@ class Sampler(ABC):
             proposal_probs (dict): A dictionary containing proposal probabilities.
             generator (np.random.Generator): A random number generator.
             temp_schedule (TemperatureSchedule): Temperature schedule for the sampler.
-            use_theta_0 (bool): Whether to enable theta_0 functionality.
+            change_theta_0 (bool): Whether to enable theta_0 functionality.
             min_theta_0 (float): Minimum value for theta_0 during updates (if enabled).
 
         Attributes:
@@ -52,8 +52,9 @@ class Sampler(ABC):
         self.temp_schedule = temp_schedule
         self.trace = []
         self.generator = generator
-        self.use_theta_0 = use_theta_0  # Enable or disable theta_0 functionality
+        self.change_theta_0 = change_theta_0  # Enable or disable theta_0 functionality
         self.min_theta_0 = min_theta_0  # Minimum theta_0 value if enabled
+        self.theta_0_nskip_prop = theta_0_nskip_prop  # Proportion of n_skip for theta_0 decay
 
         # create cache for moves
         self.moves_cache = None
@@ -61,7 +62,7 @@ class Sampler(ABC):
         self.moves_cache_iterator = None
 
        # Save the initial value of theta_0 if enabled
-        if self.use_theta_0 and hasattr(prior.global_prior, 'theta_0'):
+        if self.change_theta_0 and hasattr(prior.global_prior, 'theta_0'):
             self.initial_theta_0 = prior.global_prior.theta_0  # Save the initial value
         else:
             self.initial_theta_0 = None  # Handle cases where theta_0 is not defined
@@ -91,7 +92,7 @@ class Sampler(ABC):
             iteration (int): Current iteration number.
             total_iterations (int): Total number of iterations.
         """
-        if not self.use_theta_0:
+        if not self.change_theta_0:
             return  # Skip if theta_0 functionality is disabled
 
         if self.initial_theta_0 is not None and total_iterations > 0:
@@ -129,8 +130,8 @@ class Sampler(ABC):
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False, iteration=iter)
             # Update theta_0
-            if iter <= int(0.8*n_skip):
-                self.update_theta_0(iter, int(0.8*n_skip)) #TODO: Make this 0.8 a parameter
+            if self.change_theta_0 and iter <= int(self.theta_0_nskip_prop * n_skip):
+                self.update_theta_0(iter, int(self.theta_0_nskip_prop*n_skip))
             if iter >= n_skip:
                 if len(self.trace) > 0:
                     self.trace[-1].clear_cache()
@@ -289,7 +290,8 @@ class NTreeSampler(Sampler):
     """
     def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
                  generator: np.random.Generator, temp_schedule=TemperatureSchedule(),
-                 special_probs: dict = None, tol=100, special_move_interval=10, min_theta_0=10):
+                 special_probs: dict = None, tol=100, special_move_interval=10, 
+                 change_theta_0=True, min_theta_0=10, theta_0_nskip_prop: float = 0.5):
         self.tol = tol
         # Number of iterations of default moves before considering special moves.
         self.special_move_interval = special_move_interval 
@@ -304,6 +306,9 @@ class NTreeSampler(Sampler):
         self.birth_mh_ratios = []
         self.death_mh_ratios = []
 
+        # Accepted movements
+        self.accepted_moves = {"birth": 0, "death": 0, "break": 0, "combine": 0}
+
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
@@ -316,7 +321,8 @@ class NTreeSampler(Sampler):
         # Initial number of trees
         self.ini_ntrees = self.tree_prior.n_trees
 
-        super().__init__(prior, proposal_probs, generator, temp_schedule, use_theta_0=True, min_theta_0=min_theta_0)
+        super().__init__(prior, proposal_probs, generator, temp_schedule, 
+                         change_theta_0=change_theta_0, min_theta_0=min_theta_0, theta_0_nskip_prop=theta_0_nskip_prop)
 
     def get_init_state(self) -> Parameters:
         """
@@ -366,8 +372,9 @@ class NTreeSampler(Sampler):
             move = Birth(iter_current, [birth_id], tol=self.tol)
             if move.propose(self.generator):
                 Z = self.generator.uniform(0, 1)
-                self.birth_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
+                self.birth_mh_ratios.append(np.exp(self.log_mh_ratio(move) / temp))
                 if np.log(Z) < self.log_mh_ratio(move) / temp:
+                    self.accepted_moves["birth"] += 1
                     self.tree_prior.n_trees += 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [-1])
@@ -385,8 +392,9 @@ class NTreeSampler(Sampler):
             move = Death(iter_current, [random_id, death_id], tol=self.tol)
             if move.propose(self.generator):
                 Z = self.generator.uniform(0, 1)
-                self.death_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
+                self.death_mh_ratios.append(np.exp(self.log_mh_ratio(move) / temp))
                 if np.log(Z) < self.log_mh_ratio(move) / temp:
+                    self.accepted_moves["death"] += 1
                     self.tree_prior.n_trees -= 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     iter_current = move.proposed
@@ -399,9 +407,10 @@ class NTreeSampler(Sampler):
             break_id = [0] # Select the first tree after permutation
             move = Break(iter_current, break_id, self.tol)   
             if move.propose(self.generator):
-                self.break_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
+                self.break_mh_ratios.append(np.exp(self.log_mh_ratio(move) / temp))
                 Z = self.generator.uniform(0, 1)
                 if np.log(Z) < self.log_mh_ratio(move) / temp:
+                    self.accepted_moves["break"] += 1
                     self.tree_prior.n_trees += 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = break_id + [-1])
@@ -417,9 +426,10 @@ class NTreeSampler(Sampler):
             combine_position = combine_ids[0] if combine_ids[0] < combine_ids[1] else combine_ids[0] - 1
             move = Combine(iter_current, combine_ids, self.tol)   
             if move.propose(self.generator):
-                self.combine_mh_ratios.append(np.exp(temp * self.log_mh_ratio(move)))
+                self.combine_mh_ratios.append(np.exp(self.log_mh_ratio(move) / temp))
                 Z = self.generator.uniform(0, 1)
                 if np.log(Z) < self.log_mh_ratio(move) / temp:
+                    self.accepted_moves["combine"] += 1
                     self.tree_prior.n_trees -= 1
                     self.tree_prior.update_f_sigma2(self.tree_prior.n_trees)
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [combine_position])

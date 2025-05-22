@@ -115,7 +115,7 @@ class ChangeNumTreeBART(BART):
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
-                 theta_0_ini = 200, theta_0_min = 10, theta_df = 100, tau_k = 2.0,
+                 theta_0_ini = 200, theta_0_min = 10, theta_0_nskip_prop = 0.5, theta_df = 100, tau_k = 2.0,
                  proposal_probs=default_proposal_probs, special_probs=default_special_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, tree_num_prior_type="poisson", special_move_interval = 1):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
@@ -131,7 +131,9 @@ class ChangeNumTreeBART(BART):
             temp_schedule = temperature
         else:
             raise ValueError("Invalid temperature type ", type(temperature))
+        change_theta_0 = theta_0_min != theta_0_ini
         sampler = NTreeSampler(prior = prior, proposal_probs = proposal_probs, special_probs = special_probs, 
                                generator = rng, tol = tol, temp_schedule=temp_schedule, 
-                               special_move_interval=special_move_interval, min_theta_0=theta_0_min)
+                               special_move_interval=special_move_interval, 
+                               change_theta_0 = change_theta_0, min_theta_0=theta_0_min, theta_0_nskip_prop=theta_0_nskip_prop)
         super().__init__(preprocessor, sampler, ndpost, nskip)
