@@ -217,10 +217,10 @@ class DefaultSampler(Sampler):
         init_state = Parameters(trees, global_params)
         return init_state
     
-    def log_mh_ratio(self, move : Move, marginalize : bool=False):
+    def log_mh_ratio(self, move : Move, temp, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
-        return self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize) + \
+        return (self.tree_prior.trees_log_prior_ratio(move) + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize)) / temp + \
             move.log_tran_ratio
 
     def one_iter(self, current, temp, return_trace=False):
@@ -235,7 +235,7 @@ class DefaultSampler(Sampler):
                 )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
-                if np.log(Z) < self.log_mh_ratio(move) / temp:
+                if np.log(Z) < self.log_mh_ratio(move, temp):
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
