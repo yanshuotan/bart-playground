@@ -7,3 +7,4 @@ scripts/
 .hydra/hydra.yaml
 .DS_Store
 *.log
+.idea/*

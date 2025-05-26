@@ -6,9 +6,12 @@ from .priors import TreesPrior, GlobalParamPrior, BARTLikelihood, ComprehensiveP
 from .samplers import Sampler, DefaultSampler, TemperatureSchedule, all_moves, all_samplers
 from .util import DefaultPreprocessor, Dataset
 from .visualization import visualize_tree
+from .xgb_init import fit_and_init_trees, _xgb_json_to_tree
 
 
 
 __all__ = ["BART", "DefaultBART", "Change", "Grow", "Prune", "Swap", 
            "TreesPrior", "GlobalParamPrior", "BARTLikelihood", "ComprehensivePrior",
-           "DataGenerator", "all_moves", "all_moves", "Tree", "Parameters", "Sampler", "DefaultSampler", "TemperatureSchedule", "all_moves", "all_samplers", "DefaultPreprocessor", "Dataset", "visualize_tree"]
+           "DataGenerator", "all_moves", "all_moves", "Tree", "Parameters", "Sampler", "DefaultSampler",
+           "TemperatureSchedule", "all_moves", "all_samplers", "DefaultPreprocessor", "Dataset", "visualize_tree",
+           "fit_and_init_trees", "_xgb_json_to_tree"]

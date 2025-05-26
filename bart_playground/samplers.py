@@ -192,31 +192,58 @@ class DefaultSampler(Sampler):
     """
     Default implementation of the BART sampler.
     """
-    def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
-                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
+    def __init__(
+        self,
+        prior: ComprehensivePrior,
+        proposal_probs: dict,
+        generator: np.random.Generator,
+        temp_schedule=TemperatureSchedule(),
+        tol: int = 100,
+        init_trees: Optional[list[Tree]] = None  # NEW
+    ):
+        """
+        Default implementation of the BART sampler.
+        Accepts an optional list of pre-initialized trees without changing default behavior.
+        """
+        # preserve original default proposal behavior
         self.tol = tol
         if proposal_probs is None:
-            proposal_probs = {"grow" : 0.5,
-                              "prune" : 0.5}
+            proposal_probs = {"grow": 0.5, "prune": 0.5}
+
+        # original prior unpacking
         self.tree_prior = prior.tree_prior
         self.global_prior = prior.global_prior
         self.likelihood = prior.likelihood
+
+        # initialize base sampler
         super().__init__(prior, proposal_probs, generator, temp_schedule)
+
+        # store seed forest for XGBoost init
+        self.init_trees = init_trees
 
     def get_init_state(self) -> Parameters:
         """
         Retrieve the initial state for the sampler.
-
-        Returns:
-            The initial state for the sampler.
+        If init_trees was provided, copy up to n_trees of them and
+        pad the rest with fresh stumps; otherwise build all new stumps.
         """
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
-        trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
+        N = self.tree_prior.n_trees
+
+        if self.init_trees is not None:
+            provided = len(self.init_trees)
+            # Copy up to N of the provided trees
+            trees = [t.copy() for t in self.init_trees[:N]]
+            # Pad with fresh stumps if fewer than N
+            if provided < N:
+                trees += [Tree.new(self.data.X) for _ in range(N - provided)]
+        else:
+            trees = [Tree.new(self.data.X) for _ in range(N)]
+
         global_params = self.global_prior.init_global_params(self.data)
-        init_state = Parameters(trees, global_params)
-        return init_state
-    
+        return Parameters(trees, global_params)
+
     def log_mh_ratio(self, move : Move, temp, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
         return (self.tree_prior.trees_log_prior_ratio(move) + \

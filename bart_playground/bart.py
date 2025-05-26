@@ -5,6 +5,8 @@ from .priors import *
 from .priors import *
 from .util import Preprocessor, DefaultPreprocessor
 from .params import Tree, Parameters
+from typing import Optional
+
 class BART:
     """
     API for the BART model.
@@ -87,7 +89,48 @@ class BART:
         Predict using the BART model.
         """
         return np.mean(self.posterior_f(X), axis=1)
-    
+
+    def init_from_xgboost(
+            self,
+            xgb_model,
+            X: np.ndarray,
+            y: Optional[np.ndarray] = None,
+            xgb_kwargs: dict = None,
+            debug: bool = False
+    ) -> "BART":
+        if not self.is_fitted:
+            self.data = self.preprocessor.fit_transform(X, y)
+        else:
+            self.data = self.preprocessor.update_transform(X, y, self.data)
+        dataX = self.data.X
+
+        from .xgb_init import fit_and_init_trees
+        xgb_kwargs = xgb_kwargs or {}
+
+        n_trees = self.sampler.tree_prior.n_trees
+
+        model, init_trees = fit_and_init_trees(
+            X, y,
+            model=xgb_model,
+            dataX=dataX,
+            n_estimators=n_trees,
+            debug=debug,
+            **xgb_kwargs
+        )
+
+        self.sampler = DefaultSampler(
+            prior=self.sampler.prior,
+            proposal_probs=self.sampler.proposals,
+            generator=self.sampler.generator,
+            temp_schedule=self.sampler.temp_schedule,
+            tol=self.sampler.tol,
+            init_trees=init_trees
+        )
+
+        self.sampler.add_data(self.data)
+        self.sampler.add_thresholds(self.preprocessor.thresholds)
+        return self
+
 class DefaultBART(BART):
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
