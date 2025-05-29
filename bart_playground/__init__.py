@@ -1,9 +1,9 @@
-from .bart import BART, DefaultBART
+from .bart import BART, DefaultBART, BinaryBART
 from .DataGenerator import DataGenerator
 from .moves import all_moves, Change, Grow, Prune, Swap
 from .params import Tree, Parameters
 from .priors import TreesPrior, GlobalParamPrior, BARTLikelihood, ComprehensivePrior
-from .samplers import Sampler, DefaultSampler, TemperatureSchedule, all_moves, all_samplers
+from .samplers import Sampler, DefaultSampler, TemperatureSchedule, all_moves, all_samplers, BinarySampler
 from .util import DefaultPreprocessor, Dataset
 from .visualization import visualize_tree
 

@@ -2,13 +2,14 @@ import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
+from scipy.stats import truncnorm
 
 from .params import Tree, Parameters
-from .moves import all_moves
+from .moves import all_moves, Move
 from .util import Dataset
 from .priors import *
-from .priors import *
 from bart_playground import moves
+
 class TemperatureSchedule:
 
     def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
@@ -248,7 +249,91 @@ class DefaultSampler(Sampler):
             del iter_trace
             return iter_current
     
-all_samplers = {"default" : DefaultSampler}
+class BinarySampler(Sampler):
+    """
+    Binary sampler for BART.
+    """
+    def __init__(self, prior : BinaryPrior, proposal_probs: dict,
+                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
+        self.tol = tol
+        if proposal_probs is None:
+            proposal_probs = {"grow" : 0.5,
+                              "prune" : 0.5}
+        self.tree_prior = prior.tree_prior
+        self.likelihood = prior.likelihood
+        super().__init__(prior, proposal_probs, generator, temp_schedule)
+
+    def get_init_state(self) -> Parameters:
+        """
+        Retrieve the initial state for the sampler.
+
+        Returns:
+            The initial state for the sampler.
+        """
+        if self.data is None:
+            raise AttributeError("Need data before running sampler.")
+        trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
+        init_state = Parameters(trees, {"eps_sigma2": 1})
+        return init_state
+    
+    def log_mh_ratio(self, move : Move, latents, temp, marginalize : bool=False):
+        """Calculate total log Metropolis-Hastings ratio"""
+        return (self.tree_prior.trees_log_prior_ratio(move) + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, latents, marginalize)) / temp + \
+            move.log_tran_ratio
+            
+    @staticmethod
+    def sample_Z(y, Gx):
+        Z = np.empty_like(Gx)
+
+        mask1 = (y == 1)
+        mask0 = ~mask1
+
+        # For Y_i = 1: Z_i ~ TruncNormal(Gx[i], 1, lower=0, upper=inf)
+        if np.any(mask1):
+            a1 = (0 - Gx[mask1]) / 1
+            b1 = np.full_like(a1, np.inf)
+            Z[mask1] = truncnorm.rvs(a1, b1, loc=Gx[mask1], scale=1)
+
+        # For Y_i = 0: Z_i ~ TruncNormal(Gx[i], 1, lower=-inf, upper=0)
+        if np.any(mask0):
+            a0 = np.full_like(Gx[mask0], -np.inf)
+            b0 = (0 - Gx[mask0]) / 1
+            Z[mask0] = truncnorm.rvs(a0, b0, loc=Gx[mask0], scale=1)
+
+        return Z
+
+    def one_iter(self, current, temp, return_trace=False):
+        """
+        Perform one iteration of the sampler.
+        """
+        iter_current : Parameters = current.copy() # First make a copy
+        iter_trace = [(0, iter_current)]
+        
+        # sample latents Z
+        latents = self.sample_Z(self.data.y, iter_current.evaluate())
+        
+        for k in range(self.tree_prior.n_trees):
+            move = self.sample_move()(
+                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
+                )
+            if move.propose(self.generator): # Check if a valid move was proposed
+                Z = self.generator.uniform(0, 1)
+                if np.log(Z) < self.log_mh_ratio(move, latents, temp):
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = latents, tree_ids = [k])
+                    move.proposed.update_leaf_vals([k], new_leaf_vals)
+                    iter_current = move.proposed
+                    if return_trace:
+                        iter_trace.append((k+1, move.proposed))
+        
+        if return_trace:
+            return iter_trace
+        else:
+            del iter_trace
+            return iter_current
+    
+    
+all_samplers = {"default" : DefaultSampler, "binary": BinarySampler}
 
 default_proposal_probs = {"grow" : 0.25,
                           "prune" : 0.25,

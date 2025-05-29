@@ -130,3 +130,14 @@ class DefaultPreprocessor(Preprocessor):
         updated_dataset = Dataset(X_combined, y_combined)
         return updated_dataset
     
+class BinaryPreprocessor(DefaultPreprocessor):
+    """
+    Preprocessor for binary classification tasks.
+    """
+    def transform_y(self, y) -> np.ndarray:
+        # Convert binary labels to -0.5 and 0.5
+        return y
+    
+    def backtransform_y(self, y) -> np.ndarray:
+        return y
+    

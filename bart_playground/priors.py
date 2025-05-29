@@ -345,3 +345,12 @@ class ComprehensivePrior:
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
         self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
+
+class BinaryPrior:
+    """
+    BART Prior for binary classification tasks.
+    """
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng()):
+        self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
+        self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
+        

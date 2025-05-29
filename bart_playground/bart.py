@@ -1,10 +1,9 @@
 import numpy as np
 
-from .samplers import Sampler, DefaultSampler, TemperatureSchedule, default_proposal_probs
+from .samplers import Sampler, DefaultSampler, BinarySampler, TemperatureSchedule, default_proposal_probs
 from .priors import *
-from .priors import *
-from .util import Preprocessor, DefaultPreprocessor
-from .params import Tree, Parameters
+from .util import Preprocessor, DefaultPreprocessor, BinaryPreprocessor
+
 class BART:
     """
     API for the BART model.
@@ -109,3 +108,94 @@ class DefaultBART(BART):
             raise ValueError("Invalid temperature type ", type(temperature))
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
+        
+class BinaryBART(BART):
+    """
+    Binary BART implementation using Albert-Chib data augmentation.
+    """
+    
+    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
+                 tree_beta: float=2.0, 
+                 f_k = 2.0, 
+                 proposal_probs=None, tol=100, max_bins=100,
+                 random_state=42, temperature=1.0):
+        
+        if proposal_probs is None:
+            proposal_probs = {"grow": 0.5, "prune": 0.5}
+            
+        preprocessor = BinaryPreprocessor(max_bins=max_bins)
+        rng = np.random.default_rng(random_state)
+        
+        prior = BinaryPrior(n_trees, tree_alpha, tree_beta, f_k, rng)
+        
+        # Handle temperature schedule
+        is_temperature_number = type(temperature) in [float, int]
+        if is_temperature_number:
+            temp_func = lambda x: temperature
+            temp_schedule = TemperatureSchedule(temp_func)
+        elif type(temperature) == TemperatureSchedule:
+            temp_schedule = temperature
+        else:
+            raise ValueError("Invalid temperature type ", type(temperature))
+            
+        sampler = BinarySampler(prior=prior, proposal_probs=proposal_probs, 
+                               generator=rng, tol=tol, temp_schedule=temp_schedule)
+        super().__init__(preprocessor, sampler, ndpost, nskip)
+    
+    def posterior_f(self, X):
+        """
+        Get the posterior distribution of f(x) for each row in X.
+        For binary BART, this returns the latent function values.
+        """
+        preds = np.zeros((X.shape[0], self.ndpost))
+        for k in range(self.ndpost):
+            y_eval = self.trace[k].evaluate(X)
+            preds[:, k] = self.preprocessor.backtransform_y(y_eval)
+        return preds
+    
+    def predict_proba(self, X):
+        """
+        Predict class probabilities using the probit link.
+        
+        Returns:
+            Array of shape (n_samples, 2) with probabilities for classes 0 and 1
+        """
+        # Get posterior samples of latent function
+        f_samples = self.posterior_f(X)
+        
+        # Apply probit transformation: P(Y=1) = Φ(f(x))
+        # Using scipy.stats.norm.cdf or scipy.special.ndtr
+        from scipy.stats import norm
+        prob_1 = norm.cdf(f_samples)
+        
+        # Average over posterior samples
+        mean_prob_1 = np.mean(prob_1, axis=1)
+        mean_prob_0 = 1 - mean_prob_1
+        
+        return np.column_stack([mean_prob_0, mean_prob_1])
+    
+    def predict(self, X, threshold=0.5):
+        """
+        Predict binary classes.
+        
+        Parameters:
+            X: Input features
+            threshold: Decision threshold (default 0.5)
+            
+        Returns:
+            Binary predictions (0 or 1)
+        """
+        proba = self.predict_proba(X)
+        return (proba[:, 1] >= threshold).astype(int)
+    
+    def posterior_predict_proba(self, X):
+        """
+        Get full posterior distribution of predicted probabilities.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples) with probability samples
+        """
+        f_samples = self.posterior_f(X)
+        from scipy.stats import norm
+        return norm.cdf(f_samples)
+    
