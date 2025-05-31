@@ -243,7 +243,8 @@ class GlobalParamPrior:
         
         # chi2.ppf suffices
         c = chi2.ppf(1 - self.eps_q, df=self.eps_nu).item()
-        return (sigma_hat**2 * c) / self.eps_nu
+        eps_lambda_val = (sigma_hat**2 * c) / self.eps_nu
+        return eps_lambda_val
 
     def _sample_eps_sigma2(self, residuals):
         """
