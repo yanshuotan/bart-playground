@@ -1,7 +1,7 @@
 import numpy as np
 
-from .samplers import Sampler, DefaultSampler, BinarySampler, TemperatureSchedule, default_proposal_probs
-from .priors import *
+from .samplers import Sampler, DefaultSampler, BinarySampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
+from .priors import ComprehensivePrior, BinaryPrior, LogisticPrior
 from .util import Preprocessor, DefaultPreprocessor, BinaryPreprocessor
 
 class BART:
@@ -87,6 +87,19 @@ class BART:
         """
         return np.mean(self.posterior_f(X), axis=1)
     
+    def _check_temperature(self, temperature):
+        """
+        Check if the temperature is a valid type.
+        """
+        is_temperature_number = type(temperature) in [float, int]
+        if is_temperature_number:
+            temp_func = lambda x: temperature
+            return TemperatureSchedule(temp_func)
+        elif type(temperature) == TemperatureSchedule:
+            return temperature
+        else:
+            raise ValueError("Invalid temperature type ", type(temperature))
+    
 class DefaultBART(BART):
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
@@ -98,14 +111,7 @@ class DefaultBART(BART):
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
                              eps_nu, specification, rng)
-        is_temperature_number = type(temperature) in [float, int]
-        if is_temperature_number:
-            temp_func = lambda x: temperature
-            temp_schedule = TemperatureSchedule(temp_func)
-        elif type(temperature) == TemperatureSchedule:
-            temp_schedule = temperature
-        else:
-            raise ValueError("Invalid temperature type ", type(temperature))
+        temp_schedule = self._check_temperature(temperature)
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
         
@@ -117,27 +123,12 @@ class BinaryBART(BART):
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, 
                  f_k = 2.0, 
-                 proposal_probs=None, tol=100, max_bins=100,
+                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0):
-        
-        if proposal_probs is None:
-            proposal_probs = {"grow": 0.5, "prune": 0.5}
-            
         preprocessor = BinaryPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
-        
         prior = BinaryPrior(n_trees, tree_alpha, tree_beta, f_k, rng)
-        
-        # Handle temperature schedule
-        is_temperature_number = type(temperature) in [float, int]
-        if is_temperature_number:
-            temp_func = lambda x: temperature
-            temp_schedule = TemperatureSchedule(temp_func)
-        elif type(temperature) == TemperatureSchedule:
-            temp_schedule = temperature
-        else:
-            raise ValueError("Invalid temperature type ", type(temperature))
-            
+        temp_schedule = self._check_temperature(temperature)
         sampler = BinarySampler(prior=prior, proposal_probs=proposal_probs, 
                                generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
@@ -164,7 +155,6 @@ class BinaryBART(BART):
         f_samples = self.posterior_f(X)
         
         # Apply probit transformation: P(Y=1) = Φ(f(x))
-        # Using scipy.stats.norm.cdf or scipy.special.ndtr
         from scipy.stats import norm
         prob_1 = norm.cdf(f_samples)
         
@@ -198,4 +188,72 @@ class BinaryBART(BART):
         f_samples = self.posterior_f(X)
         from scipy.stats import norm
         return norm.cdf(f_samples)
+    
+class LogisticBART(BART):
+    """
+    Logistic BART implementation using logistic link function.
+    """
+    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95,
+                 tree_beta: float=2.0, 
+                 c: float = 0.0, d: float = 0.0,
+                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
+                 random_state=42, temperature=1.0):
+        preprocessor = BinaryPreprocessor(max_bins=max_bins)
+        rng = np.random.default_rng(random_state)
+        # TODO, test binary first
+        self.n_categories = 2
+        prior = LogisticPrior(self.n_categories, n_trees, tree_alpha, tree_beta, c, d, rng)
+        temp_schedule = self._check_temperature(temperature)
+        sampler = LogisticSampler(prior=prior, proposal_probs=proposal_probs, 
+                               generator=rng, tol=tol, temp_schedule=temp_schedule)
+        super().__init__(preprocessor, sampler, ndpost, nskip)
+        
+    def posterior_f(self, X):
+        """
+        Get the posterior distribution of f(x) for each row in X.
+        For logistic BART, this returns the latent function values.
+        """
+        preds = np.zeros((X.shape[0], self.ndpost, self.n_categories))
+        for category in range(self.n_categories):
+            for k in range(self.ndpost):
+                y_eval = self.trace[k][category].evaluate(X)
+                preds[:, k, category] = self.preprocessor.backtransform_y(y_eval)
+        return preds
+    
+    def predict_proba(self, X):
+        """
+        Predict class probabilities using the logistic link.
+        """
+        # Get posterior samples of latent function
+        f_samples = self.posterior_f(X)
+        
+        # Apply logistic transformation
+        prob = np.zeros((f_samples.shape[0], f_samples.shape[1], f_samples.shape[2]))
+        for category in range(self.n_categories):
+            prob[:, :, category] = np.exp(f_samples[:, :, category])
+        # Normalize to get probabilities
+        prob_sum = np.sum(prob, axis=2, keepdims=True)
+        prob /= prob_sum
+        
+        # Average over posterior samples
+        mean_prob = np.mean(prob, axis=1)
+        mean_prob_0 = mean_prob[:, 0]
+        mean_prob_1 = mean_prob[:, 1]
+        
+        return np.column_stack([mean_prob_0, mean_prob_1])
+    
+    def predict(self, X, threshold=0.5):
+        """
+        Predict binary classes.
+        
+        Parameters:
+            X: Input features
+            threshold: Decision threshold (default 0.5)
+            
+        Returns:
+            Binary predictions (0 or 1)
+        """
+        proba = self.predict_proba(X)
+        return (proba[:, 1] >= threshold).astype(int)
+    
     

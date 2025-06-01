@@ -1,14 +1,14 @@
+
+from math import log, sqrt
 import numpy as np
 
 from scipy.stats import invgamma, chi2
-from scipy.linalg import sqrtm
-from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
-from numba import njit, jit
+from numba import njit 
 
-from .params import Tree, Parameters
+from .params import Parameters
 from .moves import Move
-from .util import Dataset
+from .util import Dataset, gig_normalizing_constant, rvs_gig
 
 # Standalone Numba-optimized functions
 @njit
@@ -353,4 +353,164 @@ class BinaryPrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng()):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
+
+class LogisticTreesPrior(TreesPrior):
+    """
+    Prior for logistic regression trees.
+    
+    Inherits from TreesPrior and overrides the resample_leaf_vals method to handle logistic regression.
+    """
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, c = 0.0, d = 0.0, generator=np.random.default_rng()):
+        """
+        Initialize the logistic trees prior with parameters.
+        
+        Parameters:
+        -----------
+        n_trees : int
+            Number of trees in the BART model.
+        tree_alpha : float
+            Alpha parameter for the tree prior.
+        tree_beta : float
+            Beta parameter for the tree prior.
+        c : float
+            Parameter for the GIG distribution.
+        d : float
+            Parameter for the GIG distribution.
+        generator : numpy.random.Generator, optional
+            Random number generator for reproducibility (default is np.random.default_rng()).
+        """
+        if c == 0.0 or d == 0.0:
+            raise ValueError("Parameters c and d must be provided for logistic regression prior.")
+        self.c = c
+        self.d = d
+        super().__init__(n_trees, tree_alpha, tree_beta, f_k = 2.0, generator = generator)
+
+    def set_latents(self, latents):
+        self.latents = latents
+        
+    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
+        """
+        Resample the values of the leaf nodes for the specified trees.
+        
+        This function updates the leaf parameters by resampling from the posterior
+        distribution given the current residuals and leaf basis.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters.
+        data_y (numpy.ndarray): The target values array.
+        tree_ids : list or array-like
+            A list or array of tree indices for which the leaf values are to be resampled.
+
+        Returns:
+        --------
+        leaf_params_new : numpy.ndarray
+            The resampled leaf parameters.
+        """
+        leaf_basis = bart_params.leaf_basis(tree_ids)
+        tree_eval = bart_params.evaluate(all_except = tree_ids)
+        latent_tree_product = self.latents * np.exp(tree_eval)
+        
+        rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
+        sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
+        pi_h = (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) / (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) +
+                    gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))))
+        
+        leaf_params_new = pi_h * rvs_gig(
+            -self.c + rh, 2 * self.d, 2 * sh, 
+            random_state=self.generator
+        ) + (1 - pi_h) * rvs_gig(
+            self.c + rh, 0, 2 * (self.d + sh), 
+            random_state=self.generator
+        )
+        # leaf_params_new is a 1D array of shape (n_leaves,)
+        
+        return leaf_params_new
+    
+class LogisticLikelihood(BARTLikelihood):
+    """
+    Likelihood for logistic regression tasks.
+    
+    Inherits from BARTLikelihood and overrides the trees_log_marginal_lkhd method.
+    """
+    def __init__(self, c, d):
+        """
+        Initialize the logistic likelihood with parameters c and d.
+
+        Parameters:
+        -----------
+        c : float
+            Parameter for the GIG distribution.
+        d : float
+            Parameter for the GIG distribution.
+        """
+        self.c = c
+        self.d = d
+        # f_sigma2 useless
+        super().__init__(f_sigma2 = 0.0)
+        
+    def set_latents(self, latents):
+        self.latents = latents
+        
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
+        """
+        Calculate the log marginal likelihood of the trees in a logistic regression BART model.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters.
+        data_y (bool, numpy.ndarray): The target values array that contain boolean values representing for matching the category or not.
+        tree_ids : list or array-like
+            A list or array of tree identifiers for which the log marginal likelihood is to be computed.
+
+        Returns:
+        --------
+        float
+            The log marginal likelihood of the specified trees.
+        """
+        # here, we assume tree_ids contain only one tree
+        if len(tree_ids) != 1:
+            raise ValueError("Logistic likelihood only supports single tree evaluation.")
+        
+        lb = bart_params.leaf_basis(tree_ids)
+        # lb is a boolean array of shape (n_samples, n_leaves)
+        tree_eval = bart_params.evaluate(all_except=tree_ids)
+        # dim of tree_eval is (n_samples)
+        latent_tree_product = self.latents * np.exp(tree_eval)
+        # dim of latent_tree_product is (n_samples)
+
+        # Vectorized computation of rh and sh for all leaves
+        # rh[t] = sum of data_y values where lb[i, t] == 1
+        rh = lb.T @ data_y  # Shape: (n_leaves,)
+
+        # sh[t] = sum of latents[i] * np.exp(tree_eval)[i] where lb[i, t] == 1
+        sh = lb.T @ latent_tree_product  # Shape: (n_leaves,)
+
+        # Vectorized computation of log likelihood for all leaves
+        log_likelihood = np.log(
+            (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) + 
+             gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))) / 
+            (2 * gig_normalizing_constant(self.c, 0, 2 * self.d))
+        )
+        return log_likelihood.sum()
+
+class LogisticPrior:
+    """
+    BART Prior for logistic classification tasks.
+    """
+    def __init__(self, n_categories=2, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, generator=np.random.default_rng()):
+        if c == 0.0 or d == 0.0:
+            a0 = 3.5 / sqrt(2)
+            c = n_trees/(a0 ** 2) + 0.5
+            d = n_trees/(a0 ** 2)
+        
+        self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator)
+        self.likelihood = LogisticLikelihood(c, d)
+        self.n_categories = n_categories
+    
+    def set_latents(self, latents):
+        self.tree_prior.set_latents(latents)
+        self.likelihood.set_latents(latents)
         
