@@ -207,7 +207,7 @@ def gig_normalizing_constant(eta, chi, psi):
     Compute the normalizing constant for the GIG distribution.
     Supports vectorized inputs for eta, chi, and psi.
     """
-    from scipy.special import gamma, kv
+    from scipy.special import gammaln, kv
     
     # Convert inputs to numpy arrays for vectorized operations
     eta = np.asarray(eta)
@@ -231,7 +231,7 @@ def gig_normalizing_constant(eta, chi, psi):
             raise ValueError("For chi=0, GIG(eta,psi,0) is Gamma only if eta>0.")
         
         # Z(eta,psi,0) = (2/psi)^eta * Gamma(eta)
-        result[chi_zero_mask] = (2.0 / psi_chi_zero)**eta_chi_zero * gamma(eta_chi_zero)
+        result[chi_zero_mask] = np.log(2.0 / psi_chi_zero) * eta_chi_zero + gammaln(eta_chi_zero)
     
     # Case 2: psi == 0 --> Inverse-Gamma limit, requires eta < 0
     psi_zero_mask = (psi == 0) & ~chi_zero_mask  # Exclude chi==0 case
@@ -244,7 +244,7 @@ def gig_normalizing_constant(eta, chi, psi):
             raise ValueError("For psi=0, GIG(eta,0,chi) is Inverse-Gamma only if eta<0.")
         
         # Z(eta,0,chi) = (chi/2)^eta * Gamma(-eta)
-        result[psi_zero_mask] = (chi_psi_zero / 2.0)**eta_psi_zero * gamma(-eta_psi_zero)
+        result[psi_zero_mask] = np.log(chi_psi_zero / 2.0) * eta_psi_zero + gammaln(-eta_psi_zero)
     
     # Case 3: General case: psi > 0 and chi > 0
     general_mask = (psi > 0) & (chi > 0)
@@ -256,7 +256,9 @@ def gig_normalizing_constant(eta, chi, psi):
         # Z(eta,psi,chi) = 2 * K_p(sqrt(psi*chi)) * (chi/psi)^(eta/2)
         z = np.sqrt(psi_general * chi_general)
         Kp = kv(eta_general, z)  # Modified Bessel function K_p(z)
-        result[general_mask] = 2.0 * Kp * (chi_general / psi_general)**(0.5 * eta_general)
+        result[general_mask] = np.log(2.0 * Kp) + np.log(chi_general / psi_general) * (0.5 * eta_general)
+    
+    result = np.exp(result)
     
     # Return scalar if input was scalar
     if result.shape == ():
