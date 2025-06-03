@@ -193,7 +193,7 @@ class LogisticBART(BART):
     """
     Logistic BART implementation using logistic link function.
     """
-    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95,
+    def __init__(self, ndpost=1000, nskip=100, n_trees=25, tree_alpha: float=0.95,
                  tree_beta: float=2.0, 
                  c: float = 0.0, d: float = 0.0,
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,

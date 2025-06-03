@@ -408,7 +408,8 @@ class LogisticTreesPrior(TreesPrior):
         leaf_params_new : numpy.ndarray
             The resampled leaf parameters.
         """
-        leaf_basis = bart_params.leaf_basis(tree_ids)
+        lb_bool = bart_params.leaf_basis(tree_ids)
+        leaf_basis = lb_bool.astype(np.float64)
         tree_eval = bart_params.evaluate(all_except = tree_ids)
         latent_tree_product = self.latents * np.exp(tree_eval)
         
@@ -426,7 +427,7 @@ class LogisticTreesPrior(TreesPrior):
         )
         # leaf_params_new is a 1D array of shape (n_leaves,)
         
-        return leaf_params_new
+        return np.log(leaf_params_new)
     
 class LogisticLikelihood(BARTLikelihood):
     """
@@ -474,26 +475,31 @@ class LogisticLikelihood(BARTLikelihood):
         if len(tree_ids) != 1:
             raise ValueError("Logistic likelihood only supports single tree evaluation.")
         
-        lb = bart_params.leaf_basis(tree_ids)
-        # lb is a boolean array of shape (n_samples, n_leaves)
+        lb_bool = bart_params.leaf_basis(tree_ids)
+        leaf_basis = lb_bool.astype(np.float64)
+        # leaf_basis is an array of shape (n_samples, n_leaves)
         tree_eval = bart_params.evaluate(all_except=tree_ids)
         # dim of tree_eval is (n_samples)
         latent_tree_product = self.latents * np.exp(tree_eval)
         # dim of latent_tree_product is (n_samples)
 
         # Vectorized computation of rh and sh for all leaves
-        # rh[t] = sum of data_y values where lb[i, t] == 1
-        rh = lb.T @ data_y  # Shape: (n_leaves,)
+        # rh[t] = sum of data_y values where leaf_basis[i, t] == 1
+        rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
 
-        # sh[t] = sum of latents[i] * np.exp(tree_eval)[i] where lb[i, t] == 1
-        sh = lb.T @ latent_tree_product  # Shape: (n_leaves,)
+        # sh[t] = sum of latents[i] * np.exp(tree_eval)[i] where leaf_basis[i, t] == 1
+        sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
 
         # Vectorized computation of log likelihood for all leaves
-        log_likelihood = np.log(
-            (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) + 
-             gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))) / 
+        likelihood = (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) + \
+             gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))) / \
             (2 * gig_normalizing_constant(self.c, 0, 2 * self.d))
-        )
+        if np.all(likelihood) > 0:
+            log_likelihood = np.log(
+                likelihood # TODO
+            )
+        else:
+            raise ValueError("Likelihood is non-positive, check your data and model parameters.")
         return log_likelihood.sum()
 
 class LogisticPrior:

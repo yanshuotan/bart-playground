@@ -370,15 +370,17 @@ class LogisticSampler(Sampler):
             )
         return init_state
         
-    def __sample_phi(self, sumGx):
+    def __sample_phi(self, sumFx):
         # for every i
-        # phi | y ~ Gamma(n, sumGx)
-        # sumGx = f^{(0)}(x_i) + f^{(1)}(x_i) is rate parameter
+        # phi | y ~ Gamma(n, sumFx)
+        # sumFx = f^{(0)}(x_i) + f^{(1)}(x_i) is rate parameter
         # n = 1 because we assume that we have only one observation for each x_i
         # y is either 0 or 1
         n = 1
         from scipy.stats import gamma
-        phi = gamma.rvs(a=n, scale=1/sumGx, random_state=self.generator)
+        if sumFx <= 0:
+            raise ValueError("sumFx must be positive for sampling phi.")
+        phi = gamma.rvs(a=n, scale=1/sumFx, random_state=self.generator)
         return phi    
     
     def clear_last_cache(self):
