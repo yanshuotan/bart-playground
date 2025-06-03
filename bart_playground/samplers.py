@@ -1,4 +1,4 @@
-import random
+
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
@@ -7,8 +7,8 @@ from scipy.stats import truncnorm
 
 from .params import Tree, Parameters
 from .moves import all_moves, Move
-from .util import Dataset, rvs_gig, gig_normalizing_constant
-from .priors import *
+from .util import Dataset
+from .priors import  ComprehensivePrior, ProbitPrior, LogisticPrior
 
 class TemperatureSchedule:
 
@@ -256,11 +256,11 @@ class DefaultSampler(Sampler):
             del iter_trace
             return iter_current
     
-class BinarySampler(Sampler):
+class ProbitSampler(Sampler):
     """
-    Binary sampler for BART.
+    Probit sampler for binary BART.
     """
-    def __init__(self, prior : BinaryPrior, proposal_probs: dict,
+    def __init__(self, prior : ProbitPrior, proposal_probs: dict,
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
         self.tol = tol
         if proposal_probs is None:
@@ -377,11 +377,11 @@ class LogisticSampler(Sampler):
         # n = 1 because we assume that we have only one observation for each x_i
         # y is either 0 or 1
         n = 1
-        from scipy.stats import gamma
         if np.any(sumFx <= 0):
             raise ValueError("All sumFx must be strictly positive.")
         # Exponential should be faster than gamma
         phis = self.generator.exponential(scale=1.0/sumFx)
+        # from scipy.stats import gamma
         # phis = gamma.rvs(a=n,
         #          scale=1.0/sumFx,
         #          random_state=self.generator)
@@ -447,7 +447,7 @@ class LogisticSampler(Sampler):
             del iter_trace
             return iter_current
     
-all_samplers = {"default" : DefaultSampler, "binary": BinarySampler}
+all_samplers = {"default" : DefaultSampler, "binary": ProbitSampler}
 
 default_proposal_probs = {"grow" : 0.25,
                           "prune" : 0.25,

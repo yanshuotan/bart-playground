@@ -2,7 +2,6 @@ from typing import Optional
 import numpy as np
 from typing import Optional
 from numpy.typing import NDArray
-from .util import Dataset
 from numba import njit
 
 @njit

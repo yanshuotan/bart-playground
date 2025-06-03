@@ -1,14 +1,13 @@
 
-from math import log, pi, sqrt
+import math
 import numpy as np
-
 from scipy.stats import invgamma, chi2
 from sklearn.linear_model import LinearRegression
-from numba import njit 
+from numba import njit
 
 from .params import Parameters
 from .moves import Move
-from .util import Dataset, gig_normalizing_constant, gig_normalizing_constant_numba, rvs_gig, rvs_gig_scalar
+from .util import Dataset, GIG
 
 # Standalone Numba-optimized functions
 @njit
@@ -346,7 +345,7 @@ class ComprehensivePrior:
         self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
-class BinaryPrior:
+class ProbitPrior:
     """
     BART Prior for binary classification tasks.
     """
@@ -383,8 +382,8 @@ class LogisticTreesPrior(TreesPrior):
             raise ValueError("Parameters c and d must be provided for logistic regression prior.")
         self.c = c
         self.d = d
-        self.parent : LogisticPrior = parent
-        super().__init__(n_trees, tree_alpha, tree_beta, f_k = 2.0, generator = generator)
+        self.parent = parent  # LogisticPrior
+        super().__init__(n_trees, tree_alpha, tree_beta, f_k=2.0, generator=generator)
 
     def set_latents(self, latents):
         self.latents = latents
@@ -410,48 +409,46 @@ class LogisticTreesPrior(TreesPrior):
             The resampled leaf parameters.
         """
         # Cached values of rh, sh and even pi_h from parent may be used. 
-        # However, there is no need (speedup is < 4%)
-        # rh = self.parent.rh
-        # sh = self.parent.sh
+        # The speedup is small though (2-4%)
+        if(self.parent.param is not bart_params):
+            print("Error: BART Parameter used by calculated values is not the same as that provided to LogisticTreesPrior.resample_leaf_vals, this may lead to incorrect results.")
+            print("Please contact the developer to see if we need fall back to re-calculating rh, sh and pi_h.")
+            raise ValueError("BART Parameter mismatch")
+        rh = self.parent.rh
+        sh = self.parent.sh
+        pi_h = self.parent.pi_h
         
-        lb_bool = bart_params.leaf_basis(tree_ids)
-        leaf_basis = lb_bool.astype(np.float64)
-        tree_eval = bart_params.evaluate(all_except = tree_ids)
-        latent_tree_product = self.latents * np.exp(tree_eval)
-        
-        rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
-        sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
-        
-        pi_h = np.zeros(len(rh))
-        for i in range(len(rh)):
-            Z1 = gig_normalizing_constant_numba(-self.c + rh[i], 2 * self.d, 2 * sh[i])
-            Z2 = gig_normalizing_constant_numba(self.c + rh[i], 0, 2 * (self.d + sh[i]))
-            pi_h[i] = Z1 / (Z1 + Z2)
-        # pi_h = (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) / (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) +
-        #             gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))))
+        # lb_bool = bart_params.leaf_basis(tree_ids)
+        # leaf_basis = lb_bool.astype(np.float64)
+        # tree_eval = bart_params.evaluate(all_except = tree_ids)
+        # latent_tree_product = self.latents * np.exp(tree_eval)
+        # 
+        # rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
+        # sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
+        # 
+        # pi_h = np.zeros(len(rh))
+        # for i in range(len(rh)):
+        #     Z1 = GIG.gig_normalizing_constant_numba(-self.c + rh[i], 2 * self.d, 2 * sh[i])
+        #     Z2 = GIG.gig_normalizing_constant_numba(self.c + rh[i], 0, 2 * (self.d + sh[i]))
+        #     pi_h[i] = Z1 / (Z1 + Z2)
         
         leaf_params_new = np.zeros(rh.shape[0])
         for i in range(leaf_params_new.shape[0]):
-            leaf_params_new[i] = pi_h[i] * rvs_gig_scalar(
+            leaf_params_new[i] = pi_h[i] * GIG.rvs_gig_scalar(
                     -self.c + rh[i], 2 * self.d, 2 * sh[i],
                     generator=self.generator
-                ) + (1 - pi_h[i]) * rvs_gig_scalar(
+                ) + (1 - pi_h[i]) * GIG.rvs_gig_scalar(
                     self.c + rh[i], 0, 2 * (self.d + sh[i]),
                     generator=self.generator
                 )
         
-        # vectorized computation of leaf parameters
-        # leaf_params_new = pi_h * rvs_gig(
-        #     -self.c + rh, 2 * self.d, 2 * sh, 
-        #     random_state=self.generator
-        # ) + (1 - pi_h) * rvs_gig(
-        #     self.c + rh, 0, 2 * (self.d + sh), 
-        #     random_state=self.generator
-        # )
-        # leaf_params_new is a 1D array of shape (n_leaves,)
+        # vectorized calculation of normalizing constants
+        # and generation of RVs are actually slower than the loops above
         
         return np.log(leaf_params_new)
     
+_gig_const_global = GIG.gig_normalizing_constant_numba
+
 class LogisticLikelihood(BARTLikelihood):
     """
     Likelihood for logistic regression tasks.
@@ -471,13 +468,27 @@ class LogisticLikelihood(BARTLikelihood):
         """
         self.c = c
         self.d = d
-        self.parent : LogisticPrior = parent
+        self.parent = parent  # LogisticPrior
         # f_sigma2 useless
-        super().__init__(f_sigma2 = 0.0)
-        
+        super().__init__(f_sigma2=0.0)
+
     def set_latents(self, latents):
         self.latents = latents
-        
+    
+    @staticmethod
+    @njit
+    def trees_log_marginal_lkhd_numba_backend(c, d, rh, sh):
+        log_likelihood = np.zeros(len(rh))
+        pi_h = np.zeros(len(rh))
+        for i in range(len(rh)):
+            z1 = _gig_const_global(-c + rh[i], 2 * d, 2 * sh[i])
+            z2 = _gig_const_global(c + rh[i], 0, 2 * (d + sh[i]))
+            log_likelihood[i] = math.log(
+                (z1 + z2) / (2 * _gig_const_global(c, 0, 2 * d))
+            )
+            pi_h[i] = z1 / (z1 + z2)
+        return log_likelihood.sum(), pi_h
+
     def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
         """
         Calculate the log marginal likelihood of the trees in a logistic regression BART model.
@@ -514,30 +525,12 @@ class LogisticLikelihood(BARTLikelihood):
         # sh[t] = sum of latents[i] * np.exp(tree_eval)[i] where leaf_basis[i, t] == 1
         sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
         
-        # self.parent.rh = rh
-        # self.parent.sh = sh
-        
-        import math
-        
-        log_likelihood = np.zeros(len(rh))
-        for i in range(len(rh)):
-            log_likelihood[i] = (gig_normalizing_constant_numba(-self.c + rh[i], 2 * self.d, 2 * sh[i]) + \
-                            gig_normalizing_constant_numba(self.c + rh[i], 0, 2 * (self.d + sh[i]))) / \
-            (2 * gig_normalizing_constant_numba(self.c, 0, 2 * self.d))
-            log_likelihood[i] = math.log(log_likelihood[i])
-        
-        # Vectorized computation of log likelihood for all leaves
-        # likelihood = (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) + \
-        #      gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))) / \
-        #     (2 * gig_normalizing_constant(self.c, 0, 2 * self.d))
-        
-        # if np.all(likelihood) > 0:
-        #     log_likelihood = np.log(
-        #         likelihood # TODO
-        #     )
-        # else:
-        #     raise ValueError("Likelihood is non-positive, check your data and model parameters.")
-        return log_likelihood.sum()
+        self.parent.rh = rh
+        self.parent.sh = sh
+        self.parent.param = bart_params
+        log_likelihood_sum, self.parent.pi_h = self.trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
+
+        return log_likelihood_sum
 
 class LogisticPrior:
     """
@@ -545,7 +538,7 @@ class LogisticPrior:
     """
     def __init__(self, n_categories=2, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, generator=np.random.default_rng()):
         if c == 0.0 or d == 0.0:
-            a0 = 3.5 / sqrt(2)
+            a0 = 3.5 / math.sqrt(2)
             c = n_trees/(a0 ** 2) + 0.5
             d = n_trees/(a0 ** 2)
         
@@ -556,6 +549,8 @@ class LogisticPrior:
         # Placeholders for values reused in resampling
         self.rh = None  
         self.sh = None
+        self.pi_h = None
+        self.param = None
     
     def set_latents(self, latents):
         self.tree_prior.set_latents(latents)

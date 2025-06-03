@@ -1,7 +1,8 @@
 import numpy as np
+from scipy.stats import norm
 
-from .samplers import Sampler, DefaultSampler, BinarySampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
-from .priors import ComprehensivePrior, BinaryPrior, LogisticPrior
+from .samplers import Sampler, DefaultSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
+from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
 from .util import Preprocessor, DefaultPreprocessor, BinaryPreprocessor
 
 class BART:
@@ -115,21 +116,21 @@ class DefaultBART(BART):
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
         
-class BinaryBART(BART):
+class ProbitBART(BART):
     """
-    Binary BART implementation using Albert-Chib data augmentation.
+    Binary BART implementation using Albert-Chib data augmentation and probit link.
     """
-    
-    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
-                 tree_beta: float=2.0, 
-                 f_k = 2.0, 
+
+    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95,
+                 tree_beta: float=2.0,
+                 f_k=2.0,
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0):
         preprocessor = BinaryPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
-        prior = BinaryPrior(n_trees, tree_alpha, tree_beta, f_k, rng)
+        prior = ProbitPrior(n_trees, tree_alpha, tree_beta, f_k, rng)
         temp_schedule = self._check_temperature(temperature)
-        sampler = BinarySampler(prior=prior, proposal_probs=proposal_probs, 
+        sampler = ProbitSampler(prior=prior, proposal_probs=proposal_probs, 
                                generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
     
@@ -155,7 +156,6 @@ class BinaryBART(BART):
         f_samples = self.posterior_f(X)
         
         # Apply probit transformation: P(Y=1) = Φ(f(x))
-        from scipy.stats import norm
         prob_1 = norm.cdf(f_samples)
         
         # Average over posterior samples
@@ -186,7 +186,6 @@ class BinaryBART(BART):
             Array of shape (n_samples, n_posterior_samples) with probability samples
         """
         f_samples = self.posterior_f(X)
-        from scipy.stats import norm
         return norm.cdf(f_samples)
     
 class LogisticBART(BART):
