@@ -378,11 +378,15 @@ class LogisticSampler(Sampler):
         # y is either 0 or 1
         n = 1
         from scipy.stats import gamma
-        if sumFx <= 0:
-            raise ValueError("sumFx must be positive for sampling phi.")
-        phi = gamma.rvs(a=n, scale=1/sumFx, random_state=self.generator)
-        return phi    
-    
+        if np.any(sumFx <= 0):
+            raise ValueError("All sumFx must be strictly positive.")
+        # Exponential should be faster than gamma
+        phis = self.generator.exponential(scale=1.0/sumFx)
+        # phis = gamma.rvs(a=n,
+        #          scale=1.0/sumFx,
+        #          random_state=self.generator)
+        return phis
+
     def clear_last_cache(self):
         '''
         This method clears the cache of the last trace in the sampler.
@@ -413,14 +417,12 @@ class LogisticSampler(Sampler):
             iter_trace.append([(0, iter_current[j])])
         
         # sample latents phi
-        latents = np.empty((self.data.n))
-        for i in range(self.data.n):
-            sumFx = 0
-            for j in range(self.n_categories):
-                sumGx = iter_current[j].evaluate()[i]
-                Fx = np.exp(sumGx)
-                sumFx += Fx
-            latents[i] = self.__sample_phi(sumFx)
+        all_sumGx = np.stack([iter_current[j].evaluate() 
+                      for j in range(self.n_categories)],
+                     axis=0)  # (n_categories, n_samples)
+        Fx = np.exp(all_sumGx)  
+        sumFx = Fx.sum(axis=0)  
+        latents = self.__sample_phi(sumFx)
         
         self.prior.set_latents(latents)
                     

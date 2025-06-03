@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
-import pandas as pd
+from numba import njit, objmode, f8
+from scipy.special import kv
 
 # For faster random sampling
 def fast_choice(generator, array):
@@ -202,6 +203,121 @@ def rvs_gig(eta, chi, psi, size=1, random_state=None):
     
     return result
 
+import math 
+
+def rvs_gig_scalar(eta, chi, psi, generator=np.random.default_rng()):
+    """
+    Sample random variates from GIG(eta, chi, psi) for scalar eta, chi, psi.
+    Handles degenerate Gamma (chi=0) and InvGamma (psi=0) cases.
+    """
+    # Case 1: chi == 0 -> Gamma(eta, scale=2/psi)
+    if chi == 0:
+        if eta <= 0:
+            raise ValueError("For chi=0, eta must be > 0.")
+        return generator.gamma(eta, scale=2.0/psi)
+
+    # Case 2: psi == 0 -> InvGamma(-eta, scale=chi/2)
+    if psi == 0:
+        if eta >= 0:
+            raise ValueError("For psi=0, eta must be < 0.")
+        return 1.0 / generator.gamma(-eta, scale=2.0/chi)
+        # return invgamma.rvs(a=-eta, scale=chi/2.0, random_state=random_state)
+
+    # Case 3: general GIG
+    return gig_devroye(eta, chi, psi, generator=generator)
+    # b = math.sqrt(psi * chi)
+    # scale_param = math.sqrt(chi / psi)
+    # return geninvgauss.rvs(eta, b, scale=scale_param, size=size, random_state=random_state)
+
+def gig_devroye(eta, chi, psi, generator=np.random.default_rng()):
+    """
+    Devroye (2014) logistic-transform sampler for GIG(eta, chi, psi).
+    Parametrized as GIG(eta, chi, psi) where:
+    p \propto x^{eta-1} exp(-1/2 * (chi/x + psi*x)) for x > 0.
+    Equivalent to geninvgauss(eta, b, scale) where:
+    b = sqrt(chi * psi) and scale = sqrt(chi / psi).
+    """
+    omega = math.sqrt(chi * psi)
+    swap  = eta < 0.0
+    eta   = abs(eta)
+
+    # Devroye alpha
+    alpha = math.sqrt(omega**2 + eta**2) - eta
+
+    # Functions needed
+    def _psi(x):
+        return -alpha*(math.cosh(x) - 1.0) - eta*(math.exp(x) - x - 1.0)
+    def _psi_prime(x):
+        return -alpha*math.sinh(x) - eta*(math.exp(x) - 1.0)
+
+    # Set t
+    t = 0.0
+    x = -_psi(1.0)
+    if 0.5 <= x <= 2.0:
+        t = 1.0
+    elif x > 2.0:
+        t = 1.0 if (alpha == 0 and eta == 0) else math.sqrt(2.0/(alpha+eta))
+    else:  # x < 0.5
+        t = 1.0 if (alpha == 0 and eta == 0) else math.log(4.0/(alpha+2.0*eta))
+
+    # Set s
+    s = 0.0
+    x = -_psi(-1.0)
+    if 0.5 <= x <= 2.0:
+        s = 1.0
+    elif x > 2.0:
+        s = 1.0 if (alpha == 0 and eta == 0) else math.sqrt(4.0/(alpha*math.cosh(1.0)+eta))
+    else:  # x < 0.5
+        if alpha == 0 and eta == 0:
+            s = 1.0
+        elif alpha == 0:
+            s = 1.0 / eta
+        elif eta == 0:
+            s = math.log(1.0 + 1.0/alpha + math.sqrt(1.0/alpha**2 + 2.0/alpha))
+        else:
+            s = min(1.0/eta,
+                    math.log(1.0 + 1.0/alpha + math.sqrt(1.0/alpha**2 + 2.0/alpha)))
+
+    # Compute the parameters for the rejection sampling
+    param_eta   = -_psi(t)
+    param_zeta  = -_psi_prime(t)
+    param_theta = -_psi(-s)
+    param_xi    =  _psi_prime(-s)
+
+    p  = 1.0 / param_xi
+    r  = 1.0 / param_zeta
+    t_prime = t - r * param_eta
+    s_prime = s - p * param_theta
+    q  = t_prime + s_prime
+    
+    # Generation
+    while True:
+        U = generator.random()
+        V = generator.random()
+        W = generator.random()
+
+        if U < q / (p + q + r):
+            X = -s_prime + q * V
+        elif U < (q + r) / (p + q + r):
+            X = t_prime - r * math.log(V)
+        else:                           
+            X = -s_prime + p * math.log(V)
+
+        f1 = math.exp(-param_eta   - param_zeta * (X - t))
+        f2 = math.exp(-param_theta + param_xi   * (X + s))
+        chi_X = 1.0 if -s_prime <= X <= t_prime else (f1 if X > t_prime else f2) # This chi(X) is the chi function in the Devroye paper, not the chi parameter
+
+        if W * chi_X <= math.exp(_psi(X)):
+            break
+
+    # Result computation
+    x = math.exp(X) * (eta/omega + math.sqrt(1.0 + (eta/omega)**2))
+    if swap:
+        x = 1.0 / x
+        
+    # Transform to GIG(eta, chi, psi)
+    return x * math.sqrt(chi / psi)
+
 def gig_normalizing_constant(eta, chi, psi):
     """
     Compute the normalizing constant for the GIG distribution.
@@ -264,3 +380,63 @@ def gig_normalizing_constant(eta, chi, psi):
     if result.shape == ():
         return result.item()
     return result
+
+def gig_normalizing_constant_scalar(eta, chi, psi):
+    """
+    Compute the GIG normalizing constant for scalar inputs (eta, chi, psi).
+    Fast, scalar-only implementation without numpy.
+    """
+    from scipy.special import gammaln, kv
+    
+    # Case 1: chi == 0 --> Gamma limit (eta > 0)
+    if chi == 0:
+        if eta <= 0:
+            raise ValueError("For chi=0, GIG(eta, psi, 0) requires eta > 0.")
+        # Z = (2/psi)^eta * Gamma(eta)
+        log_val = math.log(2.0 / psi) * eta + gammaln(eta)
+        return math.exp(log_val)
+
+    # Case 2: psi == 0 --> Inverse-Gamma limit (eta < 0)
+    if psi == 0:
+        if eta >= 0:
+            raise ValueError("For psi=0, GIG(eta, 0, chi) requires eta < 0.")
+        # Z = (chi/2)^eta * Gamma(-eta)
+        log_val = math.log(chi / 2.0) * eta + gammaln(-eta)
+        return math.exp(log_val)
+
+    # Case 3: General case chi > 0 and psi > 0
+    # Z = 2 * K_eta(sqrt(psi*chi)) * (chi/psi)^(eta/2)
+    z = math.sqrt(psi * chi)
+    K_val = kv(eta, z)
+    return math.exp(math.log(2.0 * K_val) + math.log(chi / psi) * (0.5 * eta))
+
+@njit
+def gig_normalizing_constant_numba(eta: float, chi: float, psi: float) -> float:
+    """
+    Compute the GIG normalizing constant for scalar inputs (eta, chi, psi).
+    Numba-accelerated version where only the Bessel K call uses object mode.
+    """
+    # Case 1: chi == 0 --> Gamma limit (eta > 0)
+    if chi == 0:
+        if eta <= 0:
+            raise ValueError("For chi=0, GIG(eta, psi, 0) requires eta > 0.")
+        # Z = (2/psi)^eta * Gamma(eta)
+        log_val = math.log(2.0 / psi) * eta + math.lgamma(eta)
+        return math.exp(log_val)
+
+    # Case 2: psi == 0 --> Inverse-Gamma limit (eta < 0)
+    if psi == 0:
+        if eta >= 0:
+            raise ValueError("For psi=0, GIG(eta, 0, chi) requires eta < 0.")
+        # Z = (chi/2)^eta * Gamma(-eta)
+        log_val = math.log(chi / 2.0) * eta + math.lgamma(-eta)
+        return math.exp(log_val)
+
+    # Case 3: General case chi > 0 and psi > 0
+    # Z = 2 * K_eta(sqrt(psi*chi)) * (chi/psi)^(eta/2)
+    z = math.sqrt(psi * chi)
+    # Temporarily switch to object mode to call scipy.special.kv
+    with objmode(K_val=f8):
+        K_val = kv(eta, z)
+        
+    return math.exp(math.log(2.0 * K_val) + math.log(chi / psi) * (0.5 * eta))

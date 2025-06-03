@@ -8,4 +8,5 @@ scripts/
 .hydra/hydra.yaml
 .DS_Store
 *.log
-benchmartks/*.csv
+benchmarks/*.csv
+notebooks/deprecated/*

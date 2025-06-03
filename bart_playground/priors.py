@@ -1,5 +1,5 @@
 
-from math import log, sqrt
+from math import log, pi, sqrt
 import numpy as np
 
 from scipy.stats import invgamma, chi2
@@ -8,7 +8,7 @@ from numba import njit
 
 from .params import Parameters
 from .moves import Move
-from .util import Dataset, gig_normalizing_constant, rvs_gig
+from .util import Dataset, gig_normalizing_constant, gig_normalizing_constant_numba, rvs_gig, rvs_gig_scalar
 
 # Standalone Numba-optimized functions
 @njit
@@ -360,7 +360,7 @@ class LogisticTreesPrior(TreesPrior):
     
     Inherits from TreesPrior and overrides the resample_leaf_vals method to handle logistic regression.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, c = 0.0, d = 0.0, generator=np.random.default_rng()):
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, c = 0.0, d = 0.0, generator=np.random.default_rng(), parent = None):
         """
         Initialize the logistic trees prior with parameters.
         
@@ -383,6 +383,7 @@ class LogisticTreesPrior(TreesPrior):
             raise ValueError("Parameters c and d must be provided for logistic regression prior.")
         self.c = c
         self.d = d
+        self.parent : LogisticPrior = parent
         super().__init__(n_trees, tree_alpha, tree_beta, f_k = 2.0, generator = generator)
 
     def set_latents(self, latents):
@@ -408,6 +409,11 @@ class LogisticTreesPrior(TreesPrior):
         leaf_params_new : numpy.ndarray
             The resampled leaf parameters.
         """
+        # Cached values of rh, sh and even pi_h from parent may be used. 
+        # However, there is no need (speedup is < 4%)
+        # rh = self.parent.rh
+        # sh = self.parent.sh
+        
         lb_bool = bart_params.leaf_basis(tree_ids)
         leaf_basis = lb_bool.astype(np.float64)
         tree_eval = bart_params.evaluate(all_except = tree_ids)
@@ -415,16 +421,33 @@ class LogisticTreesPrior(TreesPrior):
         
         rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
         sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
-        pi_h = (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) / (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) +
-                    gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))))
         
-        leaf_params_new = pi_h * rvs_gig(
-            -self.c + rh, 2 * self.d, 2 * sh, 
-            random_state=self.generator
-        ) + (1 - pi_h) * rvs_gig(
-            self.c + rh, 0, 2 * (self.d + sh), 
-            random_state=self.generator
-        )
+        pi_h = np.zeros(len(rh))
+        for i in range(len(rh)):
+            Z1 = gig_normalizing_constant_numba(-self.c + rh[i], 2 * self.d, 2 * sh[i])
+            Z2 = gig_normalizing_constant_numba(self.c + rh[i], 0, 2 * (self.d + sh[i]))
+            pi_h[i] = Z1 / (Z1 + Z2)
+        # pi_h = (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) / (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) +
+        #             gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))))
+        
+        leaf_params_new = np.zeros(rh.shape[0])
+        for i in range(leaf_params_new.shape[0]):
+            leaf_params_new[i] = pi_h[i] * rvs_gig_scalar(
+                    -self.c + rh[i], 2 * self.d, 2 * sh[i],
+                    generator=self.generator
+                ) + (1 - pi_h[i]) * rvs_gig_scalar(
+                    self.c + rh[i], 0, 2 * (self.d + sh[i]),
+                    generator=self.generator
+                )
+        
+        # vectorized computation of leaf parameters
+        # leaf_params_new = pi_h * rvs_gig(
+        #     -self.c + rh, 2 * self.d, 2 * sh, 
+        #     random_state=self.generator
+        # ) + (1 - pi_h) * rvs_gig(
+        #     self.c + rh, 0, 2 * (self.d + sh), 
+        #     random_state=self.generator
+        # )
         # leaf_params_new is a 1D array of shape (n_leaves,)
         
         return np.log(leaf_params_new)
@@ -435,7 +458,7 @@ class LogisticLikelihood(BARTLikelihood):
     
     Inherits from BARTLikelihood and overrides the trees_log_marginal_lkhd method.
     """
-    def __init__(self, c, d):
+    def __init__(self, c, d, parent=None):
         """
         Initialize the logistic likelihood with parameters c and d.
 
@@ -448,6 +471,7 @@ class LogisticLikelihood(BARTLikelihood):
         """
         self.c = c
         self.d = d
+        self.parent : LogisticPrior = parent
         # f_sigma2 useless
         super().__init__(f_sigma2 = 0.0)
         
@@ -489,17 +513,30 @@ class LogisticLikelihood(BARTLikelihood):
 
         # sh[t] = sum of latents[i] * np.exp(tree_eval)[i] where leaf_basis[i, t] == 1
         sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
-
+        
+        # self.parent.rh = rh
+        # self.parent.sh = sh
+        
+        import math
+        
+        log_likelihood = np.zeros(len(rh))
+        for i in range(len(rh)):
+            log_likelihood[i] = (gig_normalizing_constant_numba(-self.c + rh[i], 2 * self.d, 2 * sh[i]) + \
+                            gig_normalizing_constant_numba(self.c + rh[i], 0, 2 * (self.d + sh[i]))) / \
+            (2 * gig_normalizing_constant_numba(self.c, 0, 2 * self.d))
+            log_likelihood[i] = math.log(log_likelihood[i])
+        
         # Vectorized computation of log likelihood for all leaves
-        likelihood = (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) + \
-             gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))) / \
-            (2 * gig_normalizing_constant(self.c, 0, 2 * self.d))
-        if np.all(likelihood) > 0:
-            log_likelihood = np.log(
-                likelihood # TODO
-            )
-        else:
-            raise ValueError("Likelihood is non-positive, check your data and model parameters.")
+        # likelihood = (gig_normalizing_constant(-self.c + rh, 2 * self.d, 2 * sh) + \
+        #      gig_normalizing_constant(self.c + rh, 0, 2 * (self.d + sh))) / \
+        #     (2 * gig_normalizing_constant(self.c, 0, 2 * self.d))
+        
+        # if np.all(likelihood) > 0:
+        #     log_likelihood = np.log(
+        #         likelihood # TODO
+        #     )
+        # else:
+        #     raise ValueError("Likelihood is non-positive, check your data and model parameters.")
         return log_likelihood.sum()
 
 class LogisticPrior:
@@ -512,9 +549,13 @@ class LogisticPrior:
             c = n_trees/(a0 ** 2) + 0.5
             d = n_trees/(a0 ** 2)
         
-        self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator)
-        self.likelihood = LogisticLikelihood(c, d)
+        self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self)
+        self.likelihood = LogisticLikelihood(c, d, parent=self)
         self.n_categories = n_categories
+        
+        # Placeholders for values reused in resampling
+        self.rh = None  
+        self.sh = None
     
     def set_latents(self, latents):
         self.tree_prior.set_latents(latents)
