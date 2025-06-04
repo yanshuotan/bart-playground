@@ -1,8 +1,6 @@
 # conf/config.yaml
-sample_sizes: [50, 100, 500, 1000, 5000]
-n_chains_range: [1, 5,  10]
 dgp: "dgp_1"  # Specify the DGP scenario to use
-n_reps: 10
+n_reps: 2
 dgp_params:
   noise: 0.1
   n_samples: 10000 # default; will be overridden in the loop
@@ -13,13 +11,13 @@ bart_params:
     prune: 0.25
     change: 0.1
     swap: 0.4
-  n_chains: 1  # default; will be overridden in the loop
+  n_chains: 4  # default; will be overridden in the loop
   ndpost: 100
-  nskip: 500
+  nskip: 100
   alpha: 0.05
-  n_trees: 10  # default; will be overridden in the loop
+  n_trees: 4  # default; will be overridden in the loop
   temperature: 1.0
-artifacts_dir: "./"
+artifacts_dir: "experiments/mixing_paper/artifacts/june_2025_new_n_burn_in_1000_trees_200/chains"
 hydra:
   run:
-    dir: experiments/mixing_paper/artifacts/new_configs/chains
+    dir: experiments/mixing_paper/artifacts/june_2025_new_n_burn_in_1000_trees_200/chains

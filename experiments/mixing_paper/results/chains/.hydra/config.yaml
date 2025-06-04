@@ -8,7 +8,7 @@ n_chains_range:
 - 1
 - 5
 - 10
-dgp: lss
+dgp: dgp_1
 n_reps: 10
 dgp_params:
   noise: 0.1
@@ -21,9 +21,9 @@ bart_params:
     change: 0.1
     swap: 0.4
   n_chains: 1
-  ndpost: 100
-  nskip: 500
+  ndpost: 10000
+  nskip: 1000
   alpha: 0.05
   n_trees: 10
-  temperature: 5
+  temperature: 1.0
 artifacts_dir: ./

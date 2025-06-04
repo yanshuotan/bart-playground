@@ -112,13 +112,11 @@ hydra:
     hydra:
     - ++hydra.run.dir=experiments/mixing_paper/results/chains
     - hydra.mode=RUN
-    task:
-    - ++dgp=lss
-    - ++bart_params.temperature=5
+    task: []
   job:
     name: chains
     chdir: null
-    override_dirname: ++bart_params.temperature=5,++dgp=lss
+    override_dirname: ''
     id: ???
     num: ???
     config_name: chains

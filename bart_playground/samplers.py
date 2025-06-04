@@ -1,4 +1,3 @@
-
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
@@ -8,22 +7,25 @@ from scipy.stats import truncnorm
 from .params import Tree, Parameters
 from .moves import all_moves, Move
 from .util import Dataset
-from .priors import  ComprehensivePrior, ProbitPrior, LogisticPrior
+from .priors import *
+from .priors import *
+from bart_playground import moves
+
 
 class TemperatureSchedule:
-
     def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
         self.temp_schedule = temp_schedule
-    
+
     def __call__(self, t):
         return self.temp_schedule(t)
-    
+
+
 class Sampler(ABC):
     """
     Base class for the BART sampler.
     """
-    def __init__(self, prior, proposal_probs: dict,  
-                 generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule()):
+
+    def __init__(self, prior, proposal_probs: dict, generator: np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule()):
         """
         Initialize the sampler with the given parameters.
 
@@ -42,7 +44,7 @@ class Sampler(ABC):
             trace (list): A list to store the trace of the sampling process.
             generator (np.random.Generator): A random number generator.
         """
-        self._data : Optional[Dataset] = None
+        self._data: Optional[Dataset] = None
         self.prior = prior
         self.n_iter = None
         self.proposals = proposal_probs
@@ -53,13 +55,13 @@ class Sampler(ABC):
         self.moves_cache = None
         # current move cache iterator
         self.moves_cache_iterator = None
-        
+
     @property
     def data(self) -> Dataset:
         assert self._data, "Data has not been added yet."
         return self._data
-    
-    def add_data(self, data : Dataset):
+
+    def add_data(self, data: Dataset):
         """
         Adds data to the sampler.
 
@@ -70,15 +72,15 @@ class Sampler(ABC):
 
     def add_thresholds(self, thresholds):
         self.possible_thresholds = thresholds
-        
+
     def clear_last_cache(self):
-        '''
+        """
         This method clears the cache of the last trace in the sampler.
-        '''
+        """
         if len(self.trace) > 0:
             self.trace[-1].clear_cache()
-        
-    def run(self, n_iter, progress_bar = True, quietly = False, current = None, n_skip = 0):
+
+    def run(self, n_iter, progress_bar=True, quietly=False, current=None, n_skip=0):
         """
         Run the sampler for a specified number of iterations from `current` or a fresh start.
 
@@ -95,29 +97,29 @@ class Sampler(ABC):
         elif self.trace:  # If self.trace is already populated (e.g., by init_from_xgboost)
             current = self.trace[0]  # Use the pre-loaded state
         else:
-            current = self.get_init_state() # Otherwise, generate a new initial state
-        
+            current = self.get_init_state()  # Otherwise, generate a new initial state
+
         self.trace = []
         self.n_iter = n_iter
 
         if n_skip == 0:
-            self.trace.append(current) # Add initial state to trace
+            self.trace.append(current)  # Add initial state to trace
 
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
 
         for iter in iterator:
             if not progress_bar and iter % 10 == 0 and not quietly:
                 print(f"Running iteration {iter}/{n_iter}")
-            
+
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False)
 
             if iter >= n_skip:
                 self.clear_last_cache()  # Clear cache of the last trace
                 self.trace.append(current)
-        
+
         return self.trace
-    
+
     def sample_move(self):
         """
         Samples a move based on the proposal probabilities.
@@ -140,7 +142,7 @@ class Sampler(ABC):
         if self.moves_cache_iterator >= len(self.moves_cache):
             self.moves_cache = None
         return move
-    
+
     @abstractmethod
     def get_init_state(self):
         """
@@ -162,56 +164,58 @@ class Sampler(ABC):
         pass
 
     def continue_run(self, additional_iters, new_data=None, quietly=False, last_state=None):
-            """
-            Continue sampling with updated data from a previous state.
+        """
+        Continue sampling with updated data from a previous state.
 
-            Parameters:
-                additional_iters: Number of additional iterations
-                new_data: Updated dataset (if None, uses existing data)
-                quietly: Whether to suppress output
-                last_state: Last state from previous run (if None, uses last state in trace)
+        Parameters:
+            additional_iters: Number of additional iterations
+            new_data: Updated dataset (if None, uses existing data)
+            quietly: Whether to suppress output
+            last_state: Last state from previous run (if None, uses last state in trace)
 
-            Returns:
-                New trace segment
-            """
-            # Get last state
-            if last_state is None:
-                if hasattr(self, 'trace') and self.trace:
-                    last_state = self.trace[-1]
-                else:
-                    raise ValueError("No last_state provided and no trace available")
+        Returns:
+            New trace segment
+        """
+        # Get last state
+        if last_state is None:
+            if hasattr(self, "trace") and self.trace:
+                last_state = self.trace[-1]
+            else:
+                raise ValueError("No last_state provided and no trace available")
 
-            # Update parameter state with any new data points if needed
-            if new_data is not None:
-                old_n = self.data.n
-                new_n = new_data.n
-                
-                self.add_data(new_data)
+        # Update parameter state with any new data points if needed
+        if new_data is not None:
+            old_n = self.data.n
+            new_n = new_data.n
 
-                if new_n > old_n:
-                    new_X = new_data.X[old_n:]
-                    if hasattr(new_data, 'Z'): # check if treatment assignments are available, e.g. for BCFDataset
-                        new_z = new_data.Z[old_n:]
-                        current_state = last_state.add_data_points(new_X, new_z)
-                    elif isinstance(last_state, list):
-                        # If last_state is a list (e.g., in LogisticSampler), handle each category
-                        current_state = []
-                        for i, state in enumerate(last_state):
-                            current_state.append(state.add_data_points(new_X))
-                    else: # Default case for Parameters
-                        current_state = last_state.add_data_points(new_X)
-                else: # No new data, just continue from last state
-                    current_state = last_state
-            else: # No new data, just continue from last state
+            self.add_data(new_data)
+
+            if new_n > old_n:
+                new_X = new_data.X[old_n:]
+                if hasattr(new_data, "Z"):  # check if treatment assignments are available, e.g. for BCFDataset
+                    new_z = new_data.Z[old_n:]
+                    current_state = last_state.add_data_points(new_X, new_z)
+                elif isinstance(last_state, list):
+                    # If last_state is a list (e.g., in LogisticSampler), handle each category
+                    current_state = []
+                    for i, state in enumerate(last_state):
+                        current_state.append(state.add_data_points(new_X))
+                else:  # Default case for Parameters
+                    current_state = last_state.add_data_points(new_X)
+            else:  # No new data, just continue from last state
                 current_state = last_state
+        else:  # No new data, just continue from last state
+            current_state = last_state
 
-            # Run sampler for additional iterations
-            return self.run(additional_iters, quietly=quietly, current=current_state)
+        # Run sampler for additional iterations
+        return self.run(additional_iters, quietly=quietly, current=current_state)
+
 
 class DefaultSampler(Sampler):
     """
     Default implementation of the BART sampler.
     """
+
     def __init__(
         self,
         prior: ComprehensivePrior,
@@ -219,7 +223,7 @@ class DefaultSampler(Sampler):
         generator: np.random.Generator,
         temp_schedule=TemperatureSchedule(),
         tol: int = 100,
-        init_trees: Optional[list[Tree]] = None  # NEW
+        init_trees: Optional[list[Tree]] = None,  # NEW
     ):
         """
         Default implementation of the BART sampler.
@@ -262,50 +266,51 @@ class DefaultSampler(Sampler):
             trees = [Tree.new(self.data.X) for _ in range(N)]
 
         global_params = self.global_prior.init_global_params(self.data)
-        return Parameters(trees, global_params)
-    
-    def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
+        init_state = Parameters(trees, global_params)
+        return init_state
+
+    def log_mh_ratio(self, move: Move, temp, marginalize: bool = False):
         """Calculate total log Metropolis-Hastings ratio"""
-        data_y = self.data.y if data_y is None else data_y
-        return (self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
-            move.log_tran_ratio
+        return (self.tree_prior.trees_log_prior_ratio(move) + self.likelihood.trees_log_marginal_lkhd_ratio(move, self.data.y, marginalize)) / temp + move.log_tran_ratio
 
     def one_iter(self, current, temp, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
-        iter_current = current.copy() # First make a copy
+        iter_current = current.copy()  # First make a copy
         iter_trace = [(0, iter_current)]
         for k in range(self.tree_prior.n_trees):
             move = self.sample_move()(
-                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
-                )
-            if move.propose(self.generator): # Check if a valid move was proposed
+                iter_current,
+                [k],
+                possible_thresholds=self.possible_thresholds,
+                tol=self.tol,
+            )
+            if move.propose(self.generator):  # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
                 if np.log(Z) < self.log_mh_ratio(move, temp):
-                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y=self.data.y, tree_ids=[k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
-                        iter_trace.append((k+1, move.proposed))
-        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
+                        iter_trace.append((k + 1, move.proposed))
+        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y=self.data.y)
         if return_trace:
             return iter_trace
         else:
             del iter_trace
             return iter_current
-    
+
+
 class ProbitSampler(Sampler):
     """
     Probit sampler for binary BART.
     """
-    def __init__(self, prior : ProbitPrior, proposal_probs: dict,
-                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
+
+    def __init__(self, prior: ProbitPrior, proposal_probs: dict, generator: np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
         self.tol = tol
         if proposal_probs is None:
-            proposal_probs = {"grow" : 0.5,
-                              "prune" : 0.5}
+            proposal_probs = {"grow": 0.5, "prune": 0.5}
         self.tree_prior = prior.tree_prior
         self.likelihood = prior.likelihood
         super().__init__(prior, proposal_probs, generator, temp_schedule)
@@ -322,17 +327,15 @@ class ProbitSampler(Sampler):
         trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
         init_state = Parameters(trees, {"eps_sigma2": 1})
         return init_state
-    
-    def log_mh_ratio(self, move : Move, temp, data_y, marginalize : bool=False):
+
+    def log_mh_ratio(self, move: Move, temp, data_y, marginalize: bool = False):
         """Calculate total log Metropolis-Hastings ratio"""
-        return (self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
-            move.log_tran_ratio
-            
+        return (self.tree_prior.trees_log_prior_ratio(move) + self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + move.log_tran_ratio
+
     def __sample_Z(self, y, Gx):
         Z = np.empty_like(Gx)
 
-        mask1 = (y == 1)
+        mask1 = y == 1
         mask0 = ~mask1
 
         # For Y_i = 1: Z_i ~ TruncNormal(Gx[i], 1, lower=0, upper=inf)
@@ -353,54 +356,53 @@ class ProbitSampler(Sampler):
         """
         Perform one iteration of the sampler.
         """
-        iter_current : Parameters = current.copy() # First make a copy
+        iter_current: Parameters = current.copy()  # First make a copy
         iter_trace = [(0, iter_current)]
-        
+
         # sample latents Z
         latents = self.__sample_Z(self.data.y, iter_current.evaluate())
-        
+
         for k in range(self.tree_prior.n_trees):
-            move = self.sample_move()(
-                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
-                )
-            if move.propose(self.generator): # Check if a valid move was proposed
+            move = self.sample_move()(iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol)
+            if move.propose(self.generator):  # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
                 if np.log(Z) < self.log_mh_ratio(move, temp, latents):
-                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = latents, tree_ids = [k])
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y=latents, tree_ids=[k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
-                        iter_trace.append((k+1, move.proposed))
-        
+                        iter_trace.append((k + 1, move.proposed))
+
         if return_trace:
             return iter_trace
         else:
             del iter_trace
             return iter_current
-    
+
+
 class LogisticSampler(Sampler):
     """
     Logistic sampler for BART.
     """
-    def __init__(self, prior : LogisticPrior, proposal_probs: dict,
-                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
+
+    def __init__(self, prior: LogisticPrior, proposal_probs: dict, generator: np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
         self.tol = tol
         if proposal_probs is None:
-            proposal_probs = {"grow" : 0.5,
-                              "prune" : 0.5}
+            proposal_probs = {"grow": 0.5, "prune": 0.5}
         self.tree_prior = prior.tree_prior
         self.likelihood = prior.likelihood
         self.n_i = None
         super().__init__(prior, proposal_probs, generator, temp_schedule)
-    
+
     @property
     def n_categories(self) -> int:
         """
         Get the number of categories for the sampler.
         """
-        if not hasattr(self, '_n_cat'):
+        if not hasattr(self, "_n_cat"):
             raise AttributeError("Number of categories has not been set.")
         return self._n_cat
+
     @n_categories.setter
     def n_categories(self, n_cat: int):
         """
@@ -420,9 +422,9 @@ class LogisticSampler(Sampler):
         super().add_data(data)
         self.n_i = np.zeros(self.data.X.shape[0], dtype=int)
         for category in range(self.n_categories):
-            self.n_i += (self.data.y == category)
+            self.n_i += self.data.y == category
         self.is_exp = np.all(self.n_i == 1)
-        
+
     def get_init_state(self) -> list[Parameters]:
         """
         Retrieve the initial state for the sampler.
@@ -435,11 +437,9 @@ class LogisticSampler(Sampler):
         init_state = []
         for category in range(self.n_categories):
             trees = [Tree.new(self.data.X) for _ in range(self.prior.tree_prior.n_trees)]
-            init_state.append(
-                Parameters(trees, {"eps_sigma2": 1})
-            )
+            init_state.append(Parameters(trees, {"eps_sigma2": 1}))
         return init_state
-        
+
     def __sample_phi(self, sumFx):
         # for every i
         # phi | y ~ Gamma(n, sumFx)
@@ -449,12 +449,11 @@ class LogisticSampler(Sampler):
             raise ValueError("All sumFx must be strictly positive.")
         # Exponential should be faster than gamma (marginal speed gain, ~1%)
         if self.is_exp:
-            phis = self.generator.exponential(scale=1.0/sumFx)
+            phis = self.generator.exponential(scale=1.0 / sumFx)
         else:
             from scipy.stats import gamma
-            phis = gamma.rvs(a=self.n_i,
-                 scale=1.0/sumFx,
-                 random_state=self.generator)
+
+            phis = gamma.rvs(a=self.n_i, scale=1.0 / sumFx, random_state=self.generator)
         return phis
 
     def clear_last_cache(self):
@@ -465,61 +464,53 @@ class LogisticSampler(Sampler):
             for category in range(self.n_categories):
                 # Clear cache for each category's parameters
                 self.trace[-1][category].clear_cache()
-    
-    def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
+
+    def log_mh_ratio(self, move: Move, temp, data_y=None, marginalize: bool = False):
         """Calculate total log Metropolis-Hastings ratio"""
         data_y = self.data.y if data_y is None else data_y
-        return (self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
-            move.log_tran_ratio
-    
+        return (self.tree_prior.trees_log_prior_ratio(move) + self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + move.log_tran_ratio
+
     def one_iter(self, current, temp, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
         # First make a copy
-        iter_current : list[Parameters] = []
+        iter_current: list[Parameters] = []
         for category in range(self.n_categories):
             iter_current.append(current[category].copy())
-        
+
         iter_trace = []
         for j in range(self.n_categories):
             iter_trace.append([(0, iter_current[j])])
-        
+
         # sample latents phi
-        all_sumGx = np.stack([iter_current[j].evaluate() 
-                      for j in range(self.n_categories)],
-                     axis=0)  # (n_categories, n_samples)
-        Fx = np.exp(all_sumGx)  
-        sumFx = Fx.sum(axis=0)  
+        all_sumGx = np.stack([iter_current[j].evaluate() for j in range(self.n_categories)], axis=0)  # (n_categories, n_samples)
+        Fx = np.exp(all_sumGx)
+        sumFx = Fx.sum(axis=0)
         latents = self.__sample_phi(sumFx)
-        
+
         self.prior.set_latents(latents)
-                    
+
         for category in range(self.n_categories):
             for h in range(self.tree_prior.n_trees):
-                move = self.sample_move()(
-                    iter_current[category], [h], possible_thresholds=self.possible_thresholds, tol=self.tol
-                )
+                move = self.sample_move()(iter_current[category], [h], possible_thresholds=self.possible_thresholds, tol=self.tol)
                 if move.propose(self.generator):  # Check if a valid move was proposed
-                    yi_match = (self.data.y == category)
+                    yi_match = self.data.y == category
                     Z = self.generator.uniform(0, 1)
                     if np.log(Z) < self.log_mh_ratio(move, temp=temp, data_y=yi_match):
                         new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y=yi_match, tree_ids=[h])
                         move.proposed.update_leaf_vals([h], new_leaf_vals)
                         iter_current[category] = move.proposed
                         if return_trace:
-                            iter_trace[category].append((h+1, move.proposed))
+                            iter_trace[category].append((h + 1, move.proposed))
 
         if return_trace:
             return iter_trace
         else:
             del iter_trace
             return iter_current
-    
-all_samplers = {"default" : DefaultSampler, "binary": ProbitSampler, "logistic": LogisticSampler}
 
-default_proposal_probs = {"grow" : 0.25,
-                          "prune" : 0.25,
-                          "change" : 0.4,
-                          "swap" : 0.1}
+
+all_samplers = {"default": DefaultSampler, "binary": ProbitSampler, "logistic": LogisticSampler}
+
+default_proposal_probs = {"grow": 0.25, "prune": 0.25, "change": 0.4, "swap": 0.1}

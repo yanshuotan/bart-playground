@@ -13,3 +13,4 @@ pandas
 matplotlib
 hydra-core
 omegaconf
+wandb
