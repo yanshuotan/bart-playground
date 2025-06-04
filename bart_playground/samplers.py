@@ -477,7 +477,7 @@ class LogisticSampler(Sampler):
             del iter_trace
             return iter_current
     
-all_samplers = {"default" : DefaultSampler, "binary": ProbitSampler}
+all_samplers = {"default" : DefaultSampler, "binary": ProbitSampler, "logistic": LogisticSampler}
 
 default_proposal_probs = {"grow" : 0.25,
                           "prune" : 0.25,

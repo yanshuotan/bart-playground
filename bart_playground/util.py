@@ -145,7 +145,7 @@ class ClassificationPreprocessor(Preprocessor):
     @property
     def labels(self):
         if self.uniq_labels is None:
-            raise ValueError("Preprocessor must be fitted before accessing BinaryPreprocessor.labels")
+            raise ValueError("Preprocessor must be fitted before accessing ClassificationPreprocessor.labels")
         return self.uniq_labels
     
     def fit(self, X, y):

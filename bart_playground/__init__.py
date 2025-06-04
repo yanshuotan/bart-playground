@@ -12,5 +12,5 @@ from .visualization import visualize_tree
 __all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART",
            "Change", "Grow", "Prune", "Swap", 
            "TreesPrior", "GlobalParamPrior", "BARTLikelihood", "ComprehensivePrior",
-           "DataGenerator", "all_moves", "all_moves", "Tree", "Parameters", "Sampler", "DefaultSampler", "ProbitSampler", "LogisticSampler",
-           "TemperatureSchedule", "all_moves", "all_samplers", "DefaultPreprocessor", "Dataset", "visualize_tree"]
+           "DataGenerator", "all_moves", "Tree", "Parameters", "Sampler", "DefaultSampler", "ProbitSampler", "LogisticSampler",
+           "TemperatureSchedule", "all_samplers", "DefaultPreprocessor", "Dataset", "visualize_tree"]
