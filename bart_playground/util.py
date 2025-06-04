@@ -38,32 +38,33 @@ class Preprocessor(ABC):
     @thresholds.setter
     def thresholds(self, value):
         self._thresholds = value
-
+    
     @abstractmethod
     def gen_thresholds(self, X):
         pass
-    
-    @abstractmethod
+        
     def fit(self, X, y):
         pass
 
-    @abstractmethod
     def transform(self, X, y) -> Dataset:
-        pass
+        return Dataset(
+            self.transform_X(X),
+            self.transform_y(y)
+        )
 
     def fit_transform(self, X, y):
         self.fit(X, y)
         return self.transform(X, y)
+    
+    def transform_X(self, X) -> np.ndarray:
+        return X
 
-    @abstractmethod
     def transform_y(self, y) -> np.ndarray:
-        pass
+        return y
 
-    @abstractmethod
     def backtransform_y(self, y) -> np.ndarray:
-        pass
+        return y
 
-    @abstractmethod
     def update_transform(self, X_new, y_new, dataset):
         """
         Update an existing dataset with new data points.
@@ -76,15 +77,21 @@ class Preprocessor(ABC):
         Returns:
             Updated dataset
         """
-        pass
+        X_combined = np.vstack([dataset.X, X_new])
+        
+        y_new_transformed = self.transform_y(y_new)
+        y_combined = np.vstack([dataset.y.reshape(-1, 1), 
+                              y_new_transformed.reshape(-1, 1)]).flatten()
+        updated_dataset = Dataset(X_combined, y_combined)
+        return updated_dataset
 
 class DefaultPreprocessor(Preprocessor):
     """
-    Default implementation for preprocessing input data.
+    Default implementation for preprocessing input data for continuous BART.
     """
     def __init__(self, max_bins: int=100):
         """
-        Initialize the default X preprocessor.
+        Initialize the default preprocessor.
 
         Parameters:
         - max_bins: int
@@ -92,7 +99,7 @@ class DefaultPreprocessor(Preprocessor):
         """
         self.max_bins = max_bins
         self.splits = None
-
+    
     def fit(self, X, y):
         if X is None or y is None or len(X) == 0 or len(y) == 0:
             raise ValueError("X and y cannot be None")
@@ -119,34 +126,62 @@ class DefaultPreprocessor(Preprocessor):
     
     def backtransform_y(self, y) -> np.ndarray:
         return (self.y_max - self.y_min) * (y + 0.5) + self.y_min
+    
+class ClassificationPreprocessor(Preprocessor):
+    """
+    Preprocessor for classification tasks.
+    """
+    def __init__(self, max_bins: int=100):
+        """
+        Initialize the classification preprocessor.
 
-    def update_transform(self, X_new, y_new, dataset):
+        Parameters:
+        - max_bins: int
+            Maximum number of bins.
         """
-        Update an existing dataset with new data points.
-        """
-        X_combined = np.vstack([dataset.X, X_new])
+        self.max_bins = max_bins
+        self.uniq_labels = None
         
-        y_new_transformed = self.transform_y(y_new)
-        y_combined = np.vstack([dataset.y.reshape(-1, 1), 
-                              y_new_transformed.reshape(-1, 1)]).flatten()
-        updated_dataset = Dataset(X_combined, y_combined)
-        return updated_dataset
+    @property
+    def labels(self):
+        if self.uniq_labels is None:
+            raise ValueError("Preprocessor must be fitted before accessing BinaryPreprocessor.labels")
+        return self.uniq_labels
     
-class BinaryPreprocessor(DefaultPreprocessor):
-    """
-    Preprocessor for binary classification tasks.
-    """
-    def transform_y(self, y) -> np.ndarray:
-        # Convert binary labels to -0.5 and 0.5
-        return y
+    def fit(self, X, y):
+        if X is None or y is None or len(X) == 0 or len(y) == 0:
+            raise ValueError("X and y cannot be None")
+        self.uniq_labels, y_encoded = np.unique(y, return_inverse=True)
+        self._thresholds = self.gen_thresholds(X)
+        
+    def transform_y(self, y):
+        if y is None or len(y) == 0:
+            raise ValueError("y cannot be None or empty")
+        if self.uniq_labels is None:
+            raise ValueError("Preprocessor must be fitted before transforming data")
+        label_to_index = {label: idx for idx, label in enumerate(self.uniq_labels)}
+        y_encoded = np.array([label_to_index[val] for val in y], dtype=int)
+        return y_encoded
     
-    def backtransform_y(self, y) -> np.ndarray:
-        return y
+    def backtransform_y(self, y):
+        if y is None or len(y) == 0:
+            raise ValueError("y cannot be None or empty")
+        if self.uniq_labels is None:
+            raise ValueError("Preprocessor must be fitted before backtransforming data")
+        y_decoded = self.uniq_labels[y]
+        return y_decoded
+
+    def gen_thresholds(self, X):
+        """
+        Use the same quantile-based binning as DefaultPreprocessor
+        """
+        q_vals = np.linspace(0, 1, self.max_bins, endpoint=False)
+        return dict({k : np.unique(np.quantile(X[:, k], q_vals)) for k in range(X.shape[1])})
     
 class GIG:
-    '''
-    Generalized Inverse Gaussian (GIG) distribution.    
-    '''
+    """
+    Generalized Inverse Gaussian (GIG) distribution.
+    """
     @staticmethod
     def rvs_gig_scalar(eta, chi, psi, generator=np.random.default_rng()):
         """

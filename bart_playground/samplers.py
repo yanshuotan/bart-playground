@@ -350,8 +350,38 @@ class LogisticSampler(Sampler):
                               "prune" : 0.5}
         self.tree_prior = prior.tree_prior
         self.likelihood = prior.likelihood
-        self.n_categories = prior.n_categories
+        self.n_i = None
         super().__init__(prior, proposal_probs, generator, temp_schedule)
+    
+    @property
+    def n_categories(self) -> int:
+        """
+        Get the number of categories for the sampler.
+        """
+        if not hasattr(self, '_n_cat'):
+            raise AttributeError("Number of categories has not been set.")
+        return self._n_cat
+    @n_categories.setter
+    def n_categories(self, n_cat: int):
+        """
+        Set the number of categories for the sampler.
+        """
+        if n_cat < 2:
+            raise ValueError("Number of categories must be at least 2.")
+        self._n_cat = n_cat
+
+    def add_data(self, data: Dataset):
+        """
+        Adds data to the sampler and initializes the number of observations per category.
+
+        Parameters:
+        data (Dataset): The data to be added to the sampler.
+        """
+        super().add_data(data)
+        self.n_i = np.zeros(self.data.X.shape[0], dtype=int)
+        for category in range(self.n_categories):
+            self.n_i += (self.data.y == category)
+        self.is_exp = np.all(self.n_i == 1)
         
     def get_init_state(self) -> list[Parameters]:
         """
@@ -374,23 +404,23 @@ class LogisticSampler(Sampler):
         # for every i
         # phi | y ~ Gamma(n, sumFx)
         # sumFx = f^{(0)}(x_i) + f^{(1)}(x_i) is rate parameter
-        # n = 1 because we assume that we have only one observation for each x_i
-        # y is either 0 or 1
-        n = 1
+        # n_i is the number of observation for each x_i
         if np.any(sumFx <= 0):
             raise ValueError("All sumFx must be strictly positive.")
-        # Exponential should be faster than gamma
-        phis = self.generator.exponential(scale=1.0/sumFx)
-        # from scipy.stats import gamma
-        # phis = gamma.rvs(a=n,
-        #          scale=1.0/sumFx,
-        #          random_state=self.generator)
+        # Exponential should be faster than gamma (marginal speed gain, ~1%)
+        if self.is_exp:
+            phis = self.generator.exponential(scale=1.0/sumFx)
+        else:
+            from scipy.stats import gamma
+            phis = gamma.rvs(a=self.n_i,
+                 scale=1.0/sumFx,
+                 random_state=self.generator)
         return phis
 
     def clear_last_cache(self):
-        '''
+        """
         This method clears the cache of the last trace in the sampler.
-        '''
+        """
         if len(self.trace) > 0:
             for category in range(self.n_categories):
                 # Clear cache for each category's parameters

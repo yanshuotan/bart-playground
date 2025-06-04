@@ -468,7 +468,7 @@ class LogisticLikelihood(BARTLikelihood):
         """
         self.c = c
         self.d = d
-        self.parent = parent  # LogisticPrior
+        self.parent : LogisticPrior = parent  # LogisticPrior
         # f_sigma2 useless
         super().__init__(f_sigma2=0.0)
 
@@ -536,7 +536,7 @@ class LogisticPrior:
     """
     BART Prior for logistic classification tasks.
     """
-    def __init__(self, n_categories=2, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, generator=np.random.default_rng()):
+    def __init__(self, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, generator=np.random.default_rng()):
         if c == 0.0 or d == 0.0:
             a0 = 3.5 / math.sqrt(2)
             c = n_trees/(a0 ** 2) + 0.5
@@ -544,7 +544,6 @@ class LogisticPrior:
         
         self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self)
         self.likelihood = LogisticLikelihood(c, d, parent=self)
-        self.n_categories = n_categories
         
         # Placeholders for values reused in resampling
         self.rh = None  
