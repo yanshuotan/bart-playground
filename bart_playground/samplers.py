@@ -89,9 +89,8 @@ class Sampler(ABC):
         else:
             current = self.get_init_state() # Otherwise, generate a new initial state
         
-        # This run will generate its own trace, stored locally first.
         self.trace = []
-        self.n_iter = n_iter # n_iter for this specific run (might be different from previous ndpost)
+        self.n_iter = n_iter
 
         if n_skip == 0:
             self.trace.append(current)
