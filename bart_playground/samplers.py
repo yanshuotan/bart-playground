@@ -81,45 +81,40 @@ class Sampler(ABC):
             progress_bar = False
 
         # Determine the actual starting state for this MCMC run
-        mcmc_initial_state: Parameters
+        current: Parameters
         if current is not None:
-            mcmc_initial_state = current
+            current = current
         elif self.trace:  # If self.trace is already populated (e.g., by init_from_xgboost)
-            mcmc_initial_state = self.trace[0]  # Use the pre-loaded state
+            current = self.trace[0]  # Use the pre-loaded state
         else:
-            mcmc_initial_state = self.get_init_state() # Otherwise, generate a new initial state
+            current = self.get_init_state() # Otherwise, generate a new initial state
         
         # This run will generate its own trace, stored locally first.
-        run_output_trace = []
+        self.trace = []
         self.n_iter = n_iter # n_iter for this specific run (might be different from previous ndpost)
-
-        current_mcmc_iter_state = mcmc_initial_state
 
         # If not skipping any iterations, the initial state (before any MCMC steps of this run)
         # is recorded.
         if n_skip == 0:
             # Make a copy because current_mcmc_iter_state will be modified by one_iter
-            run_output_trace.append(current_mcmc_iter_state.copy())
+            self.trace.append(current)
 
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
 
-        for iter_idx in iterator:
-            if not progress_bar and iter_idx % 10 == 0 and not quietly:
-                print(f"Running iteration {iter_idx}/{n_iter}")
+        for iter in iterator:
+            if not progress_bar and iter % 10 == 0 and not quietly:
+                print(f"Running iteration {iter}/{n_iter}")
             
-            temp = self.temp_schedule(iter_idx)
-            # one_iter is expected to return the next state (can be a modified version of input or new object)
-            next_mcmc_iter_state = self.one_iter(current_mcmc_iter_state, temp, return_trace=False)
-            current_mcmc_iter_state = next_mcmc_iter_state # Update current state for next iteration
+            temp = self.temp_schedule(iter)
+            current = self.one_iter(current, temp, return_trace=False)
 
-            if iter_idx >= n_skip:
+            if iter >= n_skip:
                 # Clear cache of the *previous* state in the trace before adding the new one
-                if run_output_trace:
-                    run_output_trace[-1].clear_cache()
+                if len(self.trace) > 0:
+                    self.trace[-1].clear_cache()
                 # Append a copy of the state *after* the current iteration
-                run_output_trace.append(current_mcmc_iter_state.copy())
+                self.trace.append(current)
         
-        self.trace = run_output_trace # Update the sampler's main trace with the results of this run
         return self.trace
     
     def sample_move(self):
