@@ -93,7 +93,7 @@ class Sampler(ABC):
         self.n_iter = n_iter
 
         if n_skip == 0:
-            self.trace.append(current)
+            self.trace.append(current) # Add initial state to trace
 
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
 
