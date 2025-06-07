@@ -93,10 +93,7 @@ class Sampler(ABC):
         self.trace = []
         self.n_iter = n_iter # n_iter for this specific run (might be different from previous ndpost)
 
-        # If not skipping any iterations, the initial state (before any MCMC steps of this run)
-        # is recorded.
         if n_skip == 0:
-            # Make a copy because current_mcmc_iter_state will be modified by one_iter
             self.trace.append(current)
 
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
@@ -109,10 +106,8 @@ class Sampler(ABC):
             current = self.one_iter(current, temp, return_trace=False)
 
             if iter >= n_skip:
-                # Clear cache of the *previous* state in the trace before adding the new one
                 if len(self.trace) > 0:
                     self.trace[-1].clear_cache()
-                # Append a copy of the state *after* the current iteration
                 self.trace.append(current)
         
         return self.trace
