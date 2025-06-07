@@ -23,7 +23,8 @@ class Sampler(ABC):
     Base class for the BART sampler.
     """
     def __init__(self, prior, proposal_probs: dict,  
-                 generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule()):
+                 generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule(), 
+                 informed_max_samples: int = 10):
         """
         Initialize the sampler with the given parameters.
 
@@ -47,6 +48,7 @@ class Sampler(ABC):
         self.n_iter = None
         self.proposals = proposal_probs
         self.temp_schedule = temp_schedule
+        self.informed_max_samples = informed_max_samples
         self.trace = []
         self.generator = generator
         # create cache for moves
@@ -241,6 +243,70 @@ class DefaultSampler(Sampler):
             move = self.sample_move()(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
                 )
+            if move.propose(self.generator): # Check if a valid move was proposed
+                Z = self.generator.uniform(0, 1)
+                if np.log(Z) < self.log_mh_ratio(move, temp):
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
+                    move.proposed.update_leaf_vals([k], new_leaf_vals)
+                    iter_current = move.proposed
+                    if return_trace:
+                        iter_trace.append((k+1, move.proposed))
+        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
+        if return_trace:
+            return iter_trace
+        else:
+            del iter_trace
+            return iter_current
+        
+class InformedSampler(Sampler):
+    """
+    Default implementation of the BART sampler.
+    """
+    def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
+                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100, 
+                 informed_max_samples: int = 10):
+        self.tol = tol
+        if proposal_probs is None:
+            proposal_probs = {"grow" : 0.5,
+                              "prune" : 0.5}
+        self.tree_prior = prior.tree_prior
+        self.global_prior = prior.global_prior
+        self.likelihood = prior.likelihood
+        super().__init__(prior, proposal_probs, generator, temp_schedule, informed_max_samples=informed_max_samples)
+
+    def get_init_state(self) -> Parameters:
+        """
+        Retrieve the initial state for the sampler.
+
+        Returns:
+            The initial state for the sampler.
+        """
+        if self.data is None:
+            raise AttributeError("Need data before running sampler.")
+        trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
+        global_params = self.global_prior.init_global_params(self.data)
+        init_state = Parameters(trees, global_params)
+        return init_state
+    
+    def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
+        """Calculate total log Metropolis-Hastings ratio"""
+        data_y = self.data.y if data_y is None else data_y
+        return (self.tree_prior.trees_log_prior_ratio(move) + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
+            move.log_tran_ratio
+
+    def one_iter(self, current, temp, return_trace=False):
+        """
+        Perform one iteration of the sampler.
+        """
+        iter_current = current.copy() # First make a copy
+        iter_trace = [(0, iter_current)]
+        for k in range(self.tree_prior.n_trees):
+            move = self.sample_move()(
+                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol,
+                likelihood=self.likelihood, tree_prior=self.tree_prior, data_y=self.data.y,
+                n_samples=self.informed_max_samples
+            )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
                 if np.log(Z) < self.log_mh_ratio(move, temp):
