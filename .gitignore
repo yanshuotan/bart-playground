@@ -11,3 +11,4 @@ scripts/
 .idea/*
 benchmarks/*.csv
 notebooks/deprecated/*
+notebooks/results/*
