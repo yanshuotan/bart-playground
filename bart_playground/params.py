@@ -519,9 +519,9 @@ class Tree:
         else:
             n_output = "NA"
         if self.vars[node_id] == -1:
-            return f"Val: {self.leaf_vals[node_id]:0.3f} (leaf, n = {n_output})"
+            return f"Val: {self.leaf_vals[node_id]:0.9f} (leaf, n = {n_output})"
         else:
-            return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
+            return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.9f}" + \
                 f" (split, n = {n_output})"
 
     def add_data_points(self, new_dataX):
