@@ -5,7 +5,6 @@ from typing import Optional
 import numpy as np
 from typing import Optional
 from numpy.typing import NDArray
-from .util import Dataset
 from numba import njit
 
 @njit
@@ -94,7 +93,7 @@ class Tree:
         self.dataX = dataX
         self.vars = vars
         self.thresholds = thresholds
-        self.leaf_vals : NDArray[np.float32] = leaf_vals
+        self.leaf_vals : NDArray[np.float64] = leaf_vals
 
         self.n = n
         self.node_indicators = node_indicators
@@ -185,7 +184,7 @@ class Tree:
                 split_node_counter += 1
         return node_ids
 
-    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float32]:
+    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float64]:
         """
         Evaluate the tree for a given input data matrix.
 
@@ -350,6 +349,9 @@ class Tree:
         # Use a stack to manage nodes to prune
         stack = [node_id]
 
+        # Store the original node .n
+        ori_n = self.n[node_id]
+
         while stack:
             current_node = stack.pop()
 
@@ -380,9 +382,11 @@ class Tree:
             self.vars[current_node] = -2
             self.thresholds[current_node] = np.nan
             self.leaf_vals[current_node] = np.nan
+            self.n[current_node] = -2
 
-        # Finally, turn the original node into a leaf
+        # Finally, turn the original node into a leaf and set the n correctly
         self.vars[node_id] = -1
+        self.n[node_id] = ori_n
 
         # Truncate unnecessary space in the tree arrays
         self._truncate_tree_arrays()
@@ -518,9 +522,9 @@ class Tree:
         else:
             n_output = "NA"
         if self.vars[node_id] == -1:
-            return f"Val: {self.leaf_vals[node_id]:0.3f} (leaf, n = {n_output})"
+            return f"Val: {self.leaf_vals[node_id]:0.9f} (leaf, n = {n_output})"
         else:
-            return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.3f}" + \
+            return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.9f}" + \
                 f" (split, n = {n_output})"
 
     def add_data_points(self, new_dataX):
@@ -633,7 +637,7 @@ class Parameters:
         
         return new_state
 
-    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float32]:
+    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float64]:
         """
         Evaluate the model on the given data.
 
@@ -685,7 +689,7 @@ class Parameters:
             return self.trees[tree_ids[0]].leaf_basis
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
-    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float32]):
+    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float64]):
         """
         Update the leaf values of specified trees.
 
