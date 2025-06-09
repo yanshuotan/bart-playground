@@ -48,7 +48,10 @@ class BART:
         Returns:
             self
         """
-        if not self.is_fitted or self.data is None or self.data.n <= 10:
+        if self.data is None:
+            self.fit(X, y, quietly=quietly)
+            return self
+        if not self.is_fitted or self.data.n <= 10:
             # If not fitted yet, or data is empty, or not enough data, just do a regular fit
             X_combined = np.vstack((self.data.X, X))
             y_combined = np.hstack((self.data.y, y))
