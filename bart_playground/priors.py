@@ -1,12 +1,13 @@
 
 import math
 import numpy as np
-from scipy.stats import invgamma, chi2
+from scipy.stats import invgamma, chi2, gamma
 from sklearn.linear_model import LinearRegression
 from numba import njit
 
 from .params import Parameters
 from .moves import Move
+from .moves import Break, Combine, Birth, Death
 from .util import Dataset, GIG
 
 # Standalone Numba-optimized functions
@@ -97,6 +98,12 @@ class TreesPrior:
         self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.generator = generator
 
+    def update_f_sigma2(self, n_trees):
+        """
+        Update f_sigma2 based on the current number of trees.
+        """
+        self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
+
     def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """
         Resample the values of the leaf nodes for the specified trees.
@@ -155,7 +162,13 @@ class TreesPrior:
     def trees_log_prior_ratio(self, move : Move):
         """Calculate log prior ratio for proposed move"""
         log_prior_current = self.trees_log_prior(move.current, move.trees_changed)
-        log_prior_proposed = self.trees_log_prior(move.proposed, move.trees_changed)
+        if isinstance(move, Break) or isinstance(move, Birth):
+            trees_proposed_ids = move.trees_changed + [-1]
+        elif isinstance(move, Combine) or isinstance(move, Death):
+            trees_proposed_ids = [move.trees_changed[0] if move.trees_changed[0] < move.trees_changed[1] else move.trees_changed[0] - 1]
+        else:
+            trees_proposed_ids = move.trees_changed
+        log_prior_proposed = self.trees_log_prior(move.proposed, trees_proposed_ids)
         return log_prior_proposed - log_prior_current
 
 class GlobalParamPrior:
@@ -166,7 +179,9 @@ class GlobalParamPrior:
         eps_q (float, optional): Quantile used for setting the hyperprior for noise sigma2. Defaults to 0.9.
         eps_nu (float, optional): Inverse chi-squared nu hyperparameter for noise sigma2. Defaults to 3.
         specification (str, optional): Specification for a data-driven initial estimate for noise sigma2. Defaults to "linear".
-            
+        theta_0(int, optional): Control the theta which is the poisson parameter for the number of trees. Defaults to 200.
+        theta_df(int, optional): Control the theta degree of freedom. Defaults to 100.
+        
     Attributes:
         eps_q (float): Quantile for noise variance prior
         eps_nu (float): Degrees of freedom for noise variance prior
@@ -174,10 +189,13 @@ class GlobalParamPrior:
         specification (str): Method for initial variance estimate
         generator: Random number generator
     """
-    def __init__(self, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng()):
+    def __init__(self, eps_q=0.9, eps_nu=3.0, theta_0 : int=200, theta_df :int = 100,
+                 specification="linear", generator=np.random.default_rng()):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda : float
+        self.theta_0 = theta_0
+        self.theta_df = theta_df
         self.specification = specification
         self.generator = generator
 
@@ -200,10 +218,13 @@ class GlobalParamPrior:
         Returns:
             dict: A dictionary containing the initialized global parameter:
                 - eps_sigma2 (float): The sampled epsilon sigma squared value.
+                - ntree_theta (int): The initial theta value for the number of trees.
         """
         self.fit_hyperparameters(data)
         eps_sigma2 = self._sample_eps_sigma2(data.y)
-        return {"eps_sigma2" : eps_sigma2}
+        ntree_theta = self.theta_0
+        return {"eps_sigma2" : eps_sigma2,
+                "ntree_theta" : ntree_theta}
     
     def resample_global_params(self, bart_params : Parameters, data_y):
         """
@@ -221,7 +242,13 @@ class GlobalParamPrior:
             dict: A dictionary containing the resampled global parameters.
         """
         eps_sigma2 = self._sample_eps_sigma2(data_y - bart_params.evaluate())
-        return {"eps_sigma2" : eps_sigma2}
+        if self.theta_df == np.inf:
+            # If theta_df is infinite, we don't need to sample ntree_theta
+            ntree_theta = self.theta_0
+        else:
+            ntree_theta = self._sample_ntree_theta(bart_params.n_trees)
+        return {"eps_sigma2" : eps_sigma2,
+                "ntree_theta" : ntree_theta}
     
     def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:
         """
@@ -263,6 +290,83 @@ class GlobalParamPrior:
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)# [0]
         return eps_sigma2
+    
+    def _sample_ntree_theta(self, n_trees):
+        alpha_posterior = self.theta_df / 2 + n_trees
+        beta_posterior = self.theta_df / (2 * self.theta_0) + 1
+
+        theta_new = gamma.rvs(alpha_posterior, scale=1 / beta_posterior)
+        return theta_new
+    
+class TreeNumPrior:
+    def __init__(self, prior_type="poisson"):
+        """
+        Initialize the TreeNumPrior.
+
+        Parameters:
+        - prior_type: str, default="poisson"
+            The type of prior to use for the number of trees. Options are:
+            - "poisson": Poisson distribution (default).
+            - "bernoulli": Bernoulli distribution with m = 1 or 2, each with probability 0.5.
+        """
+        if prior_type not in ["poisson", "bernoulli"]:
+            raise ValueError("Invalid prior_type. Must be 'poisson' or 'bernoulli'.")
+        self.prior_type = prior_type
+
+    def tree_num_log_prior(self, bart_params: Parameters, ntree_theta):
+        m = bart_params.n_trees
+
+        if self.prior_type == "poisson":
+            # Poisson prior
+            theta = ntree_theta
+            log_prior = m * np.log(theta) - theta - math.lgamma(m + 1)
+        elif self.prior_type == "bernoulli":
+            log_prior = np.log(0.5)  # Both m have equal probability
+        return log_prior
+
+    def tree_num_log_prior_ratio(self, move: Move):
+        log_prior_current = self.tree_num_log_prior(move.current, move.current.global_params["ntree_theta"])
+        log_prior_proposed = self.tree_num_log_prior(move.proposed, move.proposed.global_params["ntree_theta"])
+        return log_prior_proposed - log_prior_current
+    
+class LeafValPrior:
+    def __init__(self, tau_k = 2.0):
+        self.tau_k = tau_k
+
+    def tau_square_inv(self, m):
+        """
+        Computes the inverse of tau squared (1 / tau^2)
+        """
+        return 4*(self.tau_k**2)*m
+    
+    def leaf_vals_squared_sum(self, bart_params, trees_changed):
+        """
+        Computes the sum of squared leaf values for all trees in bart_params.trees,
+        excluding the trees specified in trees_changed.
+        """    
+        return np.nansum([
+            val ** 2 for idx, tree in enumerate(bart_params.trees) 
+            if idx not in set(trees_changed) for val in tree.leaf_vals
+        ])
+    
+    def total_leaf_count(self, bart_params, trees_changed):
+        """
+        Computes the total number of leaves across all trees in bart_params.trees,
+        excluding the trees specified in trees_changed.
+        """     
+        return sum(
+            tree.n_leaves 
+            for idx, tree in enumerate(bart_params.trees) 
+            if idx not in set(trees_changed)
+        )
+
+
+    def leaf_vals_log_prior_ratio(self, move: Move):
+        m_current = move.current.n_trees
+        m_proposed = move.proposed.n_trees
+        
+        return -0.5*self.total_leaf_count(move.current, move.trees_changed) * np.log(m_current/m_proposed) - \
+            0.5*(self.tau_square_inv(m_proposed) - self.tau_square_inv(m_current)) * self.leaf_vals_squared_sum(move.current, move.trees_changed)
 
 class BARTLikelihood:
     """
@@ -333,18 +437,28 @@ class BARTLikelihood:
             Marginal likelihood ratio.
         """
         if not marginalize:
+            if isinstance(move, Break) or isinstance(move, Birth):
+                trees_proposed_ids = move.trees_changed + [-1]
+            elif isinstance(move, Combine) or isinstance(move, Death):
+                trees_proposed_ids = [move.trees_changed[0] if move.trees_changed[0] < move.trees_changed[1] else move.trees_changed[0] - 1]
+            else:
+                trees_proposed_ids = move.trees_changed
             log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, move.trees_changed)
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, move.trees_changed)
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, trees_proposed_ids)
         else:
             log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, np.arange(move.current.n_trees))
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, np.arange(move.current.n_trees))
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, np.arange(move.proposed.n_trees))
         return log_lkhd_proposed - log_lkhd_current
 
 class ComprehensivePrior:
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng()):
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, 
+                 eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
+                 theta_0=200, theta_df=100, tau_k = 2.0, tree_num_prior_type="poisson"):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
-        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator)
+        self.global_prior = GlobalParamPrior(eps_q, eps_nu, theta_0, theta_df, specification, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
+        self.tree_num_prior = TreeNumPrior(prior_type=tree_num_prior_type)
+        self.leaf_val_prior = LeafValPrior(tau_k)
 
 class ProbitPrior:
     """
