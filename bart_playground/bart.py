@@ -82,6 +82,15 @@ class BART:
             preds[:, k] = self.preprocessor.backtransform_y(y_eval)
         return preds
     
+    def posterior_sample(self, X, k):
+        """
+        Get a posterior sample of Y for each row in X.
+        """
+        pred = np.zeros((X.shape[0]))
+        y_eval = self.trace[k].evaluate(X)
+        pred = self.preprocessor.backtransform_y(y_eval)
+        return pred
+    
     def predict(self, X):
         """
         Predict using the BART model.

@@ -1,3 +1,4 @@
+import re
 import numpy as np
 from tqdm import tqdm
 import time
@@ -108,6 +109,30 @@ class FriedmanScenario(Scenario):
                       self.lambda_val * self.arm_offsets
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
+class NeuralScenario(Scenario):
+    def __init__(self, name='mushroom'):
+        from .NeuralTS.data_multi import Bandit_multi
+        self.data = Bandit_multi(name=name)
+        self.P = self.data.X.shape[1]
+        self.K = len(np.unique(self.data.y_arm))
+        
+    def generate_covariates(self):
+        cov = self.data.X[self.data.cursor, :].reshape(1, -1)
+        self.data.cursor += 1
+        return cov
+    
+    def reward_function(self, x):
+        # Check if the input x matches the current data point
+        x_cursor = self.data.cursor - 1
+        assert np.all(x == self.data.X[x_cursor, :].reshape(1, -1))
+        
+        reward = np.zeros(self.K)
+        reward[self.data.y_arm[x_cursor][0]] = 1
+        return {"outcome_mean": reward, "reward": reward}
+    
+    def finish(self):
+        return self.data.finish()
+
 class Friedman2Scenario(Scenario):
     def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
         if P < 5:
@@ -144,7 +169,6 @@ The `simulate` function takes a scenario, a list of agents, and the number of dr
 
 We use `tqdm` to track progress.
 '''
-from pympler import asizeof
 def simulate(scenario, agents, n_draws):
     """
     Simulate a bandit problem using the provided scenario and agents.

@@ -1,4 +1,4 @@
-from functools import cache
+# from functools import cache
 from math import e
 # from memory_profiler import profile
 from typing import Optional
