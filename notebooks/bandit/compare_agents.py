@@ -1,4 +1,4 @@
-from math import log
+from bart_playground.bandit.bart_agent import BARTAgent
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Any
@@ -10,11 +10,8 @@ from bart_playground.bandit.sim_util import simulate, Scenario, LinearScenario, 
 from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
 from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.agent import BanditAgent
-# Add ROME agent imports
-from bart_playground.bandit.rome.rome_agent import RoMEAgent, _featurize
-from bart_playground.bandit.rome.baseline_agents import StandardTSAgent, ActionCenteredTSAgent, IntelligentPoolingAgent
 
-def class_to_agents(sim, scenario, agent_classes: List[Any], n_draws = 500) -> Tuple[List[BanditAgent], List[str]]:
+def class_to_agents(sim, scenario, agent_classes: List[Any]) -> Tuple[List[BanditAgent], List[str]]:
     """
     Convert agent classes to instances and names.
     
@@ -26,15 +23,25 @@ def class_to_agents(sim, scenario, agent_classes: List[Any], n_draws = 500) -> T
     sim_agents = []
     for agent_cls in agent_classes:
         if agent_cls == BCFAgent:
-            # BCFAgent with fixed parameters (nadd=2, nbatch=1)
             agent = BCFAgent(
                 n_arms=scenario.K,
                 n_features=scenario.P,
                 nskip=100,
-                ndpost=10,
-                nadd=2,
+                ndpost=100,
+                nadd=3,
                 nbatch=1,
                 random_state=1000 + sim
+            )
+        elif agent_cls == BARTAgent:
+            agent = BARTAgent(
+                n_arms=scenario.K,
+                n_features=scenario.P,
+                nskip=100,
+                ndpost=100,
+                nadd=5,
+                nbatch=1,
+                random_state=1000 + sim,
+                context_encoding='one-hot'
             )
         elif agent_cls == EnsembleAgent:
             agent = EnsembleAgent(
@@ -53,7 +60,7 @@ def class_to_agents(sim, scenario, agent_classes: List[Any], n_draws = 500) -> T
                 n_features=scenario.P,
                 nskip=100,
                 ndpost=10,
-                nadd=3,
+                nadd=2,
                 nbatch=1,
                 random_state=1000 + sim
             )
@@ -63,34 +70,33 @@ def class_to_agents(sim, scenario, agent_classes: List[Any], n_draws = 500) -> T
                 n_features=scenario.P,
                 v = 1
             )
-        # Add handlers for the ROME agents
-        elif agent_cls == RoMEAgent:
-            agent = RoMEAgent(
-                n_arms=scenario.K,
-                n_features=scenario.P,
-                featurize=_featurize,
-                t_max=n_draws,
-                pool_users=False
-            )
-        elif agent_cls == StandardTSAgent:
-            agent = StandardTSAgent(
-                n_arms=scenario.K,
-                n_features=scenario.P,
-                featurize=_featurize
-            )
-        elif agent_cls == ActionCenteredTSAgent:
-            agent = ActionCenteredTSAgent(
-                n_arms=scenario.K,
-                n_features=scenario.P,
-                featurize=_featurize
-            )
-        elif agent_cls == IntelligentPoolingAgent:
-            agent = IntelligentPoolingAgent(
-                n_arms=scenario.K,
-                n_features=scenario.P,
-                featurize=_featurize,
-                t_max=n_draws
-            )
+        # elif agent_cls == RoMEAgent:
+        #     agent = RoMEAgent(
+        #         n_arms=scenario.K,
+        #         n_features=scenario.P,
+        #         featurize=_featurize,
+        #         t_max=n_draws,
+        #         pool_users=False
+        #     )
+        # elif agent_cls == StandardTSAgent:
+        #     agent = StandardTSAgent(
+        #         n_arms=scenario.K,
+        #         n_features=scenario.P,
+        #         featurize=_featurize
+        #     )
+        # elif agent_cls == ActionCenteredTSAgent:
+        #     agent = ActionCenteredTSAgent(
+        #         n_arms=scenario.K,
+        #         n_features=scenario.P,
+        #         featurize=_featurize
+        #     )
+        # elif agent_cls == IntelligentPoolingAgent:
+        #     agent = IntelligentPoolingAgent(
+        #         n_arms=scenario.K,
+        #         n_features=scenario.P,
+        #         featurize=_featurize,
+        #         t_max=n_draws
+        #     )
         else:
             # For other agents, just initialize with standard params
             agent = agent_cls(
@@ -101,111 +107,114 @@ def class_to_agents(sim, scenario, agent_classes: List[Any], n_draws = 500) -> T
     
     return sim_agents
 
-def _run_scenario_simulation(scenario_name, scenario, sim, agent_classes, agent_names, n_draws):
+def _run_single_simulation(sim, scenario, agent_classes, agent_names, n_draws):
     """
-    Run a single simulation for a specific scenario.
+    Run a single simulation with the given scenario and agents.
     
     Args:
-        scenario_name (str): Name of the scenario
-        scenario (Scenario): The scenario instance
-        sim (int): Simulation number
+        sim (int): Simulation number (used for random seed)
+        scenario (Scenario): The scenario instance to use for simulation
         agent_classes (List): List of agent classes to instantiate
         agent_names (List[str]): Names for each agent
         n_draws (int): Number of draws per simulation
         
     Returns:
-        Tuple: (scenario_name, sim_index, regrets, computation_times)
+        Tuple: (sim_index, regrets, computation_times)
     """
     # Create agents with different seeds for this simulation
-    sim_agents = class_to_agents(sim=sim, scenario=scenario, agent_classes=agent_classes, n_draws=n_draws)
+    sim_agents = class_to_agents(sim=sim, scenario=scenario, agent_classes=agent_classes)
     
     # Run simulation
-    scenario.set_seed(sim)
-    scenario.init_params()
     cum_regrets, time_agents, mem_agents = simulate(scenario, sim_agents, n_draws=n_draws)
     
-    # Return results for this simulation, including scenario name
-    return scenario_name, sim, cum_regrets, time_agents, mem_agents
+    # Return results for this simulation
+    return sim, cum_regrets, time_agents
+
+def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditAgent], agent_names: List[str], n_simulations: int = 10, n_draws: int = 500, n_jobs=6):
+    """
+    Generate simulation data for multiple agents on a given scenario.
+    
+    Args:
+        scenario (Scenario): The scenario instance to use for simulation
+        agents (List[BanditAgent]): List of agent classes to instantiate and test
+        agent_names (List[str]): Names for each agent for display purposes
+        n_simulations (int): Number of simulation runs
+        n_draws (int): Number of draws per simulation
+        n_jobs (int): Number of parallel jobs to run. -1 means using all processors.
+        
+    Returns:
+        Dict: Dictionary containing simulation results
+    """
+    n_agents = len(agents)
+    all_regrets = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
+    all_times = {name: np.zeros(n_simulations) for name in agent_names}
+    
+    if n_jobs != 1:
+        # Run simulations in parallel
+        print(f"Running {n_simulations} simulations in parallel...")
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(_run_single_simulation)(
+                sim, scenario, agents, agent_names, n_draws
+            ) for sim in range(n_simulations) # tqdm(range(n_simulations), desc="Simulating")
+        )
+    else:
+        # Run simulations sequentially
+        results = []
+        if n_simulations > 1:
+            for sim in tqdm(range(n_simulations), desc="Simulating sequentially"):
+                result = _run_single_simulation(sim, scenario, agents, agent_names, n_draws)
+                results.append(result)
+        else:
+            print("Running a single simulation...")
+            result = _run_single_simulation(0, scenario, agents, agent_names, n_draws)
+            results.append(result)
+    
+    # Process results from parallel jobs
+    for sim, cum_regrets, time_agents in results:
+        # Store results
+        for i, name in enumerate(agent_names):
+            all_regrets[name][sim, :] = cum_regrets[:, i]
+            all_times[name][sim] = time_agents[i]
+    
+    return {
+        'regrets': all_regrets,
+        'times': all_times
+    }
+
 
 def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulations: int = 10, n_draws: int = 500, 
     agent_classes = [SillyAgent, LinearTSAgent, BCFAgent], 
     agent_names = ["Random", "LinearTS", "BCF"],
-    n_jobs=6, batch_size=None):
+    n_jobs=6):
     """
-    Compare multiple agents across different scenarios with memory-efficient batching.
+    Compare multiple agents across different scenarios.
     
     Args:
         scenarios (Dict[str, Scenario]): Dictionary of scenario name to scenario instance
         n_simulations (int): Number of simulations per scenario
         n_draws (int): Number of draws per simulation
-        agent_classes (List): List of agent classes to instantiate
-        agent_names (List[str]): Names for each agent
-        n_jobs (int): Number of parallel jobs to run
-        batch_size (int, optional): Number of scenarios to process in each batch.
-            If None, all scenarios are processed in a single batch.
         
     Returns:
         Dict: Results for each scenario and agent
     """
-    # Initialize results dictionary
+    # Define agents to compare
+    
     results = {}
-    for scenario_name in scenarios.keys():
-        results[scenario_name] = {
-            'regrets': {name: np.zeros((n_simulations, n_draws)) for name in agent_names},
-            'times': {name: np.zeros(n_simulations) for name in agent_names},
-            'memory usage': {name: np.zeros(n_simulations) for name in agent_names}
-        }
     
-    # Process scenarios by batches
-    scenario_items = list(scenarios.items())
-    
-    # If batch_size is None or larger than number of scenarios, process all at once
-    if batch_size is None or batch_size >= len(scenario_items):
-        batch_size = len(scenario_items)
-    
-    batch_ranges = [(i, min(i + batch_size, len(scenario_items))) 
-                        for i in range(0, len(scenario_items), batch_size)]
-    
-    # Process each batch
-    for batch_idx, (batch_start, batch_end) in enumerate(batch_ranges):
-        batch_scenarios = dict(scenario_items[batch_start:batch_end])
-        
-        # Create jobs for this batch
-        batch_jobs = []
-        for scenario_name, scenario in batch_scenarios.items():
-            for sim in range(n_simulations):
-                batch_jobs.append((scenario_name, scenario, sim, agent_classes, agent_names, n_draws))
-        
-        # Print appropriate message based on batching
-        print(f"Processing batch {batch_idx + 1}/{len(batch_ranges)}: scenarios {batch_start+1}-{batch_end} " +
-                 f"({len(batch_jobs)} jobs)")
-        
-        # Run simulation jobs
-        if n_jobs != 1:
-            # Parallel execution
-            parallel_kwargs = {'n_jobs': n_jobs}
-            # Only add max_nbytes for batched execution (to save memory)
-            if len(batch_ranges) > 1:
-                parallel_kwargs['max_nbytes'] = '1K'
-                
-            batch_results = Parallel(**parallel_kwargs)(
-                delayed(_run_scenario_simulation)(*job) for job in batch_jobs
-            )
-        else:
-            # Sequential execution with progress bar
-            batch_results = []
-            for job in tqdm(batch_jobs, desc="Running simulations"):
-                result = _run_scenario_simulation(*job)
-                batch_results.append(result)
-        
-        # Process results
-        for scenario_name, sim, cum_regrets, time_agents, mem_agents in batch_results:
-            for i, name in enumerate(agent_names):
-                results[scenario_name]['regrets'][name][sim, :] = cum_regrets[:, i]
-                results[scenario_name]['times'][name][sim] = time_agents[i]
-                results[scenario_name]['memory usage'][name][sim] = mem_agents[i]
+    for scenario_name, scenario in scenarios.items():
+        print(f"\nEvaluating {scenario_name} scenario...")
+        scenario_results = generate_simulation_data_for_agents(
+            scenario=scenario,
+            agents=agent_classes,
+            agent_names=agent_names,
+            n_simulations=n_simulations,
+            n_draws=n_draws,
+            n_jobs=n_jobs
+        )
+        results[scenario_name] = scenario_results
     
     return results
+
 
 def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: str = None, show_time = True):
     """
@@ -219,7 +228,7 @@ def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: s
     n_scenarios = len(results)
     n_rows = (n_scenarios + 1) // 2  # Ceiling division for number of rows
     
-    fig, axes = plt.subplots(n_rows, 2, figsize=(9, 6 * n_rows))
+    fig, axes = plt.subplots(n_rows, 2, figsize=(15, 5 * n_rows))
     
     # Flatten axes if needed
     if n_rows == 1:
@@ -248,29 +257,21 @@ def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: s
         regrets = scenario_results['regrets']
         times = scenario_results['times']
         
-        quantile_95 = np.quantile([np.mean(agent_regrets, axis=0) for agent_regrets in regrets.values()], 0.95)
-
         # For each agent
         for agent_name, agent_regrets in regrets.items():
-            # log_regrets = np.log(agent_regrets + 1e-10)
-            y_values = agent_regrets
-            mean_regret = np.mean(y_values, axis=0)
-            lower_ci = np.percentile(y_values, 25, axis=0)
-            upper_ci = np.percentile(y_values, 75, axis=0)
-
+            mean_regret = np.mean(agent_regrets, axis=0)
+            sd_regret = np.std(agent_regrets, axis=0)
+            lower_ci = mean_regret - sd_regret # np.percentile(agent_regrets, 25, axis=0)
+            upper_ci = mean_regret + sd_regret # np.percentile(agent_regrets, 75, axis=0)
+            
             # Plot mean regret
-            x_draws = np.arange(n_draws) # np.log(np.arange(n_draws))
-            ax.plot(x_draws, mean_regret, label=f"{agent_name}", 
+            ax.plot(range(n_draws), mean_regret, label=f"{agent_name}", 
                    color=agent_colors[agent_name], linewidth=2)
             
-            # Plot credible interval
-            # ax.fill_between(range(n_draws), lower_ci, upper_ci, 
-            #               color=agent_colors[agent_name], alpha=0.2)
-            ax.plot(x_draws, lower_ci, '--', color=agent_colors[agent_name], alpha=0.7, linewidth=1)
-            ax.plot(x_draws, upper_ci, '--', color=agent_colors[agent_name], alpha=0.7, linewidth=1)
-
-        ax.set_ylim(0, top = quantile_95)
-
+            # Plot confidence interval
+            ax.fill_between(range(n_draws), lower_ci, upper_ci, 
+                          color=agent_colors[agent_name], alpha=0.2)
+        
         if show_time:
             # Add computation time annotations
             for agent_name, agent_times in times.items():
@@ -281,9 +282,9 @@ def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: s
                            ha='center', va='bottom',
                            bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.3))
         
-        ax.set_title(f"{scenario_name} Scenario", fontsize=12)
-        ax.set_xlabel("Draw", fontsize=10)
-        ax.set_ylabel("Cumulative Regret", fontsize=10)
+        ax.set_title(f"{scenario_name} Scenario", fontsize=14)
+        ax.set_xlabel("Draw", fontsize=12)
+        ax.set_ylabel("Cumulative Regret", fontsize=12)
         ax.grid(True, alpha=0.3)
         ax.legend()
         
@@ -313,7 +314,6 @@ def print_summary_results(results: Dict[str, Dict]):
         print(f"\n=== {scenario_name} Scenario ===")
         regrets = scenario_results['regrets']
         times = scenario_results['times']
-        mems = scenario_results['memory usage']
         
         # Print final regrets
         print("\nFinal cumulative regrets (mean ± std):")
@@ -325,12 +325,5 @@ def print_summary_results(results: Dict[str, Dict]):
         print("\nAverage computation times (seconds):")
         for agent_name, agent_times in times.items():
             print(f"  {agent_name}: {np.mean(agent_times):.4f} (±{np.std(agent_times):.4f})")
-
-        # Print memory usage if exists (i.e. any agent has non-"zero" memory usage)
-        has_memory_data = any(np.any(agent_memory > 0) for agent_memory in mems.values())
-        if has_memory_data:
-            print("\nAverage memory usage (bytes):")
-            for agent_name, agent_memory in scenario_results['memory usage'].items():
-                print(f"  {agent_name}: {np.mean(agent_memory):.2f} (±{np.std(agent_memory):.2f})")
         
         print("\n" + "=" * 40)

@@ -9,4 +9,9 @@ scripts/
 .hydra/hydra.yaml
 .DS_Store
 *.log
+notebooks/deprecated
+notebooks/results
 notebooks/bandit/results
+notebooks/bandit/*.dot
+notebooks/bandit/*.prof
+bart_playground/bandit/NeuralTS
