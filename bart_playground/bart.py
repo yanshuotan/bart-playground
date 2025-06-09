@@ -1,10 +1,12 @@
 import numpy as np
+from typing import Optional
+from scipy.stats import norm
 
-from .samplers import Sampler, DefaultSampler, TemperatureSchedule, default_proposal_probs, NTreeSampler, default_special_probs
-from .priors import *
-from .priors import *
-from .util import Preprocessor, DefaultPreprocessor
-from .params import Tree, Parameters
+from .samplers import Sampler, DefaultSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
+from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
+from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor
+
+
 class BART:
     """
     API for the BART model.
@@ -72,14 +74,17 @@ class BART:
         
         return self
     
-    def posterior_f(self, X):
+    def posterior_f(self, X, backtransform=True):
         """
         Get the posterior distribution of f(x) for each row in X.
         """
         preds = np.zeros((X.shape[0], self.ndpost))
         for k in range(self.ndpost):
             y_eval = self.trace[k].evaluate(X)
-            preds[:, k] = self.preprocessor.backtransform_y(y_eval)
+            if backtransform:
+                preds[:, k] = self.preprocessor.backtransform_y(y_eval)
+            else:
+                preds[:, k] = y_eval
         return preds
     
     def predict(self, X):
@@ -88,6 +93,115 @@ class BART:
         """
         return np.mean(self.posterior_f(X), axis=1)
     
+    def posterior_predict(self, X):
+        """
+        Get the full posterior distribution of predictions.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples) with posterior samples
+        """
+        preds = self.posterior_f(X, backtransform=False)
+        for k in range(self.ndpost):
+            eps_sigma2 = self.trace[k].global_params['eps_sigma2']
+            preds[:, k] += self.sampler.generator.normal(0, np.sqrt(eps_sigma2), size=preds[:, k].shape)
+            preds[:, k] = self.preprocessor.backtransform_y(preds[:, k])
+        return preds
+
+    def init_from_xgboost(
+            self,
+            xgb_model,
+            X: np.ndarray,
+            y: Optional[np.ndarray] = None,
+            xgb_kwargs: dict = None,
+            debug: bool = False
+    ) -> "BART":
+
+
+        # Ensure self.data is correctly populated. 
+        # If X, y are different from self.data, an update or re-fit might be needed.
+        # We assume that X and y are train_data.X and train_data.y,
+        # and self.data is already train_data.
+        if self.data is None: 
+            self.data = self.preprocessor.fit_transform(X,y)
+        elif X is not self.data.X or y is not self.data.y: # Check if X,y are different objects
+            # This path is taken if X, y are new/different from what self.data currently holds.
+            # If they are actually different datasets, a full re-fit or careful update is needed.
+            print("[WARN BART.init_from_xgboost] X or y are different objects than self.data.X/y. Calling update_transform.")
+            self.data = self.preprocessor.update_transform(X, y, self.data)
+
+        dataX = self.data.X # Use self.data which should be correctly set
+
+        from .xgb_init import fit_and_init_trees
+        xgb_kwargs = xgb_kwargs or {}
+
+        n_trees = self.sampler.tree_prior.n_trees
+
+        model, init_trees = fit_and_init_trees(
+            X, y,
+            model=xgb_model,
+            dataX=dataX,
+            n_estimators=n_trees,
+            debug=debug,
+            **xgb_kwargs
+        )
+
+        self.sampler = DefaultSampler(
+            prior=self.sampler.prior,
+            proposal_probs=self.sampler.proposals,
+            generator=self.sampler.generator,
+            temp_schedule=self.sampler.temp_schedule,
+            tol=self.sampler.tol,
+            init_trees=init_trees
+        )
+
+        self.sampler.add_data(self.data)
+        self.sampler.add_thresholds(self.preprocessor.thresholds)
+
+        # ——— warm-start a BART draw by resampling leaf-values & global params ———
+        init_state = self.sampler.get_init_state()
+        if debug: # Check if debug flag is True
+            print(f"[DEBUG XGB_INIT] Initial state from get_init_state():")
+            print(f"[DEBUG XGB_INIT]   Tree 0 Leaf Vals (from XGB): {init_state.trees[0].leaf_vals[init_state.trees[0].leaves]}")
+            print(f"[DEBUG XGB_INIT]   Global eps_sigma2: {init_state.global_params['eps_sigma2']}")
+
+        # 1) for each tree, draw new leaf-values under BART's posterior
+        for k in range(self.sampler.tree_prior.n_trees):
+            new_leaf_vals = self.sampler.tree_prior.resample_leaf_vals(
+                init_state,
+                data_y=self.data.y,
+                tree_ids=[k],
+            )
+            if debug:
+                print(f"[DEBUG XGB_INIT] Resampled Leaf Vals for tree {k}: {new_leaf_vals}")
+            init_state.update_leaf_vals([k], new_leaf_vals)
+        # 2) draw the global μ/σ
+        init_state.global_params = self.sampler.global_prior.resample_global_params(
+            init_state,
+            data_y=self.data.y
+        )
+        if debug:
+            print(f"[DEBUG XGB_INIT] Resampled Global eps_sigma2: {init_state.global_params['eps_sigma2']}")
+            print(f"[DEBUG XGB_INIT] Final state for trace - Tree 0 Leaf Vals: {init_state.trees[0].leaf_vals[init_state.trees[0].leaves]}")
+
+        # 3) overwrite the sampler's "trace" so .run() will start from a BART-sampled state
+        self.sampler.trace = [init_state]
+
+        return self
+
+    def _check_temperature(self, temperature):
+        """
+        Check if the temperature is a valid type.
+        """
+        is_temperature_number = type(temperature) in [float, int]
+        if is_temperature_number:
+            temp_func = lambda x: temperature
+            return TemperatureSchedule(temp_func)
+        elif type(temperature) == TemperatureSchedule:
+            return temperature
+        else:
+            raise ValueError("Invalid temperature type ", type(temperature))
+    
+
 class DefaultBART(BART):
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
@@ -99,41 +213,170 @@ class DefaultBART(BART):
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
                              eps_nu, specification, rng)
-        is_temperature_number = type(temperature) in [float, int]
-        if is_temperature_number:
-            temp_func = lambda x: temperature
-            temp_schedule = TemperatureSchedule(temp_func)
-        elif type(temperature) == TemperatureSchedule:
-            temp_schedule = temperature
-        else:
-            raise ValueError("Invalid temperature type ", type(temperature))
+        temp_schedule = self._check_temperature(temperature)
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
+        
+class ProbitBART(BART):
+    """
+    Binary BART implementation using Albert-Chib data augmentation and probit link.
+    """
 
-class ChangeNumTreeBART(BART):
-
-    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
-                 tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
-                 eps_nu: float=3, specification="linear", 
-                 theta_0_ini = 200, theta_0_min = 10, theta_0_nskip_prop = 0.5, theta_df = 100, tau_k = 2.0,
-                 proposal_probs=default_proposal_probs, special_probs=default_special_probs, tol=100, max_bins=100,
-                 random_state=42, temperature=1.0, tree_num_prior_type="poisson", special_move_interval = 1):
-        preprocessor = DefaultPreprocessor(max_bins=max_bins)
+    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95,
+                 tree_beta: float=2.0,
+                 f_k=2.0,
+                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
+                 random_state=42, temperature=1.0):
+        preprocessor = ClassificationPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
-        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
-                                   eps_nu, specification, rng, theta_0_ini, theta_df, tau_k,
-                                   tree_num_prior_type=tree_num_prior_type)
-        is_temperature_number = type(temperature) in [float, int]
-        if is_temperature_number:
-            temp_func = lambda x: temperature
-            temp_schedule = TemperatureSchedule(temp_func)
-        elif type(temperature) == TemperatureSchedule:
-            temp_schedule = temperature
-        else:
-            raise ValueError("Invalid temperature type ", type(temperature))
-        change_theta_0 = theta_0_min != theta_0_ini
-        sampler = NTreeSampler(prior = prior, proposal_probs = proposal_probs, special_probs = special_probs, 
-                               generator = rng, tol = tol, temp_schedule=temp_schedule, 
-                               special_move_interval=special_move_interval, 
-                               change_theta_0 = change_theta_0, min_theta_0=theta_0_min, theta_0_nskip_prop=theta_0_nskip_prop)
+        prior = ProbitPrior(n_trees, tree_alpha, tree_beta, f_k, rng)
+        temp_schedule = self._check_temperature(temperature)
+        sampler = ProbitSampler(prior=prior, proposal_probs=proposal_probs, 
+                               generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
+    
+    def posterior_f(self, X):
+        """
+        Get the posterior distribution of f(x) for each row in X.
+        For binary BART, this returns the latent function values.
+        Sort of categories: lexicographical, the same as np.unique
+        """
+        preds = np.zeros((X.shape[0], self.ndpost))
+        for k in range(self.ndpost):
+            y_eval = self.trace[k].evaluate(X)
+            preds[:, k] = y_eval
+        return preds
+    
+    def predict_proba(self, X):
+        """
+        Predict class probabilities using the probit link.
+        
+        Returns:
+            Array of shape (n_samples, 2) with probabilities for classes 0 and 1
+        """
+        # Get posterior samples of probabilities
+        prob_1 = self.posterior_predict_proba(X)
+        
+        # Average over posterior samples
+        mean_prob_1 = np.mean(prob_1, axis=1)
+        mean_prob_0 = 1 - mean_prob_1
+        
+        return np.column_stack([mean_prob_0, mean_prob_1])
+    
+    def predict(self, X, threshold=0.5):
+        """
+        Predict binary classes.
+        
+        Parameters:
+            X: Input features
+            threshold: Decision threshold (default 0.5)
+            
+        Returns:
+            Binary predictions (0 or 1)
+        """
+        proba = self.predict_proba(X)
+        return (proba[:, 1] >= threshold).astype(int)
+    
+    def posterior_predict_proba(self, X):
+        """
+        Get full posterior distribution of predicted probabilities.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples) with probability samples
+        """
+        f_samples = self.posterior_f(X)
+        return norm.cdf(f_samples)
+    
+    def posterior_predict(self, X, threshold=0.5):
+        """
+        Get full posterior distribution of predicted classes.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples) with class samples
+        """
+        prob_samples = self.posterior_predict_proba(X)
+        return (prob_samples >= threshold).astype(int)
+    
+class LogisticBART(BART):
+    """
+    Logistic BART implementation using logistic link function.
+    """
+    def __init__(self, ndpost=1000, nskip=100, n_trees=25, tree_alpha: float=0.95,
+                 tree_beta: float=2.0, 
+                 c: float = 0.0, d: float = 0.0,
+                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
+                 random_state=42, temperature=1.0):
+        preprocessor = ClassificationPreprocessor(max_bins=max_bins)
+        rng = np.random.default_rng(random_state)
+        prior = LogisticPrior(n_trees, tree_alpha, tree_beta, c, d, rng)
+        temp_schedule = self._check_temperature(temperature)
+        sampler = LogisticSampler(prior=prior, proposal_probs=proposal_probs, 
+                               generator=rng, tol=tol, temp_schedule=temp_schedule)
+        self.sampler : LogisticSampler
+        super().__init__(preprocessor, sampler, ndpost, nskip)
+        
+    def fit(self, X, y, quietly=False):
+        self.sampler.n_categories = np.unique(y).size
+        super().fit(X, y, quietly=quietly)
+        
+    def posterior_f(self, X):
+        """
+        Get the posterior distribution of f(x) for each row in X.
+        For logistic BART, this returns the latent function values.
+        """
+        preds = np.zeros((X.shape[0], self.ndpost, self.sampler.n_categories))
+        for category in range(self.sampler.n_categories):
+            for k in range(self.ndpost):
+                y_eval = self.trace[k][category].evaluate(X)
+                preds[:, k, category] = y_eval
+        return preds
+    
+    def predict_proba(self, X):
+        """
+        Predict class probabilities using the logistic link.
+        """
+        prob = self.posterior_predict_proba(X)
+        
+        # Average over posterior samples
+        mean_prob = np.mean(prob, axis=1)
+        return mean_prob
+    
+    def predict(self, X):
+        """
+        Predict classes.
+        
+        Parameters:
+            X: Input features
+
+        Returns:
+            Class predictions
+        """
+        proba = self.predict_proba(X)
+        return np.argmax(proba, axis=1)
+    
+    def posterior_predict_proba(self, X):
+        """
+        Get full posterior distribution of predicted probabilities.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples, n_categories) with probability samples
+        """
+        f_samples = self.posterior_f(X)
+        prob = np.zeros_like(f_samples)
+        for category in range(self.sampler.n_categories):
+            prob[:, :, category] = np.exp(f_samples[:, :, category])
+        # Normalize to get probabilities
+        prob_sum = np.sum(prob, axis=2, keepdims=True)
+        prob /= prob_sum
+        return prob
+    
+    def posterior_predict(self, X):
+        """
+        Get full posterior distribution of predicted classes.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples) with class samples
+        """
+        prob_samples = self.posterior_predict_proba(X)
+        return np.argmax(prob_samples, axis=2)
+    

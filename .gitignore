@@ -1,9 +1,14 @@
 *__pycache__
 *.egg-info/
 .venv
+venv/
 notebooks/*.dot
 notebooks/*.prof
 scripts/
 .hydra/hydra.yaml
 .DS_Store
 *.log
+.idea/*
+benchmarks/*.csv
+notebooks/deprecated/*
+notebooks/results/*

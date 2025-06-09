@@ -1,16 +1,13 @@
-import numpy as np
+
 import math
-
-from scipy.stats import invgamma, chi2, gamma
-from scipy.linalg import sqrtm
-from scipy.optimize import minimize_scalar
+import numpy as np
+from scipy.stats import invgamma, chi2
 from sklearn.linear_model import LinearRegression
-from numba import njit, jit
+from numba import njit
 
-from .params import Tree, Parameters
+from .params import Parameters
 from .moves import Move
-from .moves import Break, Combine, Birth, Death
-from .util import Dataset
+from .util import Dataset, GIG
 
 # Standalone Numba-optimized functions
 @njit
@@ -100,12 +97,6 @@ class TreesPrior:
         self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.generator = generator
 
-    def update_f_sigma2(self, n_trees):
-        """
-        Update f_sigma2 based on the current number of trees.
-        """
-        self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
-
     def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """
         Resample the values of the leaf nodes for the specified trees.
@@ -164,13 +155,7 @@ class TreesPrior:
     def trees_log_prior_ratio(self, move : Move):
         """Calculate log prior ratio for proposed move"""
         log_prior_current = self.trees_log_prior(move.current, move.trees_changed)
-        if isinstance(move, Break) or isinstance(move, Birth):
-            trees_proposed_ids = move.trees_changed + [-1]
-        elif isinstance(move, Combine) or isinstance(move, Death):
-            trees_proposed_ids = [move.trees_changed[0] if move.trees_changed[0] < move.trees_changed[1] else move.trees_changed[0] - 1]
-        else:
-            trees_proposed_ids = move.trees_changed
-        log_prior_proposed = self.trees_log_prior(move.proposed, trees_proposed_ids)
+        log_prior_proposed = self.trees_log_prior(move.proposed, move.trees_changed)
         return log_prior_proposed - log_prior_current
 
 class GlobalParamPrior:
@@ -181,8 +166,6 @@ class GlobalParamPrior:
         eps_q (float, optional): Quantile used for setting the hyperprior for noise sigma2. Defaults to 0.9.
         eps_nu (float, optional): Inverse chi-squared nu hyperparameter for noise sigma2. Defaults to 3.
         specification (str, optional): Specification for a data-driven initial estimate for noise sigma2. Defaults to "linear".
-        theta_0(int, optional): Control the theta which is the poisson parameter for the number of trees. Defaults to 200.
-        theta_df(int, optional): Control the theta degree of freedom. Defaults to 100.
             
     Attributes:
         eps_q (float): Quantile for noise variance prior
@@ -191,13 +174,10 @@ class GlobalParamPrior:
         specification (str): Method for initial variance estimate
         generator: Random number generator
     """
-    def __init__(self, eps_q=0.9, eps_nu=3.0, theta_0 : int=200, theta_df :int = 100,
-                 specification="linear", generator=np.random.default_rng()):
+    def __init__(self, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng()):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda : float
-        self.theta_0 = theta_0
-        self.theta_df = theta_df
         self.specification = specification
         self.generator = generator
 
@@ -223,9 +203,7 @@ class GlobalParamPrior:
         """
         self.fit_hyperparameters(data)
         eps_sigma2 = self._sample_eps_sigma2(data.y)
-        ntree_theta = self.theta_0
-        return {"eps_sigma2" : eps_sigma2,
-                "ntree_theta" : ntree_theta}
+        return {"eps_sigma2" : eps_sigma2}
     
     def resample_global_params(self, bart_params : Parameters, data_y):
         """
@@ -243,13 +221,7 @@ class GlobalParamPrior:
             dict: A dictionary containing the resampled global parameters.
         """
         eps_sigma2 = self._sample_eps_sigma2(data_y - bart_params.evaluate())
-        if self.theta_df == np.inf:
-            # If theta_df is infinite, we don't need to sample ntree_theta
-            ntree_theta = self.theta_0
-        else:
-            ntree_theta = self._sample_ntree_theta(bart_params.n_trees)
-        return {"eps_sigma2" : eps_sigma2,
-                "ntree_theta" : ntree_theta}
+        return {"eps_sigma2" : eps_sigma2}
     
     def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:
         """
@@ -270,7 +242,8 @@ class GlobalParamPrior:
         
         # chi2.ppf suffices
         c = chi2.ppf(1 - self.eps_q, df=self.eps_nu).item()
-        return (sigma_hat**2 * c) / self.eps_nu
+        eps_lambda_val = (sigma_hat**2 * c) / self.eps_nu
+        return eps_lambda_val
 
     def _sample_eps_sigma2(self, residuals):
         """
@@ -290,83 +263,6 @@ class GlobalParamPrior:
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)# [0]
         return eps_sigma2
-    
-    def _sample_ntree_theta(self, n_trees):
-        alpha_posterior = self.theta_df / 2 + n_trees
-        beta_posterior = self.theta_df / (2 * self.theta_0) + 1
-
-        theta_new = gamma.rvs(alpha_posterior, scale=1 / beta_posterior)
-        return theta_new
-    
-class TreeNumPrior:
-    def __init__(self, prior_type="poisson"):
-        """
-        Initialize the TreeNumPrior.
-
-        Parameters:
-        - prior_type: str, default="poisson"
-            The type of prior to use for the number of trees. Options are:
-            - "poisson": Poisson distribution (default).
-            - "bernoulli": Bernoulli distribution with m = 1 or 2, each with probability 0.5.
-        """
-        if prior_type not in ["poisson", "bernoulli"]:
-            raise ValueError("Invalid prior_type. Must be 'poisson' or 'bernoulli'.")
-        self.prior_type = prior_type
-
-    def tree_num_log_prior(self, bart_params: Parameters, ntree_theta):
-        m = bart_params.n_trees
-
-        if self.prior_type == "poisson":
-            # Poisson prior
-            theta = ntree_theta
-            log_prior = m * np.log(theta) - theta - math.lgamma(m + 1)
-        elif self.prior_type == "bernoulli":
-            log_prior = np.log(0.5)  # Both m have equal probability
-        return log_prior
-
-    def tree_num_log_prior_ratio(self, move: Move):
-        log_prior_current = self.tree_num_log_prior(move.current, move.current.global_params["ntree_theta"])
-        log_prior_proposed = self.tree_num_log_prior(move.proposed, move.proposed.global_params["ntree_theta"])
-        return log_prior_proposed - log_prior_current
-    
-class LeafValPrior:
-    def __init__(self, tau_k = 2.0):
-        self.tau_k = tau_k
-
-    def tau_square_inv(self, m):
-        """
-        Computes the inverse of tau squared (1 / tau^2)
-        """
-        return 4*(self.tau_k**2)*m
-    
-    def leaf_vals_squared_sum(self, bart_params, trees_changed):
-        """
-        Computes the sum of squared leaf values for all trees in bart_params.trees,
-        excluding the trees specified in trees_changed.
-        """    
-        return np.nansum([
-            val ** 2 for idx, tree in enumerate(bart_params.trees) 
-            if idx not in set(trees_changed) for val in tree.leaf_vals
-        ])
-    
-    def total_leaf_count(self, bart_params, trees_changed):
-        """
-        Computes the total number of leaves across all trees in bart_params.trees,
-        excluding the trees specified in trees_changed.
-        """     
-        return sum(
-            tree.n_leaves 
-            for idx, tree in enumerate(bart_params.trees) 
-            if idx not in set(trees_changed)
-        )
-
-
-    def leaf_vals_log_prior_ratio(self, move: Move):
-        m_current = move.current.n_trees
-        m_proposed = move.proposed.n_trees
-        
-        return -0.5*self.total_leaf_count(move.current, move.trees_changed) * np.log(m_current/m_proposed) - \
-            0.5*(self.tau_square_inv(m_proposed) - self.tau_square_inv(m_current)) * self.leaf_vals_squared_sum(move.current, move.trees_changed)
 
 class BARTLikelihood:
     """
@@ -437,25 +333,227 @@ class BARTLikelihood:
             Marginal likelihood ratio.
         """
         if not marginalize:
-            if isinstance(move, Break) or isinstance(move, Birth):
-                trees_proposed_ids = move.trees_changed + [-1]
-            elif isinstance(move, Combine) or isinstance(move, Death):
-                trees_proposed_ids = [move.trees_changed[0] if move.trees_changed[0] < move.trees_changed[1] else move.trees_changed[0] - 1]
-            else:
-                trees_proposed_ids = move.trees_changed
             log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, move.trees_changed)
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, trees_proposed_ids)
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, move.trees_changed)
         else:
             log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, np.arange(move.current.n_trees))
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, np.arange(move.proposed.n_trees))
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, np.arange(move.current.n_trees))
         return log_lkhd_proposed - log_lkhd_current
 
 class ComprehensivePrior:
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, 
-                 eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
-                 theta_0=200, theta_df=100, tau_k = 2.0, tree_num_prior_type="poisson"):
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng()):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
-        self.global_prior = GlobalParamPrior(eps_q, eps_nu, theta_0, theta_df, specification, generator)
+        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
-        self.tree_num_prior = TreeNumPrior(prior_type=tree_num_prior_type)
-        self.leaf_val_prior = LeafValPrior(tau_k)
+
+class ProbitPrior:
+    """
+    BART Prior for binary classification tasks.
+    """
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng()):
+        self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
+        self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
+
+class LogisticTreesPrior(TreesPrior):
+    """
+    Prior for logistic regression trees.
+    
+    Inherits from TreesPrior and overrides the resample_leaf_vals method to handle logistic regression.
+    """
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, c = 0.0, d = 0.0, generator=np.random.default_rng(), parent = None):
+        """
+        Initialize the logistic trees prior with parameters.
+        
+        Parameters:
+        -----------
+        n_trees : int
+            Number of trees in the BART model.
+        tree_alpha : float
+            Alpha parameter for the tree prior.
+        tree_beta : float
+            Beta parameter for the tree prior.
+        c : float
+            Parameter for the GIG distribution.
+        d : float
+            Parameter for the GIG distribution.
+        generator : numpy.random.Generator, optional
+            Random number generator for reproducibility (default is np.random.default_rng()).
+        """
+        if c == 0.0 or d == 0.0:
+            raise ValueError("Parameters c and d must be provided for logistic regression prior.")
+        self.c = c
+        self.d = d
+        self.parent = parent  # LogisticPrior
+        super().__init__(n_trees, tree_alpha, tree_beta, f_k=2.0, generator=generator)
+
+    def set_latents(self, latents):
+        self.latents = latents
+        
+    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
+        """
+        Resample the values of the leaf nodes for the specified trees.
+        
+        This function updates the leaf parameters by resampling from the posterior
+        distribution given the current residuals and leaf basis.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters.
+        data_y (numpy.ndarray): The target values array.
+        tree_ids : list or array-like
+            A list or array of tree indices for which the leaf values are to be resampled.
+
+        Returns:
+        --------
+        leaf_params_new : numpy.ndarray
+            The resampled leaf parameters.
+        """
+        # Cached values of rh, sh and even pi_h from parent may be used. 
+        # The speedup is small though (2-4%)
+        if(self.parent.param is not bart_params):
+            print("Error: BART Parameter used by calculated values is not the same as that provided to LogisticTreesPrior.resample_leaf_vals, this may lead to incorrect results.")
+            print("Please contact the developer to see if we need fall back to re-calculating rh, sh and pi_h.")
+            raise ValueError("BART Parameter mismatch")
+        rh = self.parent.rh
+        sh = self.parent.sh
+        pi_h = self.parent.pi_h
+        
+        # lb_bool = bart_params.leaf_basis(tree_ids)
+        # leaf_basis = lb_bool.astype(np.float64)
+        # tree_eval = bart_params.evaluate(all_except = tree_ids)
+        # latent_tree_product = self.latents * np.exp(tree_eval)
+        # 
+        # rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
+        # sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
+        # 
+        # pi_h = np.zeros(len(rh))
+        # for i in range(len(rh)):
+        #     Z1 = GIG.gig_normalizing_constant_numba(-self.c + rh[i], 2 * self.d, 2 * sh[i])
+        #     Z2 = GIG.gig_normalizing_constant_numba(self.c + rh[i], 0, 2 * (self.d + sh[i]))
+        #     pi_h[i] = Z1 / (Z1 + Z2)
+        
+        leaf_params_new = np.zeros(rh.shape[0])
+        for i in range(leaf_params_new.shape[0]):
+            leaf_params_new[i] = pi_h[i] * GIG.rvs_gig_scalar(
+                    -self.c + rh[i], 2 * self.d, 2 * sh[i],
+                    generator=self.generator
+                ) + (1 - pi_h[i]) * GIG.rvs_gig_scalar(
+                    self.c + rh[i], 0, 2 * (self.d + sh[i]),
+                    generator=self.generator
+                )
+        
+        # vectorized calculation of normalizing constants
+        # and generation of RVs are actually slower than the loops above
+        
+        return np.log(leaf_params_new)
+    
+_log_gig_const_global = GIG.log_gig_normalizing_constant_numba
+
+class LogisticLikelihood(BARTLikelihood):
+    """
+    Likelihood for logistic regression tasks.
+    
+    Inherits from BARTLikelihood and overrides the trees_log_marginal_lkhd method.
+    """
+    def __init__(self, c, d, parent=None):
+        """
+        Initialize the logistic likelihood with parameters c and d.
+
+        Parameters:
+        -----------
+        c : float
+            Parameter for the GIG distribution.
+        d : float
+            Parameter for the GIG distribution.
+        """
+        self.c = c
+        self.d = d
+        self.parent : LogisticPrior = parent  # LogisticPrior
+        # f_sigma2 useless
+        super().__init__(f_sigma2=0.0)
+
+    def set_latents(self, latents):
+        self.latents = latents
+    
+    @staticmethod
+    @njit
+    def trees_log_marginal_lkhd_numba_backend(c, d, rh, sh):
+        log_likelihood = np.zeros(len(rh))
+        pi_h = np.zeros(len(rh))
+        for i in range(len(rh)):
+            log_z1 = _log_gig_const_global(-c + rh[i], 2 * d, 2 * sh[i])
+            log_z2 = _log_gig_const_global(c + rh[i], 0, 2 * (d + sh[i]))
+            max_log_z = max(log_z1, log_z2)
+            min_log_z = min(log_z1, log_z2)
+            log_z1_p_z2 = max_log_z + math.log1p(math.exp(min_log_z - max_log_z))
+            log_likelihood[i] = log_z1_p_z2 - (math.log(2) + _log_gig_const_global(c, 0, 2 * d))
+            pi_h[i] = math.exp(log_z1 - log_z1_p_z2)
+        return log_likelihood.sum(), pi_h
+
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
+        """
+        Calculate the log marginal likelihood of the trees in a logistic regression BART model.
+
+        Parameters:
+        -----------
+        bart_params : Parameters
+            An instance of the Parameters class containing the BART model parameters.
+        data_y (bool, numpy.ndarray): The target values array that contain boolean values representing for matching the category or not.
+        tree_ids : list or array-like
+            A list or array of tree identifiers for which the log marginal likelihood is to be computed.
+
+        Returns:
+        --------
+        float
+            The log marginal likelihood of the specified trees.
+        """
+        # here, we assume tree_ids contain only one tree
+        if len(tree_ids) != 1:
+            raise ValueError("Logistic likelihood only supports single tree evaluation.")
+        
+        lb_bool = bart_params.leaf_basis(tree_ids)
+        leaf_basis = lb_bool.astype(np.float64)
+        # leaf_basis is an array of shape (n_samples, n_leaves)
+        tree_eval = bart_params.evaluate(all_except=tree_ids)
+        # dim of tree_eval is (n_samples)
+        latent_tree_product = self.latents * np.exp(tree_eval)
+        # dim of latent_tree_product is (n_samples)
+
+        # Vectorized computation of rh and sh for all leaves
+        # rh[t] = sum of data_y values where leaf_basis[i, t] == 1
+        rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
+
+        # sh[t] = sum of latents[i] * np.exp(tree_eval)[i] where leaf_basis[i, t] == 1
+        sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
+        
+        self.parent.rh = rh
+        self.parent.sh = sh
+        self.parent.param = bart_params
+        log_likelihood_sum, self.parent.pi_h = self.trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
+
+        return log_likelihood_sum
+
+class LogisticPrior:
+    """
+    BART Prior for logistic classification tasks.
+    """
+    def __init__(self, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, generator=np.random.default_rng()):
+        if c == 0.0 or d == 0.0:
+            a0 = 3.5 / math.sqrt(2)
+            c = n_trees/(a0 ** 2) + 0.5
+            d = n_trees/(a0 ** 2)
+        
+        self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self)
+        self.likelihood = LogisticLikelihood(c, d, parent=self)
+        
+        # Placeholders for values reused in resampling
+        self.rh = None  
+        self.sh = None
+        self.pi_h = None
+        self.param = None
+    
+    def set_latents(self, latents):
+        self.tree_prior.set_latents(latents)
+        self.likelihood.set_latents(latents)
+        
