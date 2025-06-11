@@ -1,7 +1,7 @@
-import re
 import numpy as np
 from tqdm import tqdm
 import time
+import pandas as pd
 
 '''
 ### Scenario Classes
@@ -132,6 +132,47 @@ class NeuralScenario(Scenario):
     
     def finish(self):
         return self.data.finish()
+
+from sklearn.datasets import fetch_openml
+from sklearn.preprocessing import normalize, OrdinalEncoder
+from sklearn.utils import shuffle
+class MushroomScenario(Scenario):
+    def __init__(self, random_generator=None):
+        X, y = fetch_openml('mushroom', version=1, return_X_y=True)
+        # type annotations
+        X : pd.DataFrame
+        y : pd.Series
+        # avoid nan, set nan as -1
+        for col in X.select_dtypes('category'):
+            # -1 in codes indicates NaN by pandas convention
+            X[col] = X[col].cat.codes
+        X = normalize(X)
+        self.X, self.y = shuffle(X, y, random_state=random_generator)
+        y_array = self.y.to_numpy().reshape(-1, 1)
+        self.y_arm = OrdinalEncoder(
+            dtype= int).fit_transform(y_array)
+        self.P = self.X.shape[1]
+        self.K = len(np.unique(self.y_arm))
+        
+        self.cursor = 0
+        super().__init__(self.P, self.K, sigma2=0.0, random_generator=random_generator)
+    
+    def generate_covariates(self):
+        cov = self.X[self.cursor, :].reshape(1, -1)
+        self.cursor += 1
+        return cov
+    
+    def reward_function(self, x):
+        # Check if the input x matches the current data point
+        x_cursor = self.cursor - 1
+        assert np.all(x == self.X[x_cursor, :].reshape(1, -1))
+
+        reward = np.zeros(self.K)
+        reward[self.y_arm[x_cursor, 0]] = 1
+        return {"outcome_mean": reward, "reward": reward}
+    
+    def finish(self):
+        return self.cursor >= self.X.shape[0]
 
 class Friedman2Scenario(Scenario):
     def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
