@@ -48,7 +48,10 @@ class BART:
         Returns:
             self
         """
-        if not self.is_fitted or self.data is None or self.data.n <= 10:
+        if self.data is None:
+            self.fit(X, y, quietly=quietly)
+            return self
+        if not self.is_fitted or self.data.n <= 10:
             # If not fitted yet, or data is empty, or not enough data, just do a regular fit
             X_combined = np.vstack((self.data.X, X))
             y_combined = np.hstack((self.data.y, y))
@@ -115,8 +118,6 @@ class BART:
             xgb_kwargs: dict = None,
             debug: bool = False
     ) -> "BART":
-
-
         # Ensure self.data is correctly populated. 
         # If X, y are different from self.data, an update or re-fit might be needed.
         # We assume that X and y are train_data.X and train_data.y,
@@ -304,7 +305,7 @@ class ProbitBART(BART):
         f_samples = self.posterior_f(X)
         return norm.cdf(f_samples)
     
-    def posterior_predict(self, X, threshold=0.5):
+    def posterior_predict(self, X):
         """
         Get full posterior distribution of predicted classes.
         
@@ -312,7 +313,11 @@ class ProbitBART(BART):
             Array of shape (n_samples, n_posterior_samples) with class samples
         """
         prob_samples = self.posterior_predict_proba(X)
-        return (prob_samples >= threshold).astype(int)
+        draws = self.sampler.generator.binomial(1, prob_samples, size=prob_samples.shape).astype(int)
+        y_labels = np.zeros((draws.shape[0], draws.shape[1]), dtype=int)
+        for k in range(draws.shape[1]):
+            y_labels[:, k] = self.preprocessor.backtransform_y(draws[:, k])
+        return y_labels
     
 class LogisticBART(BART):
     """
@@ -395,5 +400,13 @@ class LogisticBART(BART):
             Array of shape (n_samples, n_posterior_samples) with class samples
         """
         prob_samples = self.posterior_predict_proba(X)
-        return np.argmax(prob_samples, axis=2)
+        draws = self.sampler.generator.multinomial(
+            n=1, pvals=prob_samples,
+            size=(prob_samples.shape[0], prob_samples.shape[1])
+        )
+        labels = np.argmax(draws, axis=2)
+        y_labels = np.zeros((labels.shape[0], labels.shape[1]), dtype=int)
+        for k in range(labels.shape[1]):
+            y_labels[:, k] = self.preprocessor.backtransform_y(labels[:, k])
+        return y_labels
     

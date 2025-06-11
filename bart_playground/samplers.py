@@ -195,11 +195,16 @@ class Sampler(ABC):
                     if hasattr(new_data, 'Z'): # check if treatment assignments are available, e.g. for BCFDataset
                         new_z = new_data.Z[old_n:]
                         current_state = last_state.add_data_points(new_X, new_z)
-                    else:
+                    elif isinstance(last_state, list):
+                        # If last_state is a list (e.g., in LogisticSampler), handle each category
+                        current_state = []
+                        for i, state in enumerate(last_state):
+                            current_state.append(state.add_data_points(new_X))
+                    else: # Default case for Parameters
                         current_state = last_state.add_data_points(new_X)
-                else:
+                else: # No new data, just continue from last state
                     current_state = last_state
-            else:
+            else: # No new data, just continue from last state
                 current_state = last_state
 
             # Run sampler for additional iterations
