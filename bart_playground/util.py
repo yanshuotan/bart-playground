@@ -178,6 +178,19 @@ class ClassificationPreprocessor(Preprocessor):
         q_vals = np.linspace(0, 1, self.max_bins, endpoint=False)
         return dict({k : np.unique(np.quantile(X[:, k], q_vals)) for k in range(X.shape[1])})
     
+@njit
+def log_K_asymptotic(v, x):
+    """
+    One-term asymptotic: log K_v(x) ~ 
+      -v * ln(e*x/(2*v)) - 0.5*ln(v) + 0.5*ln(pi/2) + O(1/v).
+    Reference: DLMF 10.40.8.
+    """
+    # Compute -v * ln(e*x/(2v)) = -v * (1 + ln(x/(2v)))
+    term1 = -v * (1.0 + math.log(x / (2.0 * v)))
+    # Prefactor: -0.5*ln(v) + 0.5*ln(pi/2)
+    term2 = -0.5 * math.log(v) + 0.5 * math.log(math.pi / 2.0)
+    return term1 + term2
+
 class GIG:
     """
     Generalized Inverse Gaussian (GIG) distribution.
@@ -299,7 +312,7 @@ class GIG:
 
     @staticmethod
     @njit
-    def gig_normalizing_constant_numba(eta: float, chi: float, psi: float) -> float:
+    def log_gig_normalizing_constant_numba(eta: float, chi: float, psi: float) -> float:
         """
         Compute the GIG normalizing constant for scalar inputs (eta, chi, psi).
         Numba-accelerated version where only the Bessel K call uses object mode.
@@ -310,7 +323,7 @@ class GIG:
                 raise ValueError("For chi=0, GIG(eta, psi, 0) requires eta > 0.")
             # Z = (2/psi)^eta * Gamma(eta)
             log_val = math.log(2.0 / psi) * eta + math.lgamma(eta)
-            return math.exp(log_val)
+            return log_val
 
         # Case 2: psi == 0 --> Inverse-Gamma limit (eta < 0)
         if psi == 0:
@@ -318,7 +331,7 @@ class GIG:
                 raise ValueError("For psi=0, GIG(eta, 0, chi) requires eta < 0.")
             # Z = (chi/2)^eta * Gamma(-eta)
             log_val = math.log(chi / 2.0) * eta + math.lgamma(-eta)
-            return math.exp(log_val)
+            return log_val
 
         # Case 3: General case chi > 0 and psi > 0
         # Z = 2 * K_eta(sqrt(psi*chi)) * (chi/psi)^(eta/2)
@@ -326,5 +339,10 @@ class GIG:
         # Temporarily switch to object mode to call scipy.special.kv
         with objmode(K_val=f8):
             K_val = kv(eta, z)
+            
+        if math.isinf(K_val):
+            log_K_val = log_K_asymptotic(eta, z)
+        else:
+            log_K_val = math.log(K_val)
 
-        return math.exp(math.log(2.0 * K_val) + math.log(chi / psi) * (0.5 * eta))
+        return math.log(2.0) + log_K_val + math.log(chi / psi) * (0.5 * eta)

@@ -1,9 +1,11 @@
 import numpy as np
+from typing import Optional
 from scipy.stats import norm
 
 from .samplers import Sampler, DefaultSampler, InformedSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
 from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
 from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor
+
 
 class BART:
     """
@@ -72,14 +74,17 @@ class BART:
         
         return self
     
-    def posterior_f(self, X):
+    def posterior_f(self, X, backtransform=True):
         """
         Get the posterior distribution of f(x) for each row in X.
         """
         preds = np.zeros((X.shape[0], self.ndpost))
         for k in range(self.ndpost):
             y_eval = self.trace[k].evaluate(X)
-            preds[:, k] = self.preprocessor.backtransform_y(y_eval)
+            if backtransform:
+                preds[:, k] = self.preprocessor.backtransform_y(y_eval)
+            else:
+                preds[:, k] = y_eval
         return preds
     
     def predict(self, X):
@@ -88,6 +93,101 @@ class BART:
         """
         return np.mean(self.posterior_f(X), axis=1)
     
+    def posterior_predict(self, X):
+        """
+        Get the full posterior distribution of predictions.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples) with posterior samples
+        """
+        preds = self.posterior_f(X, backtransform=False)
+        for k in range(self.ndpost):
+            eps_sigma2 = self.trace[k].global_params['eps_sigma2']
+            preds[:, k] += self.sampler.generator.normal(0, np.sqrt(eps_sigma2), size=preds[:, k].shape)
+            preds[:, k] = self.preprocessor.backtransform_y(preds[:, k])
+        return preds
+
+    def init_from_xgboost(
+            self,
+            xgb_model,
+            X: np.ndarray,
+            y: Optional[np.ndarray] = None,
+            xgb_kwargs: dict = None,
+            debug: bool = False
+    ) -> "BART":
+
+
+        # Ensure self.data is correctly populated. 
+        # If X, y are different from self.data, an update or re-fit might be needed.
+        # We assume that X and y are train_data.X and train_data.y,
+        # and self.data is already train_data.
+        if self.data is None: 
+            self.data = self.preprocessor.fit_transform(X,y)
+        elif X is not self.data.X or y is not self.data.y: # Check if X,y are different objects
+            # This path is taken if X, y are new/different from what self.data currently holds.
+            # If they are actually different datasets, a full re-fit or careful update is needed.
+            print("[WARN BART.init_from_xgboost] X or y are different objects than self.data.X/y. Calling update_transform.")
+            self.data = self.preprocessor.update_transform(X, y, self.data)
+
+        dataX = self.data.X # Use self.data which should be correctly set
+
+        from .xgb_init import fit_and_init_trees
+        xgb_kwargs = xgb_kwargs or {}
+
+        n_trees = self.sampler.tree_prior.n_trees
+
+        model, init_trees = fit_and_init_trees(
+            X, y,
+            model=xgb_model,
+            dataX=dataX,
+            n_estimators=n_trees,
+            debug=debug,
+            **xgb_kwargs
+        )
+
+        self.sampler = DefaultSampler(
+            prior=self.sampler.prior,
+            proposal_probs=self.sampler.proposals,
+            generator=self.sampler.generator,
+            temp_schedule=self.sampler.temp_schedule,
+            tol=self.sampler.tol,
+            init_trees=init_trees
+        )
+
+        self.sampler.add_data(self.data)
+        self.sampler.add_thresholds(self.preprocessor.thresholds)
+
+        # ——— warm-start a BART draw by resampling leaf-values & global params ———
+        init_state = self.sampler.get_init_state()
+        if debug: # Check if debug flag is True
+            print(f"[DEBUG XGB_INIT] Initial state from get_init_state():")
+            print(f"[DEBUG XGB_INIT]   Tree 0 Leaf Vals (from XGB): {init_state.trees[0].leaf_vals[init_state.trees[0].leaves]}")
+            print(f"[DEBUG XGB_INIT]   Global eps_sigma2: {init_state.global_params['eps_sigma2']}")
+
+        # 1) for each tree, draw new leaf-values under BART's posterior
+        for k in range(self.sampler.tree_prior.n_trees):
+            new_leaf_vals = self.sampler.tree_prior.resample_leaf_vals(
+                init_state,
+                data_y=self.data.y,
+                tree_ids=[k],
+            )
+            if debug:
+                print(f"[DEBUG XGB_INIT] Resampled Leaf Vals for tree {k}: {new_leaf_vals}")
+            init_state.update_leaf_vals([k], new_leaf_vals)
+        # 2) draw the global μ/σ
+        init_state.global_params = self.sampler.global_prior.resample_global_params(
+            init_state,
+            data_y=self.data.y
+        )
+        if debug:
+            print(f"[DEBUG XGB_INIT] Resampled Global eps_sigma2: {init_state.global_params['eps_sigma2']}")
+            print(f"[DEBUG XGB_INIT] Final state for trace - Tree 0 Leaf Vals: {init_state.trees[0].leaf_vals[init_state.trees[0].leaves]}")
+
+        # 3) overwrite the sampler's "trace" so .run() will start from a BART-sampled state
+        self.sampler.trace = [init_state]
+
+        return self
+
     def _check_temperature(self, temperature):
         """
         Check if the temperature is a valid type.
@@ -101,6 +201,7 @@ class BART:
         else:
             raise ValueError("Invalid temperature type ", type(temperature))
     
+
 class DefaultBART(BART):
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
@@ -170,11 +271,8 @@ class ProbitBART(BART):
         Returns:
             Array of shape (n_samples, 2) with probabilities for classes 0 and 1
         """
-        # Get posterior samples of latent function
-        f_samples = self.posterior_f(X)
-        
-        # Apply probit transformation: P(Y=1) = phi(f(x))
-        prob_1 = norm.cdf(f_samples)
+        # Get posterior samples of probabilities
+        prob_1 = self.posterior_predict_proba(X)
         
         # Average over posterior samples
         mean_prob_1 = np.mean(prob_1, axis=1)
@@ -205,6 +303,16 @@ class ProbitBART(BART):
         """
         f_samples = self.posterior_f(X)
         return norm.cdf(f_samples)
+    
+    def posterior_predict(self, X, threshold=0.5):
+        """
+        Get full posterior distribution of predicted classes.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples) with class samples
+        """
+        prob_samples = self.posterior_predict_proba(X)
+        return (prob_samples >= threshold).astype(int)
     
 class LogisticBART(BART):
     """
@@ -244,16 +352,7 @@ class LogisticBART(BART):
         """
         Predict class probabilities using the logistic link.
         """
-        # Get posterior samples of latent function
-        f_samples = self.posterior_f(X)
-        
-        # Apply logistic transformation
-        prob = np.zeros((f_samples.shape[0], f_samples.shape[1], f_samples.shape[2]))
-        for category in range(self.sampler.n_categories):
-            prob[:, :, category] = np.exp(f_samples[:, :, category])
-        # Normalize to get probabilities
-        prob_sum = np.sum(prob, axis=2, keepdims=True)
-        prob /= prob_sum
+        prob = self.posterior_predict_proba(X)
         
         # Average over posterior samples
         mean_prob = np.mean(prob, axis=1)
@@ -271,5 +370,30 @@ class LogisticBART(BART):
         """
         proba = self.predict_proba(X)
         return np.argmax(proba, axis=1)
-
+    
+    def posterior_predict_proba(self, X):
+        """
+        Get full posterior distribution of predicted probabilities.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples, n_categories) with probability samples
+        """
+        f_samples = self.posterior_f(X)
+        prob = np.zeros_like(f_samples)
+        for category in range(self.sampler.n_categories):
+            prob[:, :, category] = np.exp(f_samples[:, :, category])
+        # Normalize to get probabilities
+        prob_sum = np.sum(prob, axis=2, keepdims=True)
+        prob /= prob_sum
+        return prob
+    
+    def posterior_predict(self, X):
+        """
+        Get full posterior distribution of predicted classes.
+        
+        Returns:
+            Array of shape (n_samples, n_posterior_samples) with class samples
+        """
+        prob_samples = self.posterior_predict_proba(X)
+        return np.argmax(prob_samples, axis=2)
     

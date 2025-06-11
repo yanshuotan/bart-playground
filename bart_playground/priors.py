@@ -242,7 +242,8 @@ class GlobalParamPrior:
         
         # chi2.ppf suffices
         c = chi2.ppf(1 - self.eps_q, df=self.eps_nu).item()
-        return (sigma_hat**2 * c) / self.eps_nu
+        eps_lambda_val = (sigma_hat**2 * c) / self.eps_nu
+        return eps_lambda_val
 
     def _sample_eps_sigma2(self, residuals):
         """
@@ -447,7 +448,7 @@ class LogisticTreesPrior(TreesPrior):
         
         return np.log(leaf_params_new)
     
-_gig_const_global = GIG.gig_normalizing_constant_numba
+_log_gig_const_global = GIG.log_gig_normalizing_constant_numba
 
 class LogisticLikelihood(BARTLikelihood):
     """
@@ -481,12 +482,13 @@ class LogisticLikelihood(BARTLikelihood):
         log_likelihood = np.zeros(len(rh))
         pi_h = np.zeros(len(rh))
         for i in range(len(rh)):
-            z1 = _gig_const_global(-c + rh[i], 2 * d, 2 * sh[i])
-            z2 = _gig_const_global(c + rh[i], 0, 2 * (d + sh[i]))
-            log_likelihood[i] = math.log(
-                (z1 + z2) / (2 * _gig_const_global(c, 0, 2 * d))
-            )
-            pi_h[i] = z1 / (z1 + z2)
+            log_z1 = _log_gig_const_global(-c + rh[i], 2 * d, 2 * sh[i])
+            log_z2 = _log_gig_const_global(c + rh[i], 0, 2 * (d + sh[i]))
+            max_log_z = max(log_z1, log_z2)
+            min_log_z = min(log_z1, log_z2)
+            log_z1_p_z2 = max_log_z + math.log1p(math.exp(min_log_z - max_log_z))
+            log_likelihood[i] = log_z1_p_z2 - (math.log(2) + _log_gig_const_global(c, 0, 2 * d))
+            pi_h[i] = math.exp(log_z1 - log_z1_p_z2)
         return log_likelihood.sum(), pi_h
 
     def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):

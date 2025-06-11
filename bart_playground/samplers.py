@@ -90,26 +90,34 @@ class Sampler(ABC):
         if quietly:
             progress_bar = False
 
+        # Determine the actual starting state for this MCMC run
+        current: Parameters
+        if current is not None:
+            current = current
+        elif self.trace:  # If self.trace is already populated (e.g., by init_from_xgboost)
+            current = self.trace[0]  # Use the pre-loaded state
+        else:
+            current = self.get_init_state() # Otherwise, generate a new initial state
+        
         self.trace = []
         self.n_iter = n_iter
-        if current is None:
-            current = self.get_init_state()
-        # assert isinstance(current, Parameters), "Current state must be of type Parameters."
+
         if n_skip == 0:
             self.trace.append(current) # Add initial state to trace
-        
+
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
-    
+
         for iter in iterator:
             if not progress_bar and iter % 10 == 0 and not quietly:
                 print(f"Running iteration {iter}/{n_iter}")
-            # print(self.temp_schedule)
+            
             temp = self.temp_schedule(iter)
             current = self.one_iter(current, temp, return_trace=False)
+
             if iter >= n_skip:
                 self.clear_last_cache()  # Clear cache of the last trace
                 self.trace.append(current)
-
+        
         return self.trace
     
     def sample_move(self):
@@ -201,30 +209,57 @@ class DefaultSampler(Sampler):
     """
     Default implementation of the BART sampler.
     """
-    def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
-                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
+    def __init__(
+        self,
+        prior: ComprehensivePrior,
+        proposal_probs: dict,
+        generator: np.random.Generator,
+        temp_schedule=TemperatureSchedule(),
+        tol: int = 100,
+        init_trees: Optional[list[Tree]] = None  # NEW
+    ):
+        """
+        Default implementation of the BART sampler.
+        Accepts an optional list of pre-initialized trees without changing default behavior.
+        """
+        # preserve original default proposal behavior
         self.tol = tol
         if proposal_probs is None:
-            proposal_probs = {"grow" : 0.5,
-                              "prune" : 0.5}
+            proposal_probs = {"grow": 0.5, "prune": 0.5}
+
+        # original prior unpacking
         self.tree_prior = prior.tree_prior
         self.global_prior = prior.global_prior
         self.likelihood = prior.likelihood
+
+        # initialize base sampler
         super().__init__(prior, proposal_probs, generator, temp_schedule)
+
+        # store seed forest for XGBoost init
+        self.init_trees = init_trees
 
     def get_init_state(self) -> Parameters:
         """
         Retrieve the initial state for the sampler.
-
-        Returns:
-            The initial state for the sampler.
+        If init_trees was provided, copy up to n_trees of them and
+        pad the rest with fresh stumps; otherwise build all new stumps.
         """
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
-        trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
+        N = self.tree_prior.n_trees
+
+        if self.init_trees is not None:
+            provided = len(self.init_trees)
+            # Copy up to N of the provided trees
+            trees = [t.copy() for t in self.init_trees[:N]]
+            # Pad with fresh stumps if fewer than N
+            if provided < N:
+                trees += [Tree.new(self.data.X) for _ in range(N - provided)]
+        else:
+            trees = [Tree.new(self.data.X) for _ in range(N)]
+
         global_params = self.global_prior.init_global_params(self.data)
-        init_state = Parameters(trees, global_params)
-        return init_state
+        return Parameters(trees, global_params)
     
     def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""

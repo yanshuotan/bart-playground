@@ -6,6 +6,7 @@ from .priors import TreesPrior, GlobalParamPrior, BARTLikelihood, ComprehensiveP
 from .samplers import Sampler, DefaultSampler, TemperatureSchedule, all_moves, all_samplers, ProbitSampler, LogisticSampler, InformedSampler
 from .util import DefaultPreprocessor, Dataset
 from .visualization import visualize_tree
+from .xgb_init import fit_and_init_trees, _xgb_json_to_tree
 
 
 
@@ -15,4 +16,4 @@ __all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART", "InformedBART",
            "TreesPrior", "GlobalParamPrior", "BARTLikelihood", "ComprehensivePrior",
            "DataGenerator", "all_moves", "Tree", "Parameters", 
            "Sampler", "DefaultSampler", "ProbitSampler", "LogisticSampler", "InformedSampler",
-           "TemperatureSchedule", "all_samplers", "DefaultPreprocessor", "Dataset", "visualize_tree"]
+           "TemperatureSchedule", "all_samplers", "DefaultPreprocessor", "Dataset", "visualize_tree", "fit_and_init_trees", "_xgb_json_to_tree"]
