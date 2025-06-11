@@ -180,5 +180,5 @@ class BCF:
         new_trace = self.sampler.continue_run(add_ndpost + add_nskip, new_data=self.data, quietly=quietly)
         self.trace = self.trace + new_trace[1:]
         # self.trace = self.trace + new_trace[add_nskip+1:]  # Only keep post burn-in samples
-        
+        # TODO
         return self

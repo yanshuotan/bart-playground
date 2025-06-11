@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Optional
+from typing import Optional, Callable
 from scipy.stats import norm
 
 from .samplers import Sampler, DefaultSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
@@ -34,15 +34,14 @@ class BART:
         self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly, n_skip=self.nskip)
         self.is_fitted = True
     
-    def update_fit(self, X, y, add_ndpost=20, add_nskip=10, quietly=False):
+    def update_fit(self, X, y, add_ndpost=20, quietly=False):
         """
         Update an existing fitted model with new data points.
         
         Parameters:
             X: New feature data to add
             y: New target data to add
-            add_ndpost: Number of posterior samples to draw
-            add_nskip: Number of burn-in iterations to skip
+            add_ndpost: Number of more posterior samples to draw
             quietly: Whether to suppress output
             
         Returns:
@@ -57,10 +56,10 @@ class BART:
             y_combined = np.hstack((self.data.y, y))
             self.fit(X_combined, y_combined, quietly=quietly)
             return self
-            
-        additional_iters = add_ndpost + add_nskip
-        # Set all previous iterations + add_nskip as burn-in
-        self.nskip += self.ndpost + add_nskip
+
+        additional_iters = add_ndpost
+        # Set all previous iterations as burn-in
+        self.nskip += self.ndpost
         # Set new add_ndpost iterations as post-burn-in
         self.ndpost = add_ndpost
         
@@ -73,16 +72,27 @@ class BART:
         
         # Run the sampler for additional iterations
         new_trace = self.sampler.continue_run(additional_iters, new_data=self.data, quietly=quietly)
-        self.trace = self.trace + new_trace[1:]
+        self.trace = new_trace
+        # self.trace = self.trace + new_trace[1:]
         
         return self
+    
+    @property
+    def _range_post(self):
+        """
+        Get the range of posterior samples.
+        """
+        total_iterations = len(self.trace)
+        if total_iterations < self.ndpost:
+            raise ValueError(f"Not enough posterior samples: {total_iterations} < {self.ndpost} (provided ndpost).")
+        return range(total_iterations - self.ndpost, total_iterations)
     
     def posterior_f(self, X, backtransform=True):
         """
         Get the posterior distribution of f(x) for each row in X.
         """
         preds = np.zeros((X.shape[0], self.ndpost))
-        for k in range(self.ndpost):
+        for k in self._range_post:
             y_eval = self.trace[k].evaluate(X)
             if backtransform:
                 preds[:, k] = self.preprocessor.backtransform_y(y_eval)
@@ -90,13 +100,22 @@ class BART:
                 preds[:, k] = y_eval
         return preds
     
-    def posterior_sample(self, X, k):
+    WeightSchedule = Callable[[int], float]
+    def posterior_sample(self, X, schedule: WeightSchedule, backtransform=True):
         """
-        Get a posterior sample of Y for each row in X.
+        Get a posterior sample of f(x) for each row in X.
         """
         pred = np.zeros((X.shape[0]))
+        # sample a k using the schedule
+        k = self.sampler.generator.choice(
+            range(len(self.trace)), 
+            p=[schedule(k) for k in range(len(self.trace))]
+        )
         y_eval = self.trace[k].evaluate(X)
-        pred = self.preprocessor.backtransform_y(y_eval)
+        if backtransform:
+            pred = self.preprocessor.backtransform_y(y_eval)
+        else:
+            pred = y_eval
         return pred
     
     def predict(self, X):

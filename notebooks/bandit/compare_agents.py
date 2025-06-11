@@ -1,4 +1,4 @@
-from bart_playground.bandit.bart_agent import BARTAgent
+from bart_playground.bandit.bart_agent import BARTAgent#, LogisticBARTAgent
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Any
@@ -37,12 +37,22 @@ def class_to_agents(sim, scenario, agent_classes: List[Any]) -> Tuple[List[Bandi
                 n_arms=scenario.K,
                 n_features=scenario.P,
                 nskip=100,
-                ndpost=100,
+                ndpost=200,
                 nadd=5,
                 nbatch=1,
                 random_state=1000 + sim,
-                context_encoding='one-hot'
+                encoding='multi'
             )
+        # elif agent_cls == LogisticBARTAgent:
+        #     agent = LogisticBARTAgent(
+        #         n_arms=scenario.K,
+        #         n_features=scenario.P,
+        #         nskip=100,
+        #         ndpost=200,
+        #         nadd=20,
+        #         nbatch=1,
+        #         random_state=1000 + sim
+        #     )
         elif agent_cls == EnsembleAgent:
             agent = EnsembleAgent(
                 n_arms=scenario.K,
@@ -128,7 +138,7 @@ def _run_single_simulation(sim, scenario, agent_classes, agent_names, n_draws):
     cum_regrets, time_agents, mem_agents = simulate(scenario, sim_agents, n_draws=n_draws)
     
     # Return results for this simulation
-    return sim, cum_regrets, time_agents
+    return sim, cum_regrets, time_agents, sim_agents
 
 def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditAgent], agent_names: List[str], n_simulations: int = 10, n_draws: int = 500, n_jobs=6):
     """
@@ -169,16 +179,19 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
             result = _run_single_simulation(0, scenario, agents, agent_names, n_draws)
             results.append(result)
     
+    all_agents = []
     # Process results from parallel jobs
-    for sim, cum_regrets, time_agents in results:
+    for sim, cum_regrets, time_agents, sim_agents in results:
         # Store results
         for i, name in enumerate(agent_names):
             all_regrets[name][sim, :] = cum_regrets[:, i]
             all_times[name][sim] = time_agents[i]
-    
+        all_agents.append(sim_agents)
+
     return {
         'regrets': all_regrets,
-        'times': all_times
+        'times': all_times,
+        'temp_agent': all_agents  # Store the last agent instance for reference
     }
 
 
