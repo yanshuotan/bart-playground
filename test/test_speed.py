@@ -15,7 +15,7 @@ def test_speed():
     ndpost = 20000
     nskip = 1000
     n_trees = 200
-    proposal_probs = {"grow": 0.25, "prune": 0.25, "change": 0.1, "swap": 0.1}
+    proposal_probs = {"grow": 0.25, "prune": 0.25, "change": 0.4, "swap": 0.1}
     random_state = 42
     temperature = 1.0
     bart = DefaultBART(
