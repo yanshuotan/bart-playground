@@ -31,7 +31,6 @@ def generate_simulation_data_for_scenario(scenario: Scenario, n_simulations=10, 
             nskip=100,
             ndpost=10,
             nadd=2,
-            nbatch=1,
             random_state=1000 + sim
         )
         

@@ -1,4 +1,4 @@
-from bart_playground.bandit.bart_agent import BARTAgent#, LogisticBARTAgent
+from bart_playground.bandit.bart_agent import BARTAgent, LogisticBARTAgent
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Any
@@ -39,20 +39,18 @@ def class_to_agents(sim, scenario, agent_classes: List[Any]) -> Tuple[List[Bandi
                 nskip=100,
                 ndpost=200,
                 nadd=5,
-                nbatch=1,
                 random_state=1000 + sim,
                 encoding='multi'
             )
-        # elif agent_cls == LogisticBARTAgent:
-        #     agent = LogisticBARTAgent(
-        #         n_arms=scenario.K,
-        #         n_features=scenario.P,
-        #         nskip=100,
-        #         ndpost=200,
-        #         nadd=20,
-        #         nbatch=1,
-        #         random_state=1000 + sim
-        #     )
+        elif agent_cls == LogisticBARTAgent:
+            agent = LogisticBARTAgent(
+                n_arms=scenario.K,
+                n_features=scenario.P,
+                nskip=100,
+                ndpost=200,
+                nadd=5,
+                random_state=1000 + sim
+            )
         elif agent_cls == EnsembleAgent:
             agent = EnsembleAgent(
                 n_arms=scenario.K,
@@ -60,7 +58,6 @@ def class_to_agents(sim, scenario, agent_classes: List[Any]) -> Tuple[List[Bandi
                 bcf_kwargs = dict(nskip=100,
                 ndpost=10,
                 nadd=2,
-                nbatch=1,
                 random_state=1000 + sim),
                 linear_ts_kwargs = dict(v=1)
             )

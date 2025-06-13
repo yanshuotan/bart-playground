@@ -136,9 +136,9 @@ class NeuralScenario(Scenario):
 from sklearn.datasets import fetch_openml
 from sklearn.preprocessing import normalize, OrdinalEncoder
 from sklearn.utils import shuffle
-class MushroomScenario(Scenario):
-    def __init__(self, random_generator=None):
-        X, y = fetch_openml('mushroom', version=1, return_X_y=True)
+class OpenMLScenario(Scenario):
+    def __init__(self, dataset='mushroom', random_generator=None):
+        X, y = fetch_openml(dataset, version=1, return_X_y=True)
         # type annotations
         X : pd.DataFrame
         y : pd.Series
