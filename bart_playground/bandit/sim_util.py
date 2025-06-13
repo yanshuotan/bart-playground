@@ -137,8 +137,8 @@ from sklearn.datasets import fetch_openml
 from sklearn.preprocessing import normalize, OrdinalEncoder
 from sklearn.utils import shuffle
 class OpenMLScenario(Scenario):
-    def __init__(self, dataset='mushroom', random_generator=None):
-        X, y = fetch_openml(dataset, version=1, return_X_y=True)
+    def __init__(self, dataset='mushroom', version=1, random_generator=None):
+        X, y = fetch_openml(dataset, version=version, return_X_y=True)
         # type annotations
         X : pd.DataFrame
         y : pd.Series
