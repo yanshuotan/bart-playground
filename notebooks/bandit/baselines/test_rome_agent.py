@@ -27,8 +27,7 @@ ip_agent = IntelligentPoolingAgent(n_arms=n_arms, n_features=n_features,
                                     featurize=_featurize, t_max=500)
 bcf_agent = BCFAgent(n_arms=n_arms, n_features=n_features, nskip=100,
                 ndpost=10,
-                nadd=3,
-                nbatch=1)
+                nadd=3)
                                     
 
 # Run simulation
