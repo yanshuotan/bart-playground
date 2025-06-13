@@ -365,8 +365,15 @@ class LogisticBART(BART):
         self.sampler : LogisticSampler
         super().__init__(preprocessor, sampler, ndpost, nskip)
         
+    @property
+    def n_categories(self):
+        return self.sampler.n_categories
+    @n_categories.setter
+    def n_categories(self, value):
+        self.sampler.n_categories = value
+        
     def fit(self, X, y, quietly=False):
-        self.sampler.n_categories = np.unique(y).size
+        self.n_categories = np.unique(y).size
         super().fit(X, y, quietly=quietly)
         
     def posterior_f(self, X):
@@ -374,9 +381,9 @@ class LogisticBART(BART):
         Get the posterior distribution of f(x) for each row in X.
         For logistic BART, this returns the latent function values.
         """
-        preds = np.zeros((X.shape[0], self.ndpost, self.sampler.n_categories))
+        preds = np.zeros((X.shape[0], self.ndpost, self.n_categories))
         for i, k in enumerate(self._range_post):
-            for category in range(self.sampler.n_categories):
+            for category in range(self.n_categories):
                 y_eval = self.trace[k][category].evaluate(X)
                 preds[:, i, category] = y_eval
         return preds
@@ -413,7 +420,7 @@ class LogisticBART(BART):
         """
         f_samples = self.posterior_f(X)
         prob = np.zeros_like(f_samples)
-        for category in range(self.sampler.n_categories):
+        for category in range(self.n_categories):
             prob[:, :, category] = np.exp(f_samples[:, :, category])
         # Normalize to get probabilities
         prob_sum = np.sum(prob, axis=2, keepdims=True)
@@ -431,14 +438,14 @@ class LogisticBART(BART):
         Returns:
             Sampled predictions
         """
-        pred = np.zeros((X.shape[0], self.sampler.n_categories))
+        pred = np.zeros((X.shape[0], self.n_categories))
         # sample a k using the schedule
         k = self.sampler.generator.choice(
             range(len(self.trace)), 
             p=[schedule(k) for k in range(len(self.trace))]
         )
-        f_sample = np.zeros((X.shape[0], self.sampler.n_categories))
-        for category in range(self.sampler.n_categories):
+        f_sample = np.zeros((X.shape[0], self.n_categories))
+        for category in range(self.n_categories):
             f_sample[:, category] = self.trace[k][category].evaluate(X)
         prob = np.exp(f_sample)
         # Normalize to get probabilities

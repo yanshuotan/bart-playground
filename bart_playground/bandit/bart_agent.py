@@ -10,13 +10,13 @@ class BanditEncoder:
     A utility class for encoding features for multi-armed bandit problems.
     This class handles different encoding strategies for the arms and features.
     """
-    def __init__(self, n_arms: int, n_features: int, encoding: str = 'multi') -> None:
+    def __init__(self, n_arms: int, n_features: int, encoding: str) -> None:
         self.n_arms = n_arms
         self.n_features = n_features
         self.encoding = encoding
         
         if encoding == 'one-hot':
-            self.combined_dim = n_features + n_arms - 1
+            self.combined_dim = n_features + n_arms
         elif encoding == 'multi':
             self.combined_dim = n_features * n_arms
         elif encoding == 'forest':
@@ -51,14 +51,10 @@ class BanditEncoder:
         x_combined = np.zeros((total_arms, self.combined_dim))
 
         if self.encoding == 'one-hot':
-            raise NotImplementedError("One-hot encoding is not yet implemented.")
-            # Create treatment scenarios - one-hot encoded treatment options
-            action_options = np.zeros((self.n_arms, self.n_arms - 1))
-            if arm > 0:
-                action_options[arm, arm - 1] = 1
-            # Replicate x for each treatment scenario
-            x_repeated = np.tile(x, (self.n_arms, 1))
-            x_combined = np.hstack([x_repeated, action_options])
+            # One-hot encoded treatment options
+            for row_idx, arm in enumerate(range_arms):
+                x_combined[row_idx, :self.n_features] = x
+                x_combined[row_idx, self.n_features + arm] = 1
         elif self.encoding == 'multi':
             # Block structure approach (data_multi style)
             for row_idx, arm in enumerate(range_arms):
@@ -181,6 +177,9 @@ class BARTAgent(BanditAgent):
             return np.random.randint(self.n_arms)
         
         action_estimates = self._get_action_estimates(x)
+        if action_estimates.ndim > 1: # if LogisticBART, then we have two columns
+            # For LogisticBART, we only need the second column (the probability of success)
+            action_estimates = action_estimates[:, 1] 
         
         # Choose the arm with the highest predicted outcome
         return int(np.argmax(action_estimates))
@@ -230,11 +229,13 @@ class BARTAgent(BanditAgent):
             # Check if we have enough data for initial fit
             if self.cnt >= 20:
                 # Initial fit using all collected data
+                print(f"Fitting initial BART model with first {self.cnt} observations...", end="")
                 self.model.fit(
                     X=self.encoded_features, 
                     y=self.outcomes.flatten(),
                     quietly=True
                 )
+                print(" Done.")
                 self.is_model_fitted = True
                 
                 # Clear all data after initial fit since we don't need it anymore
@@ -271,6 +272,10 @@ class LogisticBARTAgent(BARTAgent):
                  n_trees: int = 200, 
                  random_state: int = 42,
                  encoding: str = 'native') -> None:
+        if encoding != 'native' and encoding != 'multi':
+            raise NotImplementedError("LogisticBARTAgent currently only supports 'native' encoding.")
+        if n_arms > 2 and encoding == 'native':
+            raise NotImplementedError("LogisticBARTAgent: native encoding currently only supports n_arms = 2.")
         super().__init__(n_arms, n_features, ndpost, nskip, nadd, n_trees, random_state, encoding)
         self.model = LogisticBART(
             n_trees=n_trees,
@@ -291,13 +296,10 @@ class MultiChainBARTAgent(BARTAgent):
                  random_state: int = 42,
                  encoding: str = '') -> None:
         if encoding == '':
-            if bart_class == DefaultBART:
-                encoding = 'multi'
-            elif bart_class == LogisticBART:
-                encoding = 'native'
+            encoding = 'multi' # Should be very carefull if you want to use 'native' encoding here
         super().__init__(n_arms, n_features, ndpost, nskip, nadd, n_trees, random_state, encoding)
         self.model = MultiChainBART(
-            n_ensembles=4,  # Number of BART ensembles
+            n_ensembles=n_ensembles,  # Number of BART ensembles
             bart_class=bart_class,
             random_state=42,
             n_trees=n_trees,
