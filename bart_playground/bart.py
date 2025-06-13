@@ -1,4 +1,3 @@
-import random
 from warnings import warn
 import numpy as np
 from typing import Optional, Callable
@@ -80,11 +79,15 @@ class BART:
         return self
     
     @property
+    def _trace_length(self):
+        return len(self.trace)
+    
+    @property
     def _range_post(self):
         """
         Get the range of posterior samples.
         """
-        total_iterations = len(self.trace)
+        total_iterations = self._trace_length
         if total_iterations < self.ndpost:
             raise ValueError(f"Not enough posterior samples: {total_iterations} < {self.ndpost} (provided ndpost).")
         return range(total_iterations - self.ndpost, total_iterations)
@@ -110,8 +113,8 @@ class BART:
         pred = np.zeros((X.shape[0]))
         # sample a k using the schedule
         k = self.sampler.generator.choice(
-            range(len(self.trace)), 
-            p=[schedule(k) for k in range(len(self.trace))]
+            range(self._trace_length), 
+            p=[schedule(k) for k in range(self._trace_length)]
         )
         y_eval = self.trace[k].evaluate(X)
         if backtransform:
@@ -464,108 +467,4 @@ class LogisticBART(BART):
         for k in range(labels.shape[1]):
             y_labels[:, k] = self.preprocessor.backtransform_y(labels[:, k])
         return y_labels
-    
-from joblib import Parallel, delayed    
-
-class MultiChainBART:
-    """
-    Multi-chain BART model that runs multiple BART chains.
-    This allows for embarrassing parallelism.
-    """
-    def __init__(self, n_ensembles, bart_class=DefaultBART, random_state=42, parallel=True, **kwargs):
-        # Don't call super().__init__ since we manage multiple instances
-        self.n_ensembles = n_ensembles
-        self.bart_class = bart_class
-        self.parallel = parallel
-
-        # Generate children random states
-        self.rng = np.random.default_rng(random_state)
-        random_states = [self.rng.integers(0, 2**32 - 1) for _ in range(n_ensembles)]
-        self.bart_instances = [bart_class(random_state=random_states[i], **kwargs) 
-                              for i in range(n_ensembles)]
-        
-        # Initialize BART attributes
-        self.is_fitted = False
-        self.ndpost = self.bart_instances[0].ndpost * n_ensembles  # Combined posterior samples
-        self.nskip = self.bart_instances[0].nskip
-        self.preprocessor = self.bart_instances[0].preprocessor
-        self.sampler = self.bart_instances[0].sampler  # Reference for compatibility
-        self.trace = []
-        self.data = None
-
-    def fit(self, X, y, quietly=False):
-        """Fit all BART instances."""
-        if not self.parallel:
-            for bart in self.bart_instances:
-                bart.fit(X, y, quietly=quietly)
-        else:
-            # Parallel fitting using joblib
-            Parallel(n_jobs=self.n_ensembles)(
-                delayed(bart.fit)(X, y, quietly=quietly) for bart in self.bart_instances
-            )
-        self.is_fitted = True
-        self.data = self.bart_instances[0].data  # All should have same preprocessed data
-        
-        # Combine traces for compatibility
-        self.trace = []
-        for bart in self.bart_instances:
-            self.trace.extend(bart.trace)
-    
-    def predict(self, X):
-        """Predict using all BART instances and average the results."""
-        preds = np.array([bart.predict(X) for bart in self.bart_instances])
-        return np.mean(preds, axis=0)
-    
-    def posterior_predict(self, X):
-        """
-        Get full posterior distribution from all instances.
-        Returns: Array of shape (n_samples, n_ensembles * ndpost_per_instance)
-        """
-        preds_list = [bart.posterior_predict(X) for bart in self.bart_instances]
-        return np.concatenate(preds_list, axis=1)
-    
-    def posterior_f(self, X, backtransform=True):
-        """
-        Get posterior distribution of f(x) from all instances.
-        Returns: Array of shape (n_samples, n_ensembles * ndpost_per_instance)
-        """
-        preds_list = [bart.posterior_f(X, backtransform=backtransform) for bart in self.bart_instances]
-        return np.concatenate(preds_list, axis=1)
-    
-    def posterior_sample(self, X, schedule, backtransform=True):
-        """
-        Get posterior sample from randomly selected instance and iteration.
-        """
-        # Randomly select an instance
-        instance_idx = self.rng.integers(0, self.n_ensembles)
-        return self.bart_instances[instance_idx].posterior_sample(X, schedule, backtransform)
-    
-    def predict_proba(self, X):
-        """For classification variants - predict class probabilities."""
-        if not hasattr(self.bart_instances[0], 'predict_proba'):
-            raise AttributeError(f"{self.bart_class.__name__} doesn't support predict_proba")
-        
-        probs = np.array([bart.predict_proba(X) for bart in self.bart_instances])
-        return np.mean(probs, axis=0)
-    
-    def posterior_predict_proba(self, X):
-        """For classification variants - get full posterior distribution of probabilities."""
-        if not hasattr(self.bart_instances[0], 'posterior_predict_proba'):
-            raise AttributeError(f"{self.bart_class.__name__} doesn't support posterior_predict_proba")
-        
-        prob_samples = [bart.posterior_predict_proba(X) for bart in self.bart_instances]
-        return np.concatenate(prob_samples, axis=1)
-    
-    def update_fit(self, X, y, add_ndpost=20, quietly=False):
-        """Update all BART instances with new data points."""
-        for bart in self.bart_instances:
-            bart.update_fit(X, y, add_ndpost=add_ndpost, quietly=quietly)
-        
-        # Update combined attributes
-        self.data = self.bart_instances[0].data
-        self.trace = []
-        for bart in self.bart_instances:
-            self.trace.extend(bart.trace)
-        
-        return self       
     

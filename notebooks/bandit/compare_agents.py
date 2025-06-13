@@ -1,4 +1,4 @@
-from bart_playground.bandit.bart_agent import BARTAgent, LogisticBARTAgent
+from bart_playground.bandit.bart_agent import BARTAgent, LogisticBARTAgent, MultiChainBARTAgent
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Any
@@ -6,10 +6,11 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 
 from bart_playground.bandit.ensemble_agent import EnsembleAgent
-from bart_playground.bandit.sim_util import simulate, Scenario, LinearScenario, LinearOffsetScenario, OffsetScenario, FriedmanScenario
+from bart_playground.bandit.sim_util import simulate, Scenario
 from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
 from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.agent import BanditAgent
+from bart_playground.bart import LogisticBART
 
 def class_to_agents(sim, scenario, agent_classes: List[Any]) -> Tuple[List[BanditAgent], List[str]]:
     """
@@ -49,6 +50,16 @@ def class_to_agents(sim, scenario, agent_classes: List[Any]) -> Tuple[List[Bandi
                 nskip=100,
                 ndpost=200,
                 nadd=5,
+                random_state=1000 + sim
+            )
+        elif agent_cls == MultiChainBARTAgent:
+            agent = MultiChainBARTAgent(
+                bart_class=LogisticBART,
+                n_arms=scenario.K,
+                n_features=scenario.P,
+                nskip=100,
+                ndpost=300,
+                nadd=1,
                 random_state=1000 + sim
             )
         elif agent_cls == EnsembleAgent:
