@@ -1,7 +1,8 @@
 import numpy as np
 from typing import Callable, List, Optional, Union, Dict, Any
 
-from ..bart import DefaultBART, LogisticBART, MultiChainBART
+from ..bart import DefaultBART, LogisticBART
+from ..mcbart import MultiChainBART
 from .agent import BanditAgent
 
 class BanditEncoder:
@@ -137,7 +138,7 @@ class BARTAgent(BanditAgent):
         return self.n_arms - 1
     
     def _default_schedule(self) -> Callable[[int], float]:
-        total_k = len(self.model.trace)
+        total_k = self.model._trace_length
         raw_prob = np.zeros(total_k)
         for i in range(total_k):
             if i + self.nadd < total_k:
@@ -283,15 +284,21 @@ class MultiChainBARTAgent(BARTAgent):
     """
     This agent can handle multiple chains of BART ensembles.
     """
-    def __init__(self, n_arms: int, n_features: int, 
+    def __init__(self, n_arms: int, n_features: int, n_ensembles: int = 4,
+                 bart_class: Callable = DefaultBART, 
                  ndpost: int = 1000, nskip: int = 100, nadd: int = 3,
                  n_trees: int = 200, 
                  random_state: int = 42,
-                 encoding: str = 'multi') -> None:
+                 encoding: str = '') -> None:
+        if encoding == '':
+            if bart_class == DefaultBART:
+                encoding = 'multi'
+            elif bart_class == LogisticBART:
+                encoding = 'native'
         super().__init__(n_arms, n_features, ndpost, nskip, nadd, n_trees, random_state, encoding)
         self.model = MultiChainBART(
             n_ensembles=4,  # Number of BART ensembles
-            bart_class=DefaultBART,
+            bart_class=bart_class,
             random_state=42,
             n_trees=n_trees,
             ndpost=ndpost,
