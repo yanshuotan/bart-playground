@@ -206,7 +206,7 @@ def simulate(scenario, agents, n_draws):
     """
     n_agents = len(agents)
     cum_regrets = np.zeros((n_draws, n_agents))
-    time_agents = np.zeros(n_agents)
+    time_agents = np.zeros((n_draws, n_agents))
     mem_agents = np.zeros(n_agents)
     
     for draw in tqdm(range(n_draws), desc="Simulating", miniters=1):
@@ -225,7 +225,7 @@ def simulate(scenario, agents, n_draws):
                 cum_regrets[draw, i] = cum_regrets[draw - 1, i] + inst_regret
             # Update agent's state with the chosen arm's data.
             agent.update_state(arm, x, u["reward"][arm])
-            time_agents[i] += time.time() - t0
+            time_agents[draw, i] = time.time() - t0
 
             # suppress memory usage for now
             mem_usage = 0 # asizeof.asizeof(agent)
