@@ -177,9 +177,10 @@ class BARTAgent(BanditAgent):
             return np.random.randint(self.n_arms)
         
         action_estimates = self._get_action_estimates(x)
-        if action_estimates.ndim > 1: # if LogisticBART, then we have two columns
-            # For LogisticBART, we only need the second column (the probability of success)
+        if action_estimates.ndim > 1 and action_estimates.shape[0] > 1:
+            # For LogisticBART 'multi', the shape is (n_arms, 2), we only need the second column (the probability of success)
             action_estimates = action_estimates[:, 1] 
+        # Note that for LogisticBART 'native', the shape is (1, n_arms) with n_arms=2, and we can use it directly
         
         # Choose the arm with the highest predicted outcome
         return int(np.argmax(action_estimates))
