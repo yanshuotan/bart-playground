@@ -2,12 +2,8 @@ import numpy as np
 from tqdm import tqdm
 import time
 import pandas as pd
+import math
 
-'''
-### Scenario Classes
-
-We define a base `Scenario` class and a `LinearScenario` subclass. The `generate_covariates` method produces a vector of features (here, sampled from a standard normal distribution), and the `reward_function` computes the expected reward for each arm and adds noise.
-'''
 class Scenario:
     def __init__(self, P, K, sigma2, random_generator=None):
         """
@@ -44,6 +40,10 @@ class Scenario:
         Must be implemented in subclasses.
         """
         raise NotImplementedError("This method should be implemented in subclasses.")
+    
+    @property
+    def max_draws(self):
+        return math.inf # Maximum number of draws for the scenario, default is infinity.
 
 class LinearScenario(Scenario):
     def __init__(self, P, K, sigma2, random_generator=None):
@@ -109,30 +109,6 @@ class FriedmanScenario(Scenario):
                       self.lambda_val * self.arm_offsets
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
-class NeuralScenario(Scenario):
-    def __init__(self, name='mushroom'):
-        from .NeuralTS.data_multi import Bandit_multi
-        self.data = Bandit_multi(name=name)
-        self.P = self.data.X.shape[1]
-        self.K = len(np.unique(self.data.y_arm))
-        
-    def generate_covariates(self):
-        cov = self.data.X[self.data.cursor, :].reshape(1, -1)
-        self.data.cursor += 1
-        return cov
-    
-    def reward_function(self, x):
-        # Check if the input x matches the current data point
-        x_cursor = self.data.cursor - 1
-        assert np.all(x == self.data.X[x_cursor, :].reshape(1, -1))
-        
-        reward = np.zeros(self.K)
-        reward[self.data.y_arm[x_cursor][0]] = 1
-        return {"outcome_mean": reward, "reward": reward}
-    
-    def finish(self):
-        return self.data.finish()
-
 from sklearn.datasets import fetch_openml
 from sklearn.preprocessing import normalize, OrdinalEncoder
 from sklearn.utils import shuffle
@@ -147,32 +123,44 @@ class OpenMLScenario(Scenario):
             # -1 in codes indicates NaN by pandas convention
             X[col] = X[col].cat.codes
         X = normalize(X)
-        self.X, self.y = shuffle(X, y, random_state=random_generator)
-        y_array = self.y.to_numpy().reshape(-1, 1)
+        self.X, y = shuffle(X, y, random_state=random_generator)
+        y_array = y.to_numpy().reshape(-1, 1)
         self.y_arm = OrdinalEncoder(
             dtype= int).fit_transform(y_array)
         self.P = self.X.shape[1]
         self.K = len(np.unique(self.y_arm))
         
-        self.cursor = 0
+        self._cursor = 0
         super().__init__(self.P, self.K, sigma2=0.0, random_generator=random_generator)
+        
+    def reshuffle(self, random_state=None):
+        """
+        Reshuffle the dataset and reset the cursor.
+        """
+        self.X, self.y_arm = shuffle(self.X, self.y_arm, random_state=random_state)
+        self._cursor = 0
     
     def generate_covariates(self):
-        cov = self.X[self.cursor, :].reshape(1, -1)
-        self.cursor += 1
+        cov = self.X[self._cursor, :].reshape(1, -1)
+        self._cursor += 1
         return cov
     
     def reward_function(self, x):
         # Check if the input x matches the current data point
-        x_cursor = self.cursor - 1
-        assert np.all(x == self.X[x_cursor, :].reshape(1, -1))
+        x_cursor = self._cursor - 1
+        if not np.all(x == self.X[x_cursor, :].reshape(1, -1)):
+            raise ValueError("Input x does not match the current data point in the OpenMLScenario.")
 
         reward = np.zeros(self.K)
         reward[self.y_arm[x_cursor, 0]] = 1
         return {"outcome_mean": reward, "reward": reward}
     
+    @property
+    def max_draws(self):
+        return self.X.shape[0]
+    
     def finish(self):
-        return self.cursor >= self.X.shape[0]
+        return self._cursor >= self.max_draws
 
 class Friedman2Scenario(Scenario):
     def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
@@ -197,22 +185,15 @@ class Friedman2Scenario(Scenario):
                       )
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
-'''
-### Simulation Function
-
-The `simulate` function takes a scenario, a list of agents, and the number of draws. For each draw:
-
-1. Generate covariates.
-2. Compute the outcome means and rewards.
-3. For each agent, choose an arm based on the current covariates.
-4. Update cumulative regret for the agent.
-5. Update the agent’s state with the observed reward.
-
-We use `tqdm` to track progress.
-'''
 def simulate(scenario, agents, n_draws):
     """
-    Simulate a bandit problem using the provided scenario and agents.
+    Simulate a bandit problem using the provided scenario and agents. The `simulate` function takes a scenario, a list of agents, and the number of draws. For each draw:
+
+    1. Generate covariates.
+    2. Compute the outcome means and rewards.
+    3. For each agent, choose an arm based on the current covariates.
+    4. Update cumulative regret for the agent.
+    5. Update the agent's state with the observed reward.
     
     Parameters:
         scenario: An instance of a Scenario subclass.

@@ -2,12 +2,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Dict, Callable
 from tqdm import tqdm
-from joblib import Parallel, delayed
+import ray
 
 from bart_playground.bandit.sim_util import simulate, Scenario
 from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
 from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.agent import BanditAgent
+
+@ray.remote
+def _run_single_simulation_remote(sim, scenario, agent_classes, class_to_agents, n_draws):
+    """
+    Remote function to run a single simulation with the given scenario and agents.
+    """
+    return _run_single_simulation(sim, scenario, agent_classes, class_to_agents, n_draws)
 
 def _run_single_simulation(sim, scenario, agent_classes, class_to_agents, n_draws):
     """
@@ -24,15 +31,19 @@ def _run_single_simulation(sim, scenario, agent_classes, class_to_agents, n_draw
         Tuple: (sim_index, regrets, computation_times)
     """
     # Create agents with different seeds for this simulation
-    sim_agents = class_to_agents(sim=sim, scenario=scenario, agent_classes=agent_classes)
+    sim_agents = class_to_agents(sim=sim, scenario_K=scenario.K, scenario_P=scenario.P, agent_classes=agent_classes)
     
+    if hasattr(scenario, 'reshuffle'):
+        print(f"Reshuffling scenario for simulation {sim}...")
+        scenario.reshuffle(random_state=42+sim)
+
     # Run simulation
     cum_regrets, time_agents, mem_agents = simulate(scenario, sim_agents, n_draws=n_draws)
     
     # Return results for this simulation
     return sim, cum_regrets, time_agents, sim_agents
 
-def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditAgent], agent_names: List[str], n_simulations: int = 10, n_draws: int = 500, n_jobs=6, class_to_agents: Callable = None):
+def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditAgent], agent_names: List[str], n_simulations: int = 10, n_draws: int = 500, parallel=True, class_to_agents: Callable = None):
     """
     Generate simulation data for multiple agents on a given scenario.
     
@@ -42,7 +53,7 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
         agent_names (List[str]): Names for each agent for display purposes
         n_simulations (int): Number of simulation runs
         n_draws (int): Number of draws per simulation
-        n_jobs (int): Number of parallel jobs to run. -1 means using all processors.
+        parallel (bool): Whether to run simulations in parallel using Ray
         
     Returns:
         Dict: Dictionary containing simulation results
@@ -50,15 +61,17 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
     n_agents = len(agents)
     all_regrets = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
     all_times = {name: np.zeros(n_simulations) for name in agent_names}
-    
-    if n_jobs != 1:
+
+    if parallel:
         # Run simulations in parallel
-        print(f"Running {n_simulations} simulations in parallel...")
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(_run_single_simulation)(
-                sim, scenario, agents, class_to_agents, n_draws
-            ) for sim in range(n_simulations) # tqdm(range(n_simulations), desc="Simulating")
-        )
+        print(f"Running {n_simulations} simulations in parallel using Ray...")
+        # Launch all simulation tasks
+        results_futures = [
+            _run_single_simulation_remote.remote(sim, scenario, agents, class_to_agents, n_draws)
+            for sim in range(n_simulations)
+        ]
+        # Wait for all tasks to complete and retrieve the results.
+        results = [ray.get(future) for future in tqdm(results_futures, desc="Simulating")]
     else:
         # Run simulations sequentially
         results = []
@@ -87,10 +100,10 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
     }
 
 
-def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulations: int = 10, n_draws: int = 500, 
+def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulations: int = 10, max_draws: int = 500, 
     agent_classes = [SillyAgent, LinearTSAgent, BCFAgent], 
     agent_names = ["Random", "LinearTS", "BCF"],
-    n_jobs=6,
+    parallel: bool = True,
     class_to_agents : Callable = None):
     """
     Compare multiple agents across different scenarios.
@@ -98,27 +111,40 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulation
     Args:
         scenarios (Dict[str, Scenario]): Dictionary of scenario name to scenario instance
         n_simulations (int): Number of simulations per scenario
-        n_draws (int): Number of draws per simulation
-        
+        max_draws (int): Max number of draws per simulation
+        parallel (bool): Whether to run simulations in parallel using Ray
+        agent_classes (List[BanditAgent]): List of agent classes to instantiate and test
+        agent_names (List[str]): Names for each agent for result dict keys
     Returns:
         Dict: Results for each scenario and agent
     """
-    # Define agents to compare
+    if parallel:
+        if ray.is_initialized():
+            ray.shutdown()
+        ray.init(ignore_reinit_error=True)
+        print("Ray initialized for parallel simulations.")
     
     results = {}
     
-    for scenario_name, scenario in scenarios.items():
-        print(f"\nEvaluating {scenario_name} scenario...")
-        scenario_results = generate_simulation_data_for_agents(
-            scenario=scenario,
-            agents=agent_classes,
-            agent_names=agent_names,
-            n_simulations=n_simulations,
-            n_draws=n_draws,
-            n_jobs=n_jobs,
-            class_to_agents=class_to_agents
-        )
-        results[scenario_name] = scenario_results
+    try:
+        for scenario_name, scenario in scenarios.items():
+            print(f"\nEvaluating {scenario_name} scenario...")
+            n_draws = int(min(max_draws, scenario.max_draws))
+            scenario_results = generate_simulation_data_for_agents(
+                scenario=scenario,
+                agents=agent_classes,
+                agent_names=agent_names,
+                n_simulations=n_simulations,
+                n_draws=n_draws,
+                parallel=parallel,
+                class_to_agents=class_to_agents
+            )
+            results[scenario_name] = scenario_results
+    finally:
+        # IMPORTANT: Shut down Ray when all work is finished.
+        if parallel and ray.is_initialized():
+            ray.shutdown()
+            print("Ray has been shut down.")
     
     return results
 
