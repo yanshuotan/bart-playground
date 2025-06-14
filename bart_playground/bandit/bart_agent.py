@@ -228,7 +228,10 @@ class BARTAgent(BanditAgent):
             self.cnt += 1
             
             # Check if we have enough data for initial fit
-            if self.cnt >= 20:
+            # For LogisticBART, we need less observations and more than one unique outcome
+            # For DefaultBART, we need more observations
+            criteria = self.cnt >= 10 and np.unique(self.outcomes).size > 1 if isinstance(self.model, LogisticBART) else self.cnt >= 20
+            if criteria:
                 # Initial fit using all collected data
                 print(f"Fitting initial BART model with first {self.cnt} observations...", end="")
                 self.model.fit(

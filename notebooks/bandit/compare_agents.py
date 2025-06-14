@@ -60,7 +60,7 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
     """
     n_agents = len(agents)
     all_regrets = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
-    all_times = {name: np.zeros(n_simulations) for name in agent_names}
+    all_times = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
 
     if parallel:
         # Run simulations in parallel
@@ -90,7 +90,7 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
         # Store results
         for i, name in enumerate(agent_names):
             all_regrets[name][sim, :] = cum_regrets[:, i]
-            all_times[name][sim] = time_agents[i]
+            all_times[name][sim, :] = time_agents[:, i]
         # all_agents.append(sim_agents)
 
     return {
@@ -207,13 +207,7 @@ def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: s
         
         if show_time:
             # Add computation time annotations
-            for agent_name, agent_times in times.items():
-                mean_time = np.mean(agent_times)
-                ax.annotate(f"{agent_name}: {mean_time:.2f}s", 
-                           xy=(0.5, 0.02 + list(times.keys()).index(agent_name) * 0.05),
-                           xycoords='axes fraction',
-                           ha='center', va='bottom',
-                           bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.3))
+            raise NotImplementedError("Computation time plotting not implemented yet.")
         
         ax.set_title(f"{scenario_name} Scenario", fontsize=14)
         ax.set_xlabel("Draw", fontsize=12)
@@ -257,6 +251,7 @@ def print_summary_results(results: Dict[str, Dict]):
         # Print computation times
         print("\nAverage computation times (seconds):")
         for agent_name, agent_times in times.items():
-            print(f"  {agent_name}: {np.mean(agent_times):.4f} (±{np.std(agent_times):.4f})")
+            agent_time = agent_times[:, -1]
+            print(f"  {agent_name}: {np.mean(agent_time):.4f} (±{np.std(agent_time):.4f})")
         
         print("\n" + "=" * 40)
