@@ -234,7 +234,17 @@ class BART:
             return temperature
         else:
             raise ValueError("Invalid temperature type ", type(temperature))
-    
+        
+    def clean_trace(self, k, keep_indices=True):
+        """
+        Clean the trace by removing the k-th element.
+        If keep_indices is True, it will set the k-th element to None and keep the originial indices.
+        If keep_indices is False, it will remove the k-th element from the trace.
+        """
+        if not keep_indices:
+            self.trace = [t for i, t in enumerate(self.trace) if i != k]
+        else:
+            self.trace[k] = None
 
 class DefaultBART(BART):
 

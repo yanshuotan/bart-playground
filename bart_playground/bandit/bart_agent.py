@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Callable, List, Optional, Union, Dict, Any
-
+import math
 from ..bart import DefaultBART, LogisticBART
 from ..mcbart import MultiChainBART
 from .agent import BanditAgent
@@ -133,17 +133,39 @@ class BARTAgent(BanditAgent):
         """
         return self.n_arms - 1
     
-    def _default_schedule(self) -> Callable[[int], float]:
+    def _data_cnt_for_it(self, iteration):
+        if iteration <= self.ndpost:
+            return 0
+        return (iteration - self.ndpost - 1) // self.nadd + 1
+    
+    def _mixing_bonus(self, iteration):
+       return 1.0 / (1.0 + np.exp(iteration))
+    
+    def _default_schedule_backup(self) -> Callable[[int], float]:
+        _epsilon = 1e-5
         total_k = self.model._trace_length
         raw_prob = np.zeros(total_k)
         for i in range(total_k):
-            if i + self.nadd < total_k:
-                raw_prob[i] = np.exp(i - (total_k - self.nadd))
-            else:
-                raw_prob[i] = 1
+            data_idx = self._data_cnt_for_it(i)
+            total_data_cnt = self._data_cnt_for_it(total_k)
+            # half life: log 2 / self.nadd 
+            raw_prob[i] = math.exp(self.nadd * (data_idx + 1 - total_data_cnt))
+            if data_idx == 0:
+                # Initial posterior samples have no mixing bonus
+                # and their probability share should be normalized by division by ndpost
+                raw_prob[i] /= (self.ndpost / self.nadd)
+            if raw_prob[i] < _epsilon:
+                raw_prob[i] = 0 # Use zero probability for very small values
+                self.model.trace[i] = None  # Set trace to None for very small probabilities
         prob = raw_prob / np.sum(raw_prob)
         prob_schedule = lambda k: float(prob[k])
         return prob_schedule
+    
+    def _default_schedule(self) -> Callable[[int], float]:
+        total_k = self.model._trace_length
+        raw_prob = self._mixing_bonus(np.arange(total_k))
+        raw_prob = raw_prob / np.sum(raw_prob)
+        return lambda k: raw_prob[k]
     
     def _get_action_estimates(self, x: Union[np.ndarray, List[float]]) -> np.ndarray:
         """
@@ -230,7 +252,8 @@ class BARTAgent(BanditAgent):
             # Check if we have enough data for initial fit
             # For LogisticBART, we need less observations and more than one unique outcome
             # For DefaultBART, we need more observations
-            criteria = self.cnt >= 10 and np.unique(self.outcomes).size > 1 if isinstance(self.model, LogisticBART) else self.cnt >= 20
+            is_logistic = (isinstance(self.model, LogisticBART)) or (isinstance(self.model, MultiChainBART) and self.model.bart_class == LogisticBART)
+            criteria = (self.cnt >= 10 and np.unique(self.outcomes).size > 1) if is_logistic else (self.cnt >= 20)
             if criteria:
                 # Initial fit using all collected data
                 print(f"Fitting initial BART model with first {self.cnt} observations...", end="")
@@ -301,6 +324,7 @@ class MultiChainBARTAgent(BARTAgent):
                  encoding: str = '') -> None:
         if encoding == '':
             encoding = 'multi' # Should be very carefull if you want to use 'native' encoding here
+        print(f"Using MultiChainBARTAgent with encoding: {encoding}")
         super().__init__(n_arms, n_features, ndpost, nskip, nadd, n_trees, random_state, encoding)
         self.model = MultiChainBART(
             n_ensembles=n_ensembles,  # Number of BART ensembles
@@ -311,4 +335,10 @@ class MultiChainBARTAgent(BARTAgent):
             nskip=nskip,
             proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1}
         )
+    
+    def clean_up(self) -> None:
+        """
+        Release resources held by the MultiChainBART agent.
+        """
+        self.model.clean_up()
         

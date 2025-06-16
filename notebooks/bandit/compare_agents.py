@@ -1,10 +1,12 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Dict, Callable
 from tqdm import tqdm
 import ray
+import pickle
 
-from bart_playground.bandit.sim_util import simulate, Scenario
+from bart_playground.bandit.sim_util import OpenMLScenario, simulate, Scenario
 from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
 from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.agent import BanditAgent
@@ -41,7 +43,7 @@ def _run_single_simulation(sim, scenario, agent_classes, class_to_agents, n_draw
     cum_regrets, time_agents, mem_agents = simulate(scenario, sim_agents, n_draws=n_draws)
     
     # Return results for this simulation
-    return sim, cum_regrets, time_agents, sim_agents
+    return sim, cum_regrets, time_agents #, sim_agents
 
 def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditAgent], agent_names: List[str], n_simulations: int = 10, n_draws: int = 500, parallel=True, class_to_agents: Callable = None):
     """
@@ -78,6 +80,14 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
         if n_simulations > 1:
             for sim in tqdm(range(n_simulations), desc="Simulating sequentially"):
                 result = _run_single_simulation(sim, scenario, agents, class_to_agents, n_draws)
+                internal_scenario_name = scenario.__class__.__name__
+                if isinstance(scenario, OpenMLScenario):
+                    internal_scenario_name = scenario.dataset_name
+                print(f"Saving temporary results for simulation {sim} in {internal_scenario_name}...")
+                dir_name = "test_results"
+                if os.path.exists(dir_name) is False:
+                    os.makedirs(dir_name)
+                pickle.dump(result, open(f"{dir_name}/temp_simulation_{internal_scenario_name}_{sim}.pkl", "wb"))
                 results.append(result)
         else:
             print("Running a single simulation...")
@@ -86,7 +96,7 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
     
     # all_agents = []
     # Process results from parallel jobs
-    for sim, cum_regrets, time_agents, sim_agents in results:
+    for sim, cum_regrets, time_agents in results:
         # Store results
         for i, name in enumerate(agent_names):
             all_regrets[name][sim, :] = cum_regrets[:, i]
@@ -149,13 +159,12 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulation
     return results
 
 
-def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: str = None, show_time = True):
+def plot_comparison_results(results: Dict[str, Dict], save_path: str = None, show_time = False):
     """
     Plot comparison results across all scenarios and agents.
     
     Args:
         results (Dict): Results from compare_agents_across_scenarios
-        n_draws (int): Number of draws per simulation
         save_path (str, optional): Path to save the figure
     """
     n_scenarios = len(results)
@@ -197,6 +206,7 @@ def plot_comparison_results(results: Dict[str, Dict], n_draws: int, save_path: s
             lower_ci = mean_regret - sd_regret # np.percentile(agent_regrets, 25, axis=0)
             upper_ci = mean_regret + sd_regret # np.percentile(agent_regrets, 75, axis=0)
             
+            n_draws = mean_regret.shape[0]
             # Plot mean regret
             ax.plot(range(n_draws), mean_regret, label=f"{agent_name}", 
                    color=agent_colors[agent_name], linewidth=2)
@@ -251,7 +261,7 @@ def print_summary_results(results: Dict[str, Dict]):
         # Print computation times
         print("\nAverage computation times (seconds):")
         for agent_name, agent_times in times.items():
-            agent_time = agent_times[:, -1]
+            agent_time = np.sum(agent_times, axis=1)
             print(f"  {agent_name}: {np.mean(agent_time):.4f} (±{np.std(agent_time):.4f})")
         
         print("\n" + "=" * 40)
