@@ -1,0 +1,27 @@
+# experiments/configs/temperature.yaml
+
+dgp: "linear_additive"  # Default DGP, override from command line e.g., python experiments/temperature.py dgp=friedman1
+
+dgp_params:
+  n_features: 10 # Adjust as needed for specific DGPs like friedman1 (needs >=5), dgp_2 (needs 7)
+  noise: 0.1
+
+bart_params:
+  ndpost: 10000     # Number of posterior samples to keep
+  nskip: 1000       # Number of burn-in samples to discard
+  n_trees: 200      # Number of trees in BART
+
+experiment_params:
+  main_seed: 1                       # Single seed to control all randomness
+  n_train_samples_list: [100, 200, 500, 1000, 10000] # List of training sample sizes to iterate over
+  n_test_samples: 1000      0             # Fixed number of test samples
+  n_chains: 10                          # Number of independent MCMC chains to run
+  temperatures: [1.0, 2.0, 5.0]         # Temperatures to test
+  plot_results: False                    # Whether to generate and save plots
+
+artifacts_dir: "experiments/outputs/temperature_runs" # Base directory for saving results and plots
+
+
+# To run:
+# python experiments/temperature.py dgp=linear
+# python experiments/temperature.py dgp=friedman1 dgp_params.n_features=5 
