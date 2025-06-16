@@ -115,8 +115,8 @@ class MultiChainBART:
         sample_future = chosen_actor.posterior_sample.remote(X, schedule)
         return ray.get(sample_future)
 
-    def shutdown(self):
+    def clean_up(self):
         for actor in self.bart_actors:
             ray.kill(actor)
-        ray.shutdown()
-        print("Ray has been shut down.")
+        print("Ray Actors have been cleaned up.")
+        

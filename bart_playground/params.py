@@ -565,6 +565,30 @@ class Tree:
         update_range = np.arange(old_n, new_n)
         self.update_n_append(dataX[update_range])
         self.update_outputs()
+        
+    def set_data_points(self, new_dataX):
+        """
+        Set new data points for the tree, replacing the existing data.
+
+        Parameters:
+            new_dataX: New feature data to set (np.ndarray)
+        """
+        if self.dataX is None:
+            # If no previous data, initialize with the new data
+            self.dataX = new_dataX
+            self._init_caching_arrays()
+            self.update_n()  # Update node indicators for the full tree
+            self.update_outputs()
+            return
+        # Currently suppose old data is a subset of new data
+        n_old = self.dataX.shape[0]
+        n_new = new_dataX.shape[0] - self.dataX.shape[0]
+        self.dataX = new_dataX
+        extended_indicators = np.full((n_new, len(self.vars)), False, dtype=bool)
+        extended_indicators[:, 0] = 1
+        self.node_indicators = np.vstack([self.node_indicators, extended_indicators])
+        self.update_n(X_range = np.arange(n_old, n_old+n_new))  # Update node indicators for the full tree
+        self.update_outputs()
 
     @property
     def vars_histogram(self):
@@ -633,6 +657,27 @@ class Parameters:
         for tree in new_trees:
             # Efficiently add new data points
             tree.update_data(X_new)
+        
+        # Create new parameters object with the updated trees and same global parameters
+        new_state = Parameters(
+            trees=new_trees, 
+            global_params=self.global_params.copy(),
+            cache=None  # Let Parameters initialize the cache, could be improved
+        )
+        
+        return new_state
+    
+    def set_data_points(self, X_new):
+        """
+        Sets new data points for the model, replacing the existing data in all trees.
+
+        Parameters:
+            X_new: New feature data to set (np.ndarray)
+        """
+        new_trees = self.trees.copy()  # Shallow copy the tree list
+        for tree in new_trees:
+            # Efficiently add new data points
+            tree.set_data_points(X_new)
         
         # Create new parameters object with the updated trees and same global parameters
         new_state = Parameters(

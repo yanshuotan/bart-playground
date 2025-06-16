@@ -129,6 +129,7 @@ class OpenMLScenario(Scenario):
             dtype= int).fit_transform(y_array)
         self.P = self.X.shape[1]
         self.K = len(np.unique(self.y_arm))
+        self.dataset_name = dataset
         
         self._cursor = 0
         super().__init__(self.P, self.K, sigma2=0.0, random_generator=random_generator)
@@ -139,6 +140,7 @@ class OpenMLScenario(Scenario):
         """
         self.X, self.y_arm = shuffle(self.X, self.y_arm, random_state=random_state)
         self._cursor = 0
+        print(f"Dataset {self.dataset_name} reshuffled with random state {random_state}.")
     
     def generate_covariates(self):
         cov = self.X[self._cursor, :].reshape(1, -1)
@@ -230,4 +232,9 @@ def simulate(scenario, agents, n_draws):
             # suppress memory usage for now
             mem_usage = 0 # asizeof.asizeof(agent)
             mem_agents[i] = mem_usage
+            
+    for agent in agents:
+        if hasattr(agent, 'clean_up'):
+            agent.clean_up()
+        
     return cum_regrets, time_agents, mem_agents
