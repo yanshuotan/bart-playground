@@ -24,7 +24,7 @@ class Sampler(ABC):
     """
     def __init__(self, prior, proposal_probs: dict,  
                  generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule(), 
-                 informed_max_samples: int = 10):
+                 multi_tries: int = 10):
         """
         Initialize the sampler with the given parameters.
 
@@ -48,7 +48,7 @@ class Sampler(ABC):
         self.n_iter = None
         self.proposals = proposal_probs
         self.temp_schedule = temp_schedule
-        self.informed_max_samples = informed_max_samples
+        self.multi_tries = multi_tries
         self.trace = []
         self.generator = generator
         # create cache for moves
@@ -298,13 +298,13 @@ class DefaultSampler(Sampler):
             del iter_trace
             return iter_current
         
-class InformedSampler(Sampler):
+class MultiSampler(Sampler):
     """
     Default implementation of the BART sampler.
     """
     def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100, 
-                 informed_max_samples: int = 10):
+                 multi_tries: int = 10):
         self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
@@ -312,7 +312,7 @@ class InformedSampler(Sampler):
         self.tree_prior = prior.tree_prior
         self.global_prior = prior.global_prior
         self.likelihood = prior.likelihood
-        super().__init__(prior, proposal_probs, generator, temp_schedule, informed_max_samples=informed_max_samples)
+        super().__init__(prior, proposal_probs, generator, temp_schedule, multi_tries=multi_tries)
 
     def get_init_state(self) -> Parameters:
         """
@@ -345,7 +345,7 @@ class InformedSampler(Sampler):
             move = self.sample_move()(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol,
                 likelihood=self.likelihood, tree_prior=self.tree_prior, data_y=self.data.y,
-                n_samples=self.informed_max_samples
+                n_samples=self.multi_tries
             )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)

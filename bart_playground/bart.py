@@ -2,7 +2,7 @@ import numpy as np
 from typing import Optional
 from scipy.stats import norm
 
-from .samplers import Sampler, DefaultSampler, InformedSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
+from .samplers import Sampler, DefaultSampler, MultiSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
 from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
 from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor
 
@@ -218,21 +218,21 @@ class DefaultBART(BART):
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
 
-class InformedBART(BART):
+class MultiBART(BART):
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
-                 random_state=42, temperature=1.0, informed_max_samples=10):
+                 random_state=42, temperature=1.0, multi_tries=10):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
                              eps_nu, specification, rng)
         temp_schedule = self._check_temperature(temperature)
-        sampler = InformedSampler(
+        sampler = MultiSampler(
             prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, 
-            temp_schedule=temp_schedule, informed_max_samples=informed_max_samples)
+            temp_schedule=temp_schedule, multi_tries=multi_tries)
         super().__init__(preprocessor, sampler, ndpost, nskip)
         
 class ProbitBART(BART):
