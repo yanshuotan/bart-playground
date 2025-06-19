@@ -99,7 +99,8 @@ class BARTAgent(BanditAgent):
         self.ndpost = ndpost
         self.nskip = nskip
         self.random_state = random_state
-        
+        self.rng = np.random.default_rng(self.random_state)
+
         self.encoding = encoding
         self.encoder = BanditEncoder(self.n_arms, self.n_features, self.encoding)
         self.combined_dim = self.encoder.combined_dim
@@ -196,7 +197,7 @@ class BARTAgent(BanditAgent):
         """
         # If the model is not fitted yet, choose a random arm
         if not self.is_model_fitted:
-            return np.random.randint(self.n_arms)
+            return self.rng.integers(0, self.n_arms)
         
         action_estimates = self._get_action_estimates(x)
         if action_estimates.ndim > 1 and action_estimates.shape[0] > 1:
@@ -324,7 +325,6 @@ class MultiChainBARTAgent(BARTAgent):
                  encoding: str = '') -> None:
         if encoding == '':
             encoding = 'multi' # Should be very carefull if you want to use 'native' encoding here
-        print(f"Using MultiChainBARTAgent with encoding: {encoding}")
         super().__init__(n_arms, n_features, ndpost, nskip, nadd, n_trees, random_state, encoding)
         self.model = MultiChainBART(
             n_ensembles=n_ensembles,  # Number of BART ensembles
