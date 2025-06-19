@@ -1,7 +1,4 @@
-# from functools import cache
-from math import e
-# from memory_profiler import profile
-from typing import Optional
+
 import numpy as np
 from typing import Optional
 from numpy.typing import NDArray
@@ -527,64 +524,38 @@ class Tree:
             return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.9f}" + \
                 f" (split, n = {n_output})"
 
-    def add_data_points(self, new_dataX):
+    def update_data(self, dataX: np.ndarray) -> None:
         """
-        Efficiently add new data points to an existing tree structure without
-        rebuilding the entire tree. This method updates only the necessary parts
-        of node_indicators, n, and evals arrays.
-        
-        Parameters:
-            new_dataX: New feature data to add (np.ndarray)
+        Replace the stored feature matrix, extend node-indicator arrays for any newly
+        appended rows, and refresh per-node counts & cached outputs.
+
+        Parameters
+        ----------
+        dataX : np.ndarray, shape (n_samples, n_features)
+            The complete feature matrix (old + new samples).
         """
-        if self.dataX is None:
-            # If no previous data, initialize with the new data
-            self.dataX = new_dataX
-            self._init_caching_arrays()
-            self.update_n()  # Update node indicators for the full tree
-            self.update_outputs()
-            return
-        
-        # Get dimensions
-        # n_old = self.dataX.shape[0]
-        n_new = new_dataX.shape[0]
-        
-        # Update data matrix
-        self.dataX = np.vstack([self.dataX, new_dataX])
-        
-        # Extend node_indicators array
-        extended_indicators = np.full((n_new, len(self.vars)), False, dtype=bool)
-        extended_indicators[:, 0] = 1
-        self.node_indicators = np.vstack([self.node_indicators, extended_indicators])
-        self.update_n()   # Update node indicators for new data, could be improved below
-        # self.update_n(X_range = range(n_old, n_old+n_new))
-        
-        # Update evaluations, could be improved
+        old_n = 0 if self.dataX is None else self.dataX.shape[0]
+        new_n = dataX.shape[0]
+        n_new = new_n - old_n
+
+        self.dataX = dataX
+
+        # Update node-indicators
+        if old_n == 0:
+            # first time: init
+            self._init_caching_arrays() 
+        else:
+            # extending existing indicators
+            cols = self.node_indicators.shape[1]
+            new_inds = np.zeros((n_new, cols), dtype=bool)
+            new_inds[:, 0] = True         # i.e. all new samples start at root
+            self.node_indicators = np.vstack([self.node_indicators, new_inds])
+            
+        # Refresh counts & outputs only for the affected rows
+        update_range = np.arange(old_n, new_n)
+        self.update_n(X_range=update_range)
         self.update_outputs()
         
-    def set_data_points(self, new_dataX):
-        """
-        Set new data points for the tree, replacing the existing data.
-
-        Parameters:
-            new_dataX: New feature data to set (np.ndarray)
-        """
-        if self.dataX is None:
-            # If no previous data, initialize with the new data
-            self.dataX = new_dataX
-            self._init_caching_arrays()
-            self.update_n()  # Update node indicators for the full tree
-            self.update_outputs()
-            return
-        # Currently suppose old data is a subset of new data
-        n_old = self.dataX.shape[0]
-        n_new = new_dataX.shape[0] - self.dataX.shape[0]
-        self.dataX = new_dataX
-        extended_indicators = np.full((n_new, len(self.vars)), False, dtype=bool)
-        extended_indicators[:, 0] = 1
-        self.node_indicators = np.vstack([self.node_indicators, extended_indicators])
-        self.update_n(X_range = np.arange(n_old, n_old+n_new))  # Update node indicators for the full tree
-        self.update_outputs()
-
 class Parameters:
     """
     Represents the parameters of the BART model.
@@ -633,45 +604,18 @@ class Parameters:
         return Parameters(trees=copied_trees, 
                           global_params=self.global_params.copy(), # shallow copy suffices
                           cache=self.cache)
-
-    def add_data_points(self, X_new):
-        """
-        Rebuilds the MCMC state to accommodate the new data by efficiently updating
-        the existing tree structures with the new data points.
-        
-        Parameters:
-            current_state: The current MCMC state (Parameters object)
-            X_new: New feature data to add (np.ndarray)
-            
-        Returns:
-            A new Parameters object with updated caches for the new data.
-            Caution: This method shallow copies the trees.
-        """
-        new_trees = self.trees.copy()  # Shallow copy the tree list
-        for tree in new_trees:
-            # Efficiently add new data points
-            tree.add_data_points(X_new)
-        
-        # Create new parameters object with the updated trees and same global parameters
-        new_state = Parameters(
-            trees=new_trees, 
-            global_params=self.global_params.copy(),
-            cache=None  # Let Parameters initialize the cache, could be improved
-        )
-        
-        return new_state
     
-    def set_data_points(self, X_new):
+    def update_data(self, X_new):
         """
-        Sets new data points for the model, replacing the existing data in all trees.
+        Sets new data points for the model, replacing the existing data in all trees and re-calculating the cache.
 
         Parameters:
-            X_new: New feature data to set (np.ndarray)
+            X_new: New feature data to set (np.ndarray), including both old and new samples.
         """
         new_trees = self.trees.copy()  # Shallow copy the tree list
         for tree in new_trees:
             # Efficiently add new data points
-            tree.set_data_points(X_new)
+            tree.update_data(X_new)
         
         # Create new parameters object with the updated trees and same global parameters
         new_state = Parameters(

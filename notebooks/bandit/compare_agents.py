@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import List, Dict, Callable
+from typing import List, Dict, Callable, Tuple, Any
 from tqdm import tqdm
 import ray
 import pickle
@@ -11,48 +11,75 @@ from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
 from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.agent import BanditAgent
 
+AgentSpec = Tuple[str, Any, Dict[str, Any]]
+
+def instantiate_agents(sim: int, scenario_K: int,
+                       scenario_P: int, specs: List[AgentSpec]) -> List[Any]:
+    """
+    Instantiate agents from specs; offset 'random_state' when provided.
+
+    Args:
+        sim: current simulation index (to set random_state)
+        scenario_K: number of arms
+        scenario_P: number of features
+        specs: list of (agent_name, AgentClass, default_kwargs)
+
+    Returns:
+        A list of instantiated BanditAgent objects.
+    """
+    agents = []
+    for name, cls, base_kwargs in specs:
+        kwargs = base_kwargs.copy()
+        kwargs['n_arms'] = scenario_K
+        kwargs['n_features'] = scenario_P
+
+        # offset seed if provided
+        if 'random_state' in base_kwargs:
+            kwargs['random_state'] = base_kwargs['random_state'] + sim
+
+        agents.append(cls(**kwargs))
+    return agents
+
 @ray.remote
-def _run_single_simulation_remote(sim, scenario, agent_classes, class_to_agents, n_draws):
+def _run_single_simulation_remote(sim, scenario, agent_specs, n_draws):
     """
     Remote function to run a single simulation with the given scenario and agents.
     """
-    return _run_single_simulation(sim, scenario, agent_classes, class_to_agents, n_draws)
+    return _run_single_simulation(sim, scenario, agent_specs, n_draws)
 
-def _run_single_simulation(sim, scenario, agent_classes, class_to_agents, n_draws):
+def _run_single_simulation(sim, scenario, agent_specs, n_draws):
     """
     Run a single simulation with the given scenario and agents.
     
     Args:
         sim (int): Simulation number (used for random seed)
         scenario (Scenario): The scenario instance to use for simulation
-        agent_classes (List): List of agent classes to instantiate
-        agent_names (List[str]): Names for each agent
+        agent_specs (List[AgentSpec]): Specifications for each agent
         n_draws (int): Number of draws per simulation
         
     Returns:
         Tuple: (sim_index, regrets, computation_times)
     """
     # Create agents with different seeds for this simulation
-    sim_agents = class_to_agents(sim=sim, scenario_K=scenario.K, scenario_P=scenario.P, agent_classes=agent_classes)
-    
-    if hasattr(scenario, 'reshuffle'):
-        print(f"Reshuffling scenario for simulation {sim}...")
-        scenario.reshuffle(random_state=42+sim)
+    sim_agents = instantiate_agents(sim, scenario.K, scenario.P, agent_specs)
+
+    if hasattr(scenario, 'shuffle'):
+        print(f"Shuffling scenario for simulation {sim} with random state {42+sim}...")
+        scenario.shuffle(random_state=42+sim)
 
     # Run simulation
     cum_regrets, time_agents, mem_agents = simulate(scenario, sim_agents, n_draws=n_draws)
     
     # Return results for this simulation
-    return sim, cum_regrets, time_agents #, sim_agents
+    return sim, cum_regrets, time_agents
 
-def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditAgent], agent_names: List[str], n_simulations: int = 10, n_draws: int = 500, parallel=True, class_to_agents: Callable = None):
+def generate_simulation_data_for_agents(scenario: Scenario, agent_specs: List[AgentSpec], n_simulations: int = 10, n_draws: int = 500, parallel=True):
     """
     Generate simulation data for multiple agents on a given scenario.
     
     Args:
         scenario (Scenario): The scenario instance to use for simulation
-        agents (List[BanditAgent]): List of agent classes to instantiate and test
-        agent_names (List[str]): Names for each agent for display purposes
+        agent_specs (List[AgentSpec]): Specifications for each agent
         n_simulations (int): Number of simulation runs
         n_draws (int): Number of draws per simulation
         parallel (bool): Whether to run simulations in parallel using Ray
@@ -60,7 +87,7 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
     Returns:
         Dict: Dictionary containing simulation results
     """
-    n_agents = len(agents)
+    agent_names = [name for name, _, _ in agent_specs]
     all_regrets = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
     all_times = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
 
@@ -69,7 +96,7 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
         print(f"Running {n_simulations} simulations in parallel using Ray...")
         # Launch all simulation tasks
         results_futures = [
-            _run_single_simulation_remote.remote(sim, scenario, agents, class_to_agents, n_draws)
+            _run_single_simulation_remote.remote(sim, scenario, agent_specs, n_draws)
             for sim in range(n_simulations)
         ]
         # Wait for all tasks to complete and retrieve the results.
@@ -79,7 +106,7 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
         results = []
         if n_simulations > 1:
             for sim in tqdm(range(n_simulations), desc="Simulating sequentially"):
-                result = _run_single_simulation(sim, scenario, agents, class_to_agents, n_draws)
+                result = _run_single_simulation(sim, scenario, agent_specs, n_draws)
                 internal_scenario_name = scenario.__class__.__name__
                 if isinstance(scenario, OpenMLScenario):
                     internal_scenario_name = scenario.dataset_name
@@ -91,7 +118,7 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
                 results.append(result)
         else:
             print("Running a single simulation...")
-            result = _run_single_simulation(0, scenario, agents, class_to_agents, n_draws)
+            result = _run_single_simulation(0, scenario, agent_specs, n_draws)
             results.append(result)
     
     # all_agents = []
@@ -110,11 +137,9 @@ def generate_simulation_data_for_agents(scenario: Scenario, agents: List[BanditA
     }
 
 
-def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulations: int = 10, max_draws: int = 500, 
-    agent_classes = [SillyAgent, LinearTSAgent, BCFAgent], 
-    agent_names = ["Random", "LinearTS", "BCF"],
-    parallel: bool = True,
-    class_to_agents : Callable = None):
+def compare_agents_across_scenarios(scenarios: Dict[str, Scenario],
+    agent_specs: List[AgentSpec], n_simulations: int = 10, 
+    max_draws: int = 500, parallel: bool = True):
     """
     Compare multiple agents across different scenarios.
     
@@ -123,8 +148,7 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulation
         n_simulations (int): Number of simulations per scenario
         max_draws (int): Max number of draws per simulation
         parallel (bool): Whether to run simulations in parallel using Ray
-        agent_classes (List[BanditAgent]): List of agent classes to instantiate and test
-        agent_names (List[str]): Names for each agent for result dict keys
+        agent_specs (List[AgentSpec]): Specifications for each agent
     Returns:
         Dict: Results for each scenario and agent
     """
@@ -142,12 +166,10 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario], n_simulation
             n_draws = int(min(max_draws, scenario.max_draws))
             scenario_results = generate_simulation_data_for_agents(
                 scenario=scenario,
-                agents=agent_classes,
-                agent_names=agent_names,
+                agent_specs=agent_specs,
                 n_simulations=n_simulations,
                 n_draws=n_draws,
-                parallel=parallel,
-                class_to_agents=class_to_agents
+                parallel=parallel
             )
             results[scenario_name] = scenario_results
     finally:

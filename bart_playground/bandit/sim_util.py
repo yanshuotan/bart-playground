@@ -122,25 +122,29 @@ class OpenMLScenario(Scenario):
         for col in X.select_dtypes('category'):
             # -1 in codes indicates NaN by pandas convention
             X[col] = X[col].cat.codes
-        X = normalize(X)
-        self.X, y = shuffle(X, y, random_state=random_generator)
-        y_array = y.to_numpy().reshape(-1, 1)
-        self.y_arm = OrdinalEncoder(
-            dtype= int).fit_transform(y_array)
-        self.P = self.X.shape[1]
-        self.K = len(np.unique(self.y_arm))
+        X_arr = normalize(X)
+        y_arr = y.to_numpy().reshape(-1, 1)
+        # Encode categorical labels as integers
+        y_encoded = OrdinalEncoder(dtype=int).fit_transform(y_arr)
+        
+        self.original_X = X_arr.copy()
+        self.original_y = y_encoded.copy()
+
+        self.P = X_arr.shape[1]
+        self.K = len(np.unique(y_encoded))
         self.dataset_name = dataset
-        
-        self._cursor = 0
+
+        self.X, self.y = X_arr, y_encoded
         super().__init__(self.P, self.K, sigma2=0.0, random_generator=random_generator)
+        self.shuffle(random_state=random_generator)
         
-    def reshuffle(self, random_state=None):
+    def shuffle(self, random_state=None):
         """
-        Reshuffle the dataset and reset the cursor.
+        Shuffle the dataset and reset the cursor.
         """
-        self.X, self.y_arm = shuffle(self.X, self.y_arm, random_state=random_state)
+        self.X, self.y = shuffle(self.original_X, self.original_y, random_state=random_state)
         self._cursor = 0
-        print(f"Dataset {self.dataset_name} reshuffled with random state {random_state}.")
+        print(f"Dataset {self.dataset_name} shuffled with random state {random_state}.")
     
     def generate_covariates(self):
         cov = self.X[self._cursor, :].reshape(1, -1)
@@ -154,7 +158,7 @@ class OpenMLScenario(Scenario):
             raise ValueError("Input x does not match the current data point in the OpenMLScenario.")
 
         reward = np.zeros(self.K)
-        reward[self.y_arm[x_cursor, 0]] = 1
+        reward[self.y[x_cursor, 0]] = 1
         return {"outcome_mean": reward, "reward": reward}
     
     @property
