@@ -1,4 +1,4 @@
-from typing import Optional
+
 import numpy as np
 from typing import Optional
 from numpy.typing import NDArray
@@ -116,8 +116,8 @@ class Tree:
         # Define the basic tree parameters.
         vars = np.full(8, -2, dtype=int)  # -2 represents an inexistent node
         vars[0] = -1                      # -1 represents a leaf node
-        thresholds = np.full(8, np.nan, dtype=float)
-        leaf_vals = np.full(8, np.nan, dtype=float)
+        thresholds = np.full(8, np.nan, dtype=np.float32)
+        leaf_vals = np.full(8, np.nan, dtype=np.float32)
         leaf_vals[0] = 0                   # Initialize the leaf value
 
         new_tree = cls(dataX, vars, thresholds, leaf_vals, n = None, node_indicators = None, evals = None)
@@ -225,12 +225,12 @@ class Tree:
         self.vars = new_vars
 
         # Resize split array
-        new_thresholds = np.full(new_length, np.nan, dtype=float)
+        new_thresholds = np.full(new_length, np.nan, dtype=np.float32)
         new_thresholds[:len(self.thresholds)] = self.thresholds
         self.thresholds = new_thresholds
 
         # Resize leaf_vals array
-        new_leaf_vals = np.full(new_length, np.nan, dtype=float)
+        new_leaf_vals = np.full(new_length, np.nan, dtype=np.float32)
         new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
         self.leaf_vals = new_leaf_vals
 
@@ -266,8 +266,8 @@ class Tree:
             self.n = self.n[:half_size]
             self.node_indicators = self.node_indicators[:, :half_size]
 
-    def split_leaf(self, node_id: int, var: int, threshold: float, left_val: float=np.nan, 
-                   right_val: float=np.nan):
+    def split_leaf(self, node_id: int, var: int, threshold: np.float32, left_val: np.float32=np.float32(np.nan), 
+                   right_val: np.float32 = np.float32(np.nan)):
         """
         Split a leaf node into two child nodes.
 
@@ -524,40 +524,38 @@ class Tree:
             return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.9f}" + \
                 f" (split, n = {n_output})"
 
-    def add_data_points(self, new_dataX):
+    def update_data(self, dataX: np.ndarray) -> None:
         """
-        Efficiently add new data points to an existing tree structure without
-        rebuilding the entire tree. This method updates only the necessary parts
-        of node_indicators, n, and evals arrays.
-        
-        Parameters:
-            new_dataX: New feature data to add (np.ndarray)
-        """
-        if self.dataX is None:
-            # If no previous data, initialize with the new data
-            self.dataX = new_dataX
-            self._init_caching_arrays()
-            self.update_n()  # Update node indicators for the full tree
-            self.update_outputs()
-            return
-        
-        # Get dimensions
-        # n_old = self.dataX.shape[0]
-        n_new = new_dataX.shape[0]
-        
-        # Update data matrix
-        self.dataX = np.vstack([self.dataX, new_dataX])
-        
-        # Extend node_indicators array
-        extended_indicators = np.full((n_new, len(self.vars)), False, dtype=bool)
-        extended_indicators[:, 0] = 1
-        self.node_indicators = np.vstack([self.node_indicators, extended_indicators])
-        self.update_n()   # Update node indicators for new data, could be improved below
-        # self.update_n(X_range = range(n_old, n_old+n_new))
-        
-        # Update evaluations, could be improved
-        self.update_outputs()
+        Replace the stored feature matrix, extend node-indicator arrays for any newly
+        appended rows, and refresh per-node counts & cached outputs.
 
+        Parameters
+        ----------
+        dataX : np.ndarray, shape (n_samples, n_features)
+            The complete feature matrix (old + new samples).
+        """
+        old_n = 0 if self.dataX is None else self.dataX.shape[0]
+        new_n = dataX.shape[0]
+        n_new = new_n - old_n
+
+        self.dataX = dataX
+
+        # Update node-indicators
+        if old_n == 0:
+            # first time: init
+            self._init_caching_arrays() 
+        else:
+            # extending existing indicators
+            cols = self.node_indicators.shape[1]
+            new_inds = np.zeros((n_new, cols), dtype=bool)
+            new_inds[:, 0] = True         # i.e. all new samples start at root
+            self.node_indicators = np.vstack([self.node_indicators, new_inds])
+            
+        # Refresh counts & outputs only for the affected rows
+        update_range = np.arange(old_n, new_n)
+        self.update_n(X_range=update_range)
+        self.update_outputs()
+        
 class Parameters:
     """
     Represents the parameters of the BART model.
@@ -606,24 +604,18 @@ class Parameters:
         return Parameters(trees=copied_trees, 
                           global_params=self.global_params.copy(), # shallow copy suffices
                           cache=self.cache)
-
-    def add_data_points(self, X_new):
+    
+    def update_data(self, X_new):
         """
-        Rebuilds the MCMC state to accommodate the new data by efficiently updating
-        the existing tree structures with the new data points.
-        
+        Sets new data points for the model, replacing the existing data in all trees and re-calculating the cache.
+
         Parameters:
-            current_state: The current MCMC state (Parameters object)
-            X_new: New feature data to add (np.ndarray)
-            
-        Returns:
-            A new Parameters object with updated caches for the new data.
-            Caution: This method shallow copies the trees.
+            X_new: New feature data to set (np.ndarray), including both old and new samples.
         """
         new_trees = self.trees.copy()  # Shallow copy the tree list
         for tree in new_trees:
             # Efficiently add new data points
-            tree.add_data_points(X_new)
+            tree.update_data(X_new)
         
         # Create new parameters object with the updated trees and same global parameters
         new_state = Parameters(
