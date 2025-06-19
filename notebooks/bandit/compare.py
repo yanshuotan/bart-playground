@@ -8,56 +8,52 @@
 #       format_name: percent
 #       format_version: '1.3'
 #       jupytext_version: 1.17.2
+#   kernelspec:
+#     display_name: bartpg
+#     language: python
+#     name: python3
 # ---
 
 # %% [markdown]
 # # Comparing Bandit Agents
 #
-# This notebook compares the performance of different bandit agents.
+# The notebook (`compare.ipynb`) compares the performance of different bandit agents. The `compare.py` script is for command-line execution. They are automatically paired using **jupytext**. 
 
 # %% [markdown]
 # ### Imports
 
 # %%
-from ast import arg
-import warnings
+import warnings, logging
 warnings.filterwarnings('ignore')
 
 import numpy as np
 import os, sys
+from typing import List
+import multiprocessing
+
+cores =  multiprocessing.cpu_count() - 1
 
 from bart_playground.bandit.sim_util import *
 from compare_agents import (
-    AgentSpec, compare_agents_across_scenarios, print_summary_results, plot_comparison_results
+    AgentSpec, compare_agents_across_scenarios, print_summary_results, plot_comparison_results,
+    _ca_logger
 )
 # from bart_playground.bandit.rome.rome_scenarios import HomogeneousScenario, NonlinearScenario
 
 # %%
-# Define experiment parameters
 from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
 from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.ensemble_agent import EnsembleAgent
 from bart_playground.bandit.me_agents import HierTSAgent, LinearTSAgent2, LinearUCBAgent, METSAgent
 from bart_playground.bandit.bart_agent import BARTAgent, LogisticBARTAgent, DefaultBARTAgent, MultiChainBARTAgent
-# from bart_playground.bandit.neural_ts_agent import NeuralTSDiagAgent
-
-import multiprocessing
-
 from bart_playground.bart import LogisticBART
-
-cores =  multiprocessing.cpu_count() - 1
-
-# %%
-from typing import List, Tuple, Any
-from bart_playground.bandit.agent import BanditAgent
+# from bart_playground.bandit.neural_ts_agent import NeuralTSDiagAgent
 
 # %% [markdown]
 # ## Tunable Parameters
 
 # %%
 # Create test scenarios
-np.random.seed(0)
-    
 scenario_factories = {
     # "Linear": lambda: LinearScenario(P=4, K=3, sigma2=1.0),
     # "LinearOffset": lambda: LinearOffsetScenario(P=4, K=3, sigma2=1.0),
@@ -89,8 +85,6 @@ scenarios = {key: scenario_factories[key]() for key in selected_keys}
 rep_dataset = selected_keys[0]
 log_encoding = 'native' if rep_dataset in ['Adult', 'Magic', 'Mushroom'] else 'multi' 
 
-np.random.seed(0)
-
 # import torch
 # torch.manual_seed(0)
 # torch.cuda.manual_seed_all(42)
@@ -113,7 +107,7 @@ all_agent_specs: List[AgentSpec] = [
     ("MCBART",     MultiChainBARTAgent,{
         'bart_class': LogisticBART,
         'n_ensembles': 4,
-        'n_trees': 100,
+        'n_trees': 50,
         'nskip': 50,
         'ndpost': 50,
         'nadd': 2,
@@ -134,21 +128,25 @@ all_agent_specs: List[AgentSpec] = [
     # ("IntelligentPooling", IntelligentPoolingAgent, {'featurize':_featurize, 't_max':n_draws}),
 ]
 # %%
-
 # Filter agents to include only those we want to test
 agent_specs = [agent for agent in all_agent_specs if agent[0] in ["MCBART", "LinearTS"]]
 
 # %%
-n_simulations = 1  # Number of simulations per scenario
-max_draws = 300      # Number of draws per simulation
+n_simulations = 3  # Number of simulations per scenario
+max_draws = 200      # Number of draws per simulation
+
+results_dir = "./results/agent_comparison"
+os.makedirs(results_dir, exist_ok=True)
 
 def call_func():
     return compare_agents_across_scenarios(
         scenarios=scenarios,
         agent_specs=agent_specs,
-        n_simulations=n_simulations,
+        sim_indices=[0, 1],
         max_draws=max_draws,
-        parallel=False
+        parallel=False,
+        save_dir=results_dir,
+        log_to_file=True
     )
 
 # %%
@@ -160,26 +158,17 @@ results = call_func()
 # %%
 print_summary_results(results)
 
-# %%
-key, value = next(iter(results.items()))
-internal_key, internal_value = next(iter(value['times'].items()))
-n_draws = internal_value.shape[1]
-
 # %% [markdown]
 # ## Visualize Results
 #
 # Finally, let's visualize the cumulative regret for each agent across scenarios.
 
 # %%
-# Create results directory if it doesn't exist
-results_dir = "./results/agent_comparison_test"
-if not os.path.exists(results_dir):
-    os.makedirs(results_dir)
-
 import pickle
 appendix_name = list(scenarios.keys())[0]  # Use the first scenario name as appendix
 result_filename = os.path.join(results_dir, f"result_{appendix_name}.pkl")
 pickle.dump(results, open(result_filename, "wb"))
+_ca_logger.info(f"Results saved to {result_filename}")
 
 # %%
 results = pickle.load(file=open(result_filename, "rb"))
@@ -187,6 +176,6 @@ results = pickle.load(file=open(result_filename, "rb"))
 # Plot results and save to file
 plot_comparison_results(
     results=results,
-    save_path=f"{results_dir}/agent_comparison_results_{appendix_name}.png",
-    show_time=False
+    save_loc=f"{results_dir}/agent_comparison_results_{appendix_name}.png"
 )
+_ca_logger.info(f"Plot saved to {results_dir}/agent_comparison_results_{appendix_name}.png")

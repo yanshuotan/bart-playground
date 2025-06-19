@@ -1,8 +1,12 @@
+from typing import Optional, Union
 import numpy as np
 from tqdm import tqdm
-import time
+import time, logging
 import pandas as pd
 import math
+from sklearn.datasets import fetch_openml
+from sklearn.preprocessing import normalize, OrdinalEncoder
+from sklearn.utils import shuffle
 
 class Scenario:
     def __init__(self, P, K, sigma2, random_generator=None):
@@ -11,12 +15,12 @@ class Scenario:
             P (int): Number of covariates (features).
             K (int): Number of arms (including control).
             sigma2 (float): Noise variance.
-            random_generator: Random number generator instance. If None, np.random is used.
+            random_generator: Random number generator instance. If None, np.random.default_rng is used.
         """
         self.P = P
         self.K = K
         self.sigma2 = sigma2
-        self.rng = random_generator if random_generator is not None else np.random
+        self.rng = random_generator if random_generator is not None else np.random.default_rng()
         self.init_params()
 
     def init_params(self):
@@ -26,7 +30,15 @@ class Scenario:
         """
         Set the random seed for reproducibility.
         """
-        self.rng.seed(seed)
+        self.rng = np.random.default_rng(seed)
+
+    def shuffle(self, random_state=None):
+        """
+        Shuffle the scenario and reset parameters. Default implementation just reinitializes.
+        """
+        if random_state is not None:
+            self.set_seed(random_state)
+        self.init_params()
 
     def generate_covariates(self):
         # Generate a vector of P covariates (features) sampled from a normal distribution.
@@ -44,6 +56,10 @@ class Scenario:
     @property
     def max_draws(self):
         return math.inf # Maximum number of draws for the scenario, default is infinity.
+    
+    @property
+    def rng_state(self):
+        return self.rng.bit_generator.state
 
 class LinearScenario(Scenario):
     def __init__(self, P, K, sigma2, random_generator=None):
@@ -109,11 +125,8 @@ class FriedmanScenario(Scenario):
                       self.lambda_val * self.arm_offsets
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
-from sklearn.datasets import fetch_openml
-from sklearn.preprocessing import normalize, OrdinalEncoder
-from sklearn.utils import shuffle
 class OpenMLScenario(Scenario):
-    def __init__(self, dataset='mushroom', version=1, random_generator=None):
+    def __init__(self, dataset='mushroom', version=1, random_generator:Union[np.random.Generator, int, None]=None):
         X, y = fetch_openml(dataset, version=version, return_X_y=True)
         # type annotations
         X : pd.DataFrame
@@ -130,22 +143,25 @@ class OpenMLScenario(Scenario):
         self.original_X = X_arr.copy()
         self.original_y = y_encoded.copy()
 
-        self.P = X_arr.shape[1]
-        self.K = len(np.unique(y_encoded))
+        P = X_arr.shape[1]
+        K = len(np.unique(y_encoded))
         self.dataset_name = dataset
 
-        self.X, self.y = X_arr, y_encoded
-        super().__init__(self.P, self.K, sigma2=0.0, random_generator=random_generator)
-        self.shuffle(random_state=random_generator)
-        
-    def shuffle(self, random_state=None):
-        """
-        Shuffle the dataset and reset the cursor.
-        """
+        # Use the provided random_generator or create one with the seed
+        if isinstance(random_generator, np.random.Generator):
+            self.rng = random_generator
+        elif isinstance(random_generator, int):
+            self.rng = np.random.default_rng(random_generator)
+        else:
+            self.rng = np.random.default_rng()
+
+        super().__init__(P, K, sigma2=0.0, random_generator=self.rng)
+
+    def init_params(self):
+        random_state = self.rng.integers(0, 2**31 - 1)
         self.X, self.y = shuffle(self.original_X, self.original_y, random_state=random_state)
         self._cursor = 0
-        print(f"Dataset {self.dataset_name} shuffled with random state {random_state}.")
-    
+        
     def generate_covariates(self):
         cov = self.X[self._cursor, :].reshape(1, -1)
         self._cursor += 1
@@ -191,6 +207,8 @@ class Friedman2Scenario(Scenario):
                       )
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
+sim_logger = logging.getLogger("bandit_simulator")
+
 def simulate(scenario, agents, n_draws):
     """
     Simulate a bandit problem using the provided scenario and agents. The `simulate` function takes a scenario, a list of agents, and the number of draws. For each draw:
@@ -213,7 +231,6 @@ def simulate(scenario, agents, n_draws):
     n_agents = len(agents)
     cum_regrets = np.zeros((n_draws, n_agents))
     time_agents = np.zeros((n_draws, n_agents))
-    mem_agents = np.zeros(n_agents)
     
     for draw in tqdm(range(n_draws), desc="Simulating", miniters=1):
         x = scenario.generate_covariates()
@@ -232,13 +249,19 @@ def simulate(scenario, agents, n_draws):
             # Update agent's state with the chosen arm's data.
             agent.update_state(arm, x, u["reward"][arm])
             time_agents[draw, i] = time.time() - t0
-
-            # suppress memory usage for now
-            mem_usage = 0 # asizeof.asizeof(agent)
-            mem_agents[i] = mem_usage
+        
+        # Log current status every sqrt(n_draws) draws.
+        logging_frequency = int(math.sqrt(n_draws))
+        if (draw + 1) % logging_frequency == 0 or draw == n_draws - 1:   
+            formatter={"float_kind": lambda x: f"{x:.6f}"}         
+            sim_logger.debug(f"Draw {draw+1}/{n_draws}: "
+                             f"Cumulative Regrets: {np.array2string(cum_regrets[draw, :], formatter=formatter)}, "
+                             f"Cumulative Time: {np.array2string(np.sum(time_agents[:draw, :], axis=0), formatter=formatter)}"
+                             )
             
     for agent in agents:
         if hasattr(agent, 'clean_up'):
             agent.clean_up()
         
-    return cum_regrets, time_agents, mem_agents
+    return cum_regrets, time_agents
+
