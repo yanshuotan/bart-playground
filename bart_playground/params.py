@@ -131,15 +131,17 @@ class Tree:
         self.n = n
         self.node_indicators = node_indicators
         self.evals = evals
-
+    
+    default_size: int = 8  # Default size for the tree arrays
+    
     def _init_caching_arrays(self):
         """
         Initialize caching arrays for the tree.
         """
         assert self.dataX is not None, "Data matrix is not provided."
-        self.node_indicators = np.full((self.dataX.shape[0], 8), False, dtype=bool)
+        self.node_indicators = np.full((self.dataX.shape[0], Tree.default_size), False, dtype=bool)
         self.node_indicators[:, 0] = True
-        self.n = np.full(8, -2, dtype=int)
+        self.n = np.full(Tree.default_size, -2, dtype=int)
         self.n[0] = self.dataX.shape[0]
         self.evals = np.zeros(self.dataX.shape[0])
         
@@ -150,10 +152,10 @@ class Tree:
     @classmethod
     def new(cls, dataX=None):
         # Define the basic tree parameters.
-        vars = np.full(8, -2, dtype=int)  # -2 represents an inexistent node
+        vars = np.full(Tree.default_size, -2, dtype=int)  # -2 represents an inexistent node
         vars[0] = -1                      # -1 represents a leaf node
-        thresholds = np.full(8, np.nan, dtype=np.float32)
-        leaf_vals = np.full(8, np.nan, dtype=np.float32)
+        thresholds = np.full(Tree.default_size, np.nan, dtype=np.float32)
+        leaf_vals = np.full(Tree.default_size, np.nan, dtype=np.float32)
         leaf_vals[0] = 0                   # Initialize the leaf value
 
         new_tree = cls(dataX, vars, thresholds, leaf_vals, n = None, node_indicators = None, evals = None)
@@ -202,7 +204,7 @@ class Tree:
             Index of the leaf node.
         """
         node_ids = np.full(X.shape[0], 0, dtype=int)
-        if not self.split_nodes: # Tree has no splits
+        if len(self.split_nodes) == 0: # Tree has no splits
             return node_ids
         routing = X[:, self.vars[self.split_nodes]] > self.thresholds[self.split_nodes]
         split_node_counter = 0
@@ -287,16 +289,20 @@ class Tree:
         are truncated to half their size. The process continues until the 
         last -1 index is at least in the second half of the array. 
 
-        A minimum size of 2 is enforced to prevent excessive truncation 
+        A minimum size of Tree.default_size is enforced to prevent excessive truncation 
         that could lead to an invalid tree structure.
         """
-        while len(self.vars) > 2 and np.where(self.vars == -1)[0].max() < (half_size := len(self.vars) // 2):
-            # Truncate arrays to the first half
-            self.thresholds = self.thresholds[:half_size]
-            self.vars = self.vars[:half_size]
-            self.leaf_vals = self.leaf_vals[:half_size]
-            self.n = self.n[:half_size]
-            self.node_indicators = self.node_indicators[:, :half_size]
+        last_active_node = np.where(self.vars == -1)[0].max()
+        new_length = len(self.vars)
+        while last_active_node < (new_length // 2) and new_length > Tree.default_size:
+            new_length //= 2
+            
+        if new_length < len(self.vars):    
+            self.thresholds = self.thresholds[:new_length]
+            self.vars = self.vars[:new_length]
+            self.leaf_vals = self.leaf_vals[:new_length]
+            self.n = self.n[:new_length]
+            self.node_indicators = self.node_indicators[:, :new_length]
 
     def split_leaf(self, node_id: int, var: int, threshold: np.float32, left_val: np.float32=np.float32(np.nan), 
                    right_val: np.float32 = np.float32(np.nan)):
@@ -468,7 +474,7 @@ class Tree:
         Returns:
         """
         _update_n_and_indicators_numba(
-            0, self.dataX, True, self.vars, self.thresholds, self.n, self.node_indicators
+            0, X_new, True, self.vars, self.thresholds, self.n, self.node_indicators
         )
 
     def update_outputs(self):
@@ -493,7 +499,7 @@ class Tree:
 
     @property
     def leaves(self):
-        return [i for i in range(len(self.vars)) if self.is_leaf(i)]
+        return np.where(self.vars == -1)[0]
 
     @property
     def n_leaves(self):
@@ -501,7 +507,7 @@ class Tree:
     
     @property
     def split_nodes(self):
-        return [i for i in range(len(self.vars)) if self.is_split_node(i)]
+        return np.where((self.vars != -1) & (self.vars != -2))[0]
     
     @property
     def terminal_split_nodes(self):
@@ -584,6 +590,7 @@ class Tree:
             new_inds = np.zeros((n_new, cols), dtype=bool)
             new_inds[:, 0] = True         # i.e. all new samples start at root
             self.node_indicators = np.vstack([self.node_indicators, new_inds])
+            self.n[0] += n_new  # Update the count of samples at the root node
             
         # Refresh counts & outputs only for the affected rows
         update_range = np.arange(old_n, new_n)
