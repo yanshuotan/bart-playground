@@ -1,4 +1,3 @@
-
 import numpy as np
 from typing import Optional
 from numpy.typing import NDArray
@@ -41,27 +40,64 @@ def _update_split_leaf_indicators(dataX, var, threshold, node_indicators, node_i
     return left_count, right_count
 
 @njit
-def _copy_all_tree_arrays(vars, thresholds, leaf_vals, n, node_indicators, evals):
+def _update_n_and_indicators_numba(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_node_indicators):
     """
-    Numba-optimized function to copy all tree arrays in a single call.
+    Numba-optimized function to update all node counts and indicators using DFS.
     """
-    # Copy numeric arrays
-    vars_copy = vars.copy()
-    thresholds_copy = thresholds.copy()
-    leaf_vals_copy = leaf_vals.copy()
-    n_copy = n.copy() if n is not None else None
-    evals_copy = evals.copy() if evals is not None else None
-    
-    # Copy boolean array (node_indicators) with special handling
-    if node_indicators is not None:
-        node_indicators_copy = np.empty_like(node_indicators)
-        for i in range(node_indicators.shape[0]):
-            for j in range(node_indicators.shape[1]):
-                node_indicators_copy[i, j] = node_indicators[i, j]
-    else:
-        node_indicators_copy = None
-        
-    return vars_copy, thresholds_copy, leaf_vals_copy, n_copy, node_indicators_copy, evals_copy
+    n_nodes = len(vars)
+
+    # Modify in place to avoid copying
+    n = prev_n
+    node_indicators = prev_node_indicators
+
+    # Use a simple array as a stack for depth-first search
+    # Avoid recursion to prevent stack overflow on large trees
+    stack = np.zeros(n_nodes, dtype=np.int64)
+    top = 0
+    stack[top] = starting_node
+    top += 1
+
+    while top > 0:
+        # Pop the top node
+        top -= 1
+        node_id = stack[top]
+
+        # If it is a split node, propagate indicators and counts to children
+        if vars[node_id] > -1:
+            current_var = vars[node_id]
+            current_threshold = thresholds[node_id]
+            left_child = node_id * 2 + 1
+            right_child = node_id * 2 + 2
+
+            parent_indicators = node_indicators[:, node_id]
+            left_count = 0
+            right_count = 0
+            
+            for i in range(dataX.shape[0]):
+                if parent_indicators[i]:
+                    go_left = (dataX[i, current_var] <= current_threshold)
+                    node_indicators[i, left_child] = go_left
+                    left_count += go_left
+                    node_indicators[i, right_child] = not go_left
+                    right_count += not go_left
+                else:
+                    node_indicators[i, left_child] = False
+                    node_indicators[i, right_child] = False
+                    
+            if append:
+                n[left_child] += left_count
+                n[right_child] += right_count
+            else:
+                n[left_child] = left_count
+                n[right_child] = right_count
+
+            # Push children onto stack
+            stack[top] = right_child
+            top += 1
+            stack[top] = left_child
+            top += 1
+            
+    return n, node_indicators
 
 class Tree:
     """
@@ -131,18 +167,14 @@ class Tree:
     def from_existing(cls, other: "Tree"):
         """
         Create a new Tree object by copying data from an existing Tree.
-        Uses a single Numba-optimized function call to copy all arrays at once,
-        minimizing Python overhead.
         """
-        # Use a single optimized function to copy all arrays at once
-        vars_copy, thresholds_copy, leaf_vals_copy, n_copy, node_indicators_copy, evals_copy = _copy_all_tree_arrays(
-            other.vars, 
-            other.thresholds, 
-            other.leaf_vals, 
-            other.n, 
-            other.node_indicators, 
-            other.evals
-        )
+        # Copy all arrays
+        vars_copy = other.vars.copy()
+        thresholds_copy = other.thresholds.copy()
+        leaf_vals_copy = other.leaf_vals.copy()
+        n_copy = other.n.copy() if other.n is not None else None
+        evals_copy = other.evals.copy() if other.evals is not None else None
+        node_indicators_copy = other.node_indicators.copy() if other.node_indicators is not None else None
         
         return cls(
             other.dataX,  # dataX is not copied since it's shared across trees
@@ -402,7 +434,7 @@ class Tree:
         is_valid = self.change_split(parent_id, child_var, child_threshold, update_n=True)
         return is_valid
     
-    def update_n(self, node_id=0, X_range=None):
+    def update_n(self, node_id=0):
         """
         Updates the counts of samples reaching each node in the decision tree.
 
@@ -414,29 +446,31 @@ class Tree:
 
         Parameters:
         - node_id (int, optional): The ID of the node to start updating from. Defaults to 0 (the root node).
-
         Returns:
         - bool: True if the counts of samples reaching all nodes are greater than 0, False otherwise.
         """
         if self.dataX is None:
             raise ValueError("Data matrix is not provided.")
-        if X_range is None:
-            X_range = np.arange(self.dataX.shape[0])
-        
-        if self.is_leaf(node_id):
-            return self.n[node_id] > 0
-        else:
-            var = self.vars[node_id]
-            threshold = self.thresholds[node_id]
-            left_child = node_id * 2 + 1
-            right_child = node_id * 2 + 2
-            self.node_indicators[X_range, left_child] = self.node_indicators[X_range, node_id] & (self.dataX[X_range, var] <= threshold)
-            self.node_indicators[X_range, right_child] = self.node_indicators[X_range, node_id] & (self.dataX[X_range, var] > threshold)
-            self.n[left_child] = np.sum(self.node_indicators[:, left_child])
-            self.n[right_child] = np.sum(self.node_indicators[:, right_child])
-            is_valid = self.update_n(left_child) and self.update_n(right_child)
-            return is_valid
-        
+       
+        _update_n_and_indicators_numba(
+            node_id, self.dataX, False, self.vars, self.thresholds, self.n, self.node_indicators
+        )
+
+        is_valid = all(self.n[leaf] > 0 for leaf in self.leaves)
+        return is_valid
+    
+    def update_n_append(self, X_new):
+        """
+        Update the counts of samples reaching each node in the decision tree when appending new data.
+
+        Parameters:
+        - X_new (np.ndarray): The new data to append to the existing dataset.
+        Returns:
+        """
+        _update_n_and_indicators_numba(
+            0, self.dataX, True, self.vars, self.thresholds, self.n, self.node_indicators
+        )
+
     def update_outputs(self):
         self.evals = self.leaf_basis @ self.leaf_vals[self.leaves]
 
@@ -553,9 +587,9 @@ class Tree:
             
         # Refresh counts & outputs only for the affected rows
         update_range = np.arange(old_n, new_n)
-        self.update_n(X_range=update_range)
+        self.update_n_append(dataX[update_range])
         self.update_outputs()
-        
+
 class Parameters:
     """
     Represents the parameters of the BART model.
