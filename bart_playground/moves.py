@@ -46,14 +46,14 @@ class Move(ABC):
         return False
 
     @abstractmethod
-    def is_feasible(self):
+    def is_feasible(self) -> bool:
         """
         Check whether move is feasible.
         """
         pass
 
     @abstractmethod
-    def try_propose(self, proposed, generator):
+    def try_propose(self, proposed, generator) -> bool:
         """
         Try to propose a new state.
         """
@@ -71,16 +71,24 @@ class Grow(Move):
         assert len(trees_changed) == 1
 
     def is_feasible(self):
+        tree = self.current.trees[self.trees_changed[0]]
+        self.cur_leaves = tree.leaves
+        self.cur_n_terminal_splits = len(tree.terminal_split_nodes)
         return True
     
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
-        node_id = fast_choice(generator, tree.leaves)
+        node_id = fast_choice(generator, self.cur_leaves)
         var = generator.integers(tree.dataX.shape[1])
         threshold = fast_choice(generator, self.possible_thresholds[var])
-        n_leaves = tree.n_leaves
+        n_leaves = len(self.cur_leaves)
+        
         success = tree.split_leaf(node_id, var, threshold)
-        n_splits = len(tree.terminal_split_nodes)
+        if node_id % 2:
+            neighbor = node_id + 1
+        else:
+            neighbor = node_id - 1
+        n_splits = self.cur_n_terminal_splits + 1 - tree.is_leaf(neighbor)
         self.log_tran_ratio = np.log(n_leaves) - np.log(n_splits)
         return success
 
@@ -95,12 +103,14 @@ class Prune(Move):
 
     def is_feasible(self):
         tree = self.current.trees[self.trees_changed[0]]
-        return len(tree.terminal_split_nodes) > 0
+        self.cur_terminal_split_nodes = tree.terminal_split_nodes
+        return len(self.cur_terminal_split_nodes) > 0
 
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
-        node_id = fast_choice(generator, tree.terminal_split_nodes)
-        n_splits = len(tree.terminal_split_nodes)
+        node_id = fast_choice(generator, self.cur_terminal_split_nodes)
+        n_splits = len(self.cur_terminal_split_nodes)
+        
         tree.prune_split(node_id)
         n_leaves = tree.n_leaves
         self.log_tran_ratio = np.log(n_splits) - np.log(n_leaves)
@@ -141,15 +151,17 @@ class Swap(Move):
 
     def is_feasible(self):
         tree = self.current.trees[self.trees_changed[0]]
-        return len(tree.nonterminal_split_nodes) > 0
+        self.cur_nonterminal_split_nodes = tree.nonterminal_split_nodes
+        return len(self.cur_nonterminal_split_nodes) > 0
 
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
-        parent_id = fast_choice(generator, tree.nonterminal_split_nodes)
+        parent_id = fast_choice(generator, self.cur_nonterminal_split_nodes)
         lr = generator.integers(1, 3) # Choice of left/right child
         child_id = 2 * parent_id + lr
         if tree.vars[child_id] == -1: # Change to the other child if this is a leaf
             child_id = 2 * parent_id + 3 - lr
+            
         success = tree.swap_split(parent_id, child_id) # If no empty leaves are created
         return success
     
