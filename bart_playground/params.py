@@ -8,36 +8,8 @@ def _compute_leaf_basis(node_indicators, vars):
     """
     Numba-optimized function to compute leaf basis matrix.
     """
-    # Find leaf nodes (where vars == -1)
-    leaves = np.where(vars == -1)[0]
-    
     # Extract columns corresponding to leaf nodes
-    return node_indicators[:, leaves]
-
-@njit
-def _update_split_leaf_indicators(dataX, var, threshold, node_indicators, node_id, left_child, right_child):
-    """
-    Numba-optimized function to update node indicators and counts when splitting a leaf.
-    """
-    n_samples = dataX.shape[0]
-    left_count = 0
-    right_count = 0
-    
-    for i in range(n_samples):
-        if node_indicators[i, node_id]:
-            if dataX[i, var] > threshold:
-                node_indicators[i, right_child] = True
-                node_indicators[i, left_child] = False
-                right_count += 1
-            else:
-                node_indicators[i, right_child] = False
-                node_indicators[i, left_child] = True
-                left_count += 1
-        else:
-            node_indicators[i, left_child] = False
-            node_indicators[i, right_child] = False
-    
-    return left_count, right_count
+    return node_indicators[:, (vars == -1)]
 
 @njit
 def _update_n_and_indicators_numba(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_node_indicators):
@@ -56,6 +28,8 @@ def _update_n_and_indicators_numba(starting_node, dataX, append: bool, vars, thr
     top = 0
     stack[top] = starting_node
     top += 1
+    
+    success = True
 
     while top > 0:
         # Pop the top node
@@ -96,8 +70,13 @@ def _update_n_and_indicators_numba(starting_node, dataX, append: bool, vars, thr
             top += 1
             stack[top] = left_child
             top += 1
-            
-    return n, node_indicators
+        else:
+            # If it is a leaf node, set success to False if it has no samples
+            if n[node_id] == 0:
+                success = False
+    
+    # success = True if all updated n are > 0 else False
+    return success
 
 class Tree:
     """
@@ -346,19 +325,11 @@ class Tree:
         self.leaf_vals[node_id] = np.nan
         self.leaf_vals[left_child] = left_val
         self.leaf_vals[right_child] = right_val
-
-        if self.cache_exists:
-            # Use the numba-optimized function to update node indicators and counts
-            left_count, right_count = _update_split_leaf_indicators(
-                self.dataX, var, threshold, self.node_indicators, node_id, left_child, right_child)
-            
-            # Update the counts in the tree object
-            self.n[left_child] = left_count
-            self.n[right_child] = right_count
-            
-            is_valid = left_count > 0 and right_count > 0
-        else:
-            is_valid = True
+        
+        # Assert cache arrays exist
+        is_valid = _update_n_and_indicators_numba(
+            node_id, self.dataX, False, self.vars, self.thresholds, self.n, self.node_indicators
+        )
 
         return is_valid
 
@@ -455,14 +426,10 @@ class Tree:
         Returns:
         - bool: True if the counts of samples reaching all nodes are greater than 0, False otherwise.
         """
-        if self.dataX is None:
-            raise ValueError("Data matrix is not provided.")
-       
-        _update_n_and_indicators_numba(
+        is_valid = _update_n_and_indicators_numba(
             node_id, self.dataX, False, self.vars, self.thresholds, self.n, self.node_indicators
         )
 
-        is_valid = all(self.n[leaf] > 0 for leaf in self.leaves)
         return is_valid
     
     def update_n_append(self, X_new):
@@ -520,9 +487,6 @@ class Tree:
 
     @property
     def leaf_basis(self) -> NDArray[np.bool_]:
-        if self.dataX is None:
-            raise ValueError("Data matrix is not provided.")
-        
         return _compute_leaf_basis(self.node_indicators, self.vars)
     
     def __str__(self):
@@ -734,8 +698,11 @@ class Parameters:
         for tree_id in tree_ids:
             tree = self.trees[tree_id]
             tree_evals_old = tree.evals
-            tree.leaf_vals[tree.leaves] = \
-                leaf_vals[range(leaf_counter, leaf_counter + tree.n_leaves)]
+            leaves = tree.leaves
+            n_leaves = len(leaves)
+            
+            tree.leaf_vals[leaves] = \
+                leaf_vals[range(leaf_counter, leaf_counter + n_leaves)]
             tree.update_outputs()
             self.cache = self.cache + tree.evals - tree_evals_old
-            leaf_counter += tree.n_leaves
+            leaf_counter += n_leaves
