@@ -1,4 +1,5 @@
 import numpy as np
+import math
 from abc import ABC, abstractmethod
 from typing import Optional
 from .params import Parameters
@@ -88,8 +89,10 @@ class Grow(Move):
             neighbor = node_id + 1
         else:
             neighbor = node_id - 1
+        # Update the number of non-terminal splits
+        # + 1 only if parent is a non-terminal split
         n_splits = self.cur_n_terminal_splits + 1 - tree.is_leaf(neighbor)
-        self.log_tran_ratio = np.log(n_leaves) - np.log(n_splits)
+        self.log_tran_ratio = math.log(n_leaves) - math.log(n_splits)
         return success
 
 class Prune(Move):
@@ -113,7 +116,7 @@ class Prune(Move):
         
         tree.prune_split(node_id)
         n_leaves = tree.n_leaves
-        self.log_tran_ratio = np.log(n_splits) - np.log(n_leaves)
+        self.log_tran_ratio = math.log(n_splits) - math.log(n_leaves)
         return True
 
 class Change(Move):

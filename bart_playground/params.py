@@ -102,15 +102,15 @@ class Tree:
         - node_indicators : np.ndarray, optional
             Boolean array indicating which data examples lie within each node. Default is None.
         """
-        self.dataX = dataX
-        self.vars = vars
-        self.thresholds = thresholds
-        self.leaf_vals : NDArray[np.float32] = leaf_vals
+        self.dataX: Optional[NDArray[np.float32]] = dataX
+        self.vars: NDArray[np.int32] = vars
+        self.thresholds: NDArray[np.float32] = thresholds
+        self.leaf_vals: NDArray[np.float32] = leaf_vals
 
-        self.n = n
-        self.node_indicators = node_indicators
-        self.evals = evals
-    
+        self.n: NDArray[np.int32] = n
+        self.node_indicators: NDArray[np.bool_] = node_indicators
+        self.evals: NDArray[np.float32] = evals
+
     default_size: int = 8  # Default size for the tree arrays
     
     def _init_caching_arrays(self):
@@ -122,7 +122,7 @@ class Tree:
         self.node_indicators[:, 0] = True
         self.n = np.full(Tree.default_size, -2, dtype=int)
         self.n[0] = self.dataX.shape[0]
-        self.evals = np.zeros(self.dataX.shape[0])
+        self.evals = np.zeros(self.dataX.shape[0], dtype=np.float32)
         
     @property
     def cache_exists(self):
@@ -137,7 +137,10 @@ class Tree:
         leaf_vals = np.full(Tree.default_size, np.nan, dtype=np.float32)
         leaf_vals[0] = 0                   # Initialize the leaf value
 
-        new_tree = cls(dataX, vars, thresholds, leaf_vals, n = None, node_indicators = None, evals = None)
+        new_tree = cls(
+            dataX.astype(np.float32, copy=False) if dataX is not None else None,
+            vars, thresholds, leaf_vals, n=None, node_indicators=None, evals=None
+        )
         if dataX is not None:
             # If dataX is provided, initialize caching arrays.
             new_tree._init_caching_arrays()
@@ -150,21 +153,15 @@ class Tree:
         Create a new Tree object by copying data from an existing Tree.
         """
         # Copy all arrays
-        vars_copy = other.vars.copy()
-        thresholds_copy = other.thresholds.copy()
-        leaf_vals_copy = other.leaf_vals.copy()
-        n_copy = other.n.copy() if other.n is not None else None
-        evals_copy = other.evals.copy() if other.evals is not None else None
-        node_indicators_copy = other.node_indicators.copy() if other.node_indicators is not None else None
         
         return cls(
             other.dataX,  # dataX is not copied since it's shared across trees
-            vars_copy,
-            thresholds_copy, 
-            leaf_vals_copy,
-            n_copy,
-            node_indicators_copy,
-            evals_copy
+            other.vars.copy(),
+            other.thresholds.copy(), 
+            other.leaf_vals.copy(),
+            other.n.copy() if other.n is not None else None,
+            other.node_indicators.copy() if other.node_indicators is not None else None,
+            other.evals.copy() if other.evals is not None else None
         )
 
     def copy(self):
@@ -217,48 +214,44 @@ class Tree:
             return self.leaf_vals[leaf_ids]  # Return the value at the leaf node
 
     def _resize_arrays(self):
-        """
-        Resize the internal arrays of the class by doubling their length.
+        old_size = len(self.vars)
+        new_size = old_size * 2
 
-        This method resizes the following arrays:
-        - `vars`: An array of integers, resized to double its current length, with new elements initialized to -2.
-        - `thresholds`: An array of floats, resized to double its current length, with new elements initialized to NaN.
-        - `leaf_vals`: An array of floats, resized to double its current length, with new elements initialized to NaN.
-        - `n`: An array of integers, resized to double its current length, with new elements initialized to -2.
-        - `node_indicators`: A 2D boolean array, resized to double its current length along the second dimension, with new elements initialized to 0.
+        # -------- vars (int) --------
+        # Alloc uninitialized
+        a = np.empty(new_size, dtype=self.vars.dtype)
+        # copy old data
+        a[:old_size] = self.vars
+        # init only the new part
+        a[old_size:] = -2
+        self.vars = a
 
-        The existing elements of each array are preserved, and the new elements are initialized as specified.
-        """
-        old_length = len(self.vars)
-        new_length = old_length * 2
+        # ------- thresholds (float) -------
+        b = np.empty(new_size, dtype=self.thresholds.dtype)
+        b[:old_size] = self.thresholds
+        b[old_size:] = np.nan
+        self.thresholds = b
 
-        # Resize vars array
-        new_vars = np.full(new_length, -2, dtype=int)
-        new_vars[:len(self.vars)] = self.vars
-        self.vars = new_vars
-
-        # Resize split array
-        new_thresholds = np.full(new_length, np.nan, dtype=np.float32)
-        new_thresholds[:len(self.thresholds)] = self.thresholds
-        self.thresholds = new_thresholds
-
-        # Resize leaf_vals array
-        new_leaf_vals = np.full(new_length, np.nan, dtype=np.float32)
-        new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
-        self.leaf_vals = new_leaf_vals
+        # ------- leaf_vals (float) -------
+        c = np.empty(new_size, dtype=self.leaf_vals.dtype)
+        c[:old_size] = self.leaf_vals
+        c[old_size:] = np.nan
+        self.leaf_vals = c
 
         if self.cache_exists:
-            # Resize n_vals array
-            new_n = np.full(new_length, -2, dtype=int)
-            new_n[:len(self.n)] = self.n
-            self.n = new_n
+            # ------- n (int) -------
+            d = np.empty(new_size, dtype=self.n.dtype)
+            d[:old_size] = self.n
+            d[old_size:] = -2
+            self.n = d
 
-            # Resize node_indicators array
-            new_node_indicators = np.full((self.node_indicators.shape[0], new_length), 0, dtype=bool)
-            # Copy the existing node_indicators into the first part of new_node_indicators
-            new_node_indicators[:, :old_length] = self.node_indicators
-            self.node_indicators = new_node_indicators
-
+            # -- node_indicators (bool 2-D) --
+            rows = self.node_indicators.shape[0]
+            e = np.empty((rows, new_size), dtype=bool)
+            e[:, :old_size] = self.node_indicators
+            e[:, old_size:] = False
+            self.node_indicators = e
+    
     def _truncate_tree_arrays(self):
         """
         Recursively trims the tree arrays to remove unnecessary space.
@@ -401,8 +394,8 @@ class Tree:
         self.vars[node_id] = var
         self.thresholds[node_id] = threshold
         if update_n:
-            is_valid = self.update_n(node_id)
-        return is_valid if update_n else True
+            return self.update_n(node_id)
+        return True
     
     def swap_split(self, parent_id, child_id):
         parent_var, parent_threshold = self.vars[parent_id], self.thresholds[parent_id]
@@ -490,9 +483,6 @@ class Tree:
         return _compute_leaf_basis(self.node_indicators, self.vars)
     
     def __str__(self):
-        """
-        Return a string representation of the TreeParams object.
-        """
         return self._print_tree()
         
     def __repr__(self):

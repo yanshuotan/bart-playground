@@ -8,17 +8,14 @@ import math
 # For faster random sampling
 def fast_choice(generator, array):
     """Fast random selection from an array."""
-    if len(array) == 0:
-        raise ValueError("Cannot choose from empty array")
-    elif len(array) == 1:
+    len_arr = len(array)
+    if len_arr == 1:
         return array[0]
-    return array[generator.integers(0, len(array))]
+    return array[generator.integers(0, len_arr)]
 
 class Dataset:
 
     def __init__(self, X, y):
-        # if X is pd.DataFrame:
-            # X = X.to_numpy()
         # if X is pd.DataFrame:
             # X = X.to_numpy()
         self.X = X
