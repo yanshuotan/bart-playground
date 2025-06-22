@@ -16,9 +16,11 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     Numba-optimized function to resample leaf values.
     """
     p = leaf_basis.shape[1]
-    # Explicitly convert boolean array to float64
-    num_lbs = leaf_basis.astype(np.float64)
-    post_cov = np.linalg.inv(num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2)
+    # Explicitly convert boolean array to float32
+    num_lbs = leaf_basis.astype(np.float32)
+    post_cov = np.linalg.inv(
+        num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2
+        ).astype(np.float32)
     post_mean = post_cov @ num_lbs.T @ residuals / eps_sigma2
     
     leaf_params_new = np.sqrt(np.diag(post_cov)) * random_normal_p + post_mean
@@ -29,10 +31,10 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     """
     Numba-optimized function to calculate log marginal likelihood.
     """
-    # Explicitly convert boolean array to float64
-    leaf_basis_float = leaf_basis.astype(np.float64)
+    # Explicitly convert boolean array to float32
+    leaf_basis_float = leaf_basis.astype(np.float32)
     
-    # Now use the float64 array with SVD
+    # Now use the float32 array with SVD
     U, S, _ = np.linalg.svd(leaf_basis_float, full_matrices=False)
     noise_ratio = eps_sigma2 / f_sigma2
     logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
@@ -261,7 +263,7 @@ class GlobalParamPrior:
         prior_beta = self.eps_nu * self.eps_lambda / 2
         post_alpha = prior_alpha + n / 2
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
-        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)# [0]
+        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)
         return eps_sigma2
 
 class BARTLikelihood:
@@ -306,7 +308,7 @@ class BARTLikelihood:
         7. Compute the least squares residuals and ridge bias.
         8. Combine the log determinant, least squares residuals, and ridge bias to obtain the log marginal likelihood.
         """
-        resids = data_y - bart_params.evaluate(all_except=tree_ids)
+        resids = (data_y - bart_params.evaluate(all_except=tree_ids))
         leaf_basis = bart_params.leaf_basis(tree_ids)
         
         # Use the standalone numba function instead
@@ -420,7 +422,7 @@ class LogisticTreesPrior(TreesPrior):
         pi_h = self.parent.pi_h
         
         # lb_bool = bart_params.leaf_basis(tree_ids)
-        # leaf_basis = lb_bool.astype(np.float64)
+        # leaf_basis = lb_bool.astype(np.float32)
         # tree_eval = bart_params.evaluate(all_except = tree_ids)
         # latent_tree_product = self.latents * np.exp(tree_eval)
         # 
@@ -513,7 +515,7 @@ class LogisticLikelihood(BARTLikelihood):
             raise ValueError("Logistic likelihood only supports single tree evaluation.")
         
         lb_bool = bart_params.leaf_basis(tree_ids)
-        leaf_basis = lb_bool.astype(np.float64)
+        leaf_basis = lb_bool.astype(np.float32)
         # leaf_basis is an array of shape (n_samples, n_leaves)
         tree_eval = bart_params.evaluate(all_except=tree_ids)
         # dim of tree_eval is (n_samples)

@@ -37,7 +37,7 @@ class Preprocessor(ABC):
         self._thresholds = value
     
     @abstractmethod
-    def gen_thresholds(self, X):
+    def gen_thresholds(self, X) -> dict:
         pass
         
     def fit(self, X, y):
@@ -103,9 +103,6 @@ class DefaultPreprocessor(Preprocessor):
         self.y_max = y.max()
         self.y_min = y.min()
         self._thresholds = self.gen_thresholds(X)
-        
-    def transform(self, X, y):
-        return Dataset(X, self.transform_y(y))
     
     def gen_thresholds(self, X):
         q_vals = np.linspace(0, 1, self.max_bins, endpoint=False)
@@ -114,12 +111,16 @@ class DefaultPreprocessor(Preprocessor):
     @staticmethod
     def test_thresholds(X):
         return dict({k : np.unique(X[:, k]) for k in range(X.shape[1])})
-
+    
+    def transform_X(self, X) -> np.ndarray:
+        return X.astype(np.float32)
+    
     def transform_y(self, y) -> np.ndarray:
         if self.y_max == self.y_min:
-            return y
+            y_res = y
         else:
-            return (y - self.y_min) / (self.y_max - self.y_min) - 0.5
+            y_res = (y - self.y_min) / (self.y_max - self.y_min) - 0.5
+        return y_res.reshape(-1, ).astype(np.float32)
     
     def backtransform_y(self, y) -> np.ndarray:
         return (self.y_max - self.y_min) * (y + 0.5) + self.y_min

@@ -21,6 +21,9 @@ def _update_n_and_indicators_numba(starting_node, dataX, append: bool, vars, thr
     # Modify in place to avoid copying
     n = prev_n
     node_indicators = prev_node_indicators
+    # If appending, we need to take the offset
+    #   into account when accessing node_indicators
+    offset = prev_node_indicators.shape[0] - dataX.shape[0] if append else 0
 
     # Use a simple array as a stack for depth-first search
     # Avoid recursion to prevent stack overflow on large trees
@@ -48,15 +51,15 @@ def _update_n_and_indicators_numba(starting_node, dataX, append: bool, vars, thr
             right_count = 0
             
             for i in range(dataX.shape[0]):
-                if parent_indicators[i]:
+                if parent_indicators[offset + i]:
                     go_left = (dataX[i, current_var] <= current_threshold)
-                    node_indicators[i, left_child] = go_left
+                    node_indicators[offset + i, left_child] = go_left
                     left_count += go_left
-                    node_indicators[i, right_child] = not go_left
+                    node_indicators[offset + i, right_child] = not go_left
                     right_count += not go_left
                 else:
-                    node_indicators[i, left_child] = False
-                    node_indicators[i, right_child] = False
+                    node_indicators[offset + i, left_child] = False
+                    node_indicators[offset + i, right_child] = False
                     
             if append:
                 n[left_child] += left_count
