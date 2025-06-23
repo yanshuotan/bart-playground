@@ -110,10 +110,13 @@ class Sampler(ABC):
                 print(f"Running iteration {iter}/{n_iter}")
             
             temp = self.temp_schedule(iter)
+            backup_current = current.copy(copy_cache=False) if iter >= n_skip else None
+            
             current = self.one_iter(current, temp, return_trace=False)
-
+            
             if iter >= n_skip:
-                self.clear_last_cache()  # Clear cache of the last trace
+                if len(self.trace) > 0:
+                    self.trace[-1] = backup_current
                 self.trace.append(current)
         
         return self.trace
@@ -276,7 +279,7 @@ class DefaultSampler(Sampler):
         """
         Perform one iteration of the sampler.
         """
-        iter_current = current.copy() # First make a copy
+        iter_current = current#.copy() # First make a copy
         iter_trace = [(0, iter_current)]
         for k in range(self.tree_prior.n_trees):
             move = self.sample_move()(

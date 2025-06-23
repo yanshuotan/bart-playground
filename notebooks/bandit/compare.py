@@ -17,16 +17,15 @@
 # %% [markdown]
 # # Comparing Bandit Agents
 #
-# The notebook (`compare.ipynb`) compares the performance of different bandit agents. The `compare.py` script is for command-line execution. They are automatically paired using **jupytext**. 
+# The notebook (`compare.ipynb`) compares the performance of different bandit agents. The `compare.py` script is for command-line execution. They are automatically paired using `jupytext -s`. 
 
 # %% [markdown]
 # ### Imports
 
 # %%
-import warnings, logging
+import warnings
 warnings.filterwarnings('ignore')
 
-import numpy as np
 import os, sys
 from typing import List
 import multiprocessing
@@ -46,7 +45,7 @@ from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.ensemble_agent import EnsembleAgent
 from bart_playground.bandit.me_agents import HierTSAgent, LinearTSAgent2, LinearUCBAgent, METSAgent
 from bart_playground.bandit.bart_agent import BARTAgent, LogisticBARTAgent, DefaultBARTAgent, MultiChainBARTAgent
-from bart_playground.bart import LogisticBART
+from bart_playground.bart import DefaultBART, LogisticBART
 # from bart_playground.bandit.neural_ts_agent import NeuralTSDiagAgent
 
 # %% [markdown]
@@ -73,11 +72,13 @@ scenario_factories = {
 
 # Parse command-line arguments
 args = sys.argv[1:]
+cli = True
 
 # Determine which scenarios to run; default to Mushroom if none or invalid
 if len(args) == 0 or not any(arg in scenario_factories for arg in args):
     print("No valid scenarios specified, using Mushroom.")
     args = ['Mushroom']
+    cli = False
 
 selected_keys = [k for k in scenario_factories if k in args]
 scenarios = {key: scenario_factories[key]() for key in selected_keys}
@@ -90,29 +91,64 @@ log_encoding = 'native' if rep_dataset in ['Adult', 'Magic', 'Mushroom'] else 'm
 # torch.cuda.manual_seed_all(42)
 
 # %%
-from bart_playground.bandit.bart_agent import BARTAgent, LogisticBARTAgent, MultiChainBARTAgent
-from bart_playground.bandit.ensemble_agent import EnsembleAgent
-from bart_playground.bart import DefaultBART, LogisticBART
 
 all_agent_specs: List[AgentSpec] = [
     ("BCF",        BCFAgent,        {'nskip':100, 'ndpost':100, 'nadd':3, 'nbatch':1, 'random_state':1000}),
-    ("BART",       BARTAgent,       {'nskip':50,  'ndpost':50,  'nadd':5,                   'random_state':1000, 'encoding':'multi'}),
+    ("BART",       DefaultBARTAgent,       {
+        'n_trees': 100,
+        'nskip':50,  
+        'ndpost':50, 
+        'nadd':2,               
+        'random_state':1000}),
+    ("BARTs",       DefaultBARTAgent,       {
+        'n_trees': 50,
+        'nskip':50,  
+        'ndpost':50, 
+        'nadd':2,               
+        'random_state':1000}),
+    ("BART3",       DefaultBARTAgent,       {
+        'n_trees': 100,
+        'nskip':50,  
+        'ndpost':50, 
+        'nadd':3,               
+        'random_state':1000}),
     ("LogisticBART", LogisticBARTAgent,{
+        'n_trees': 100,
         'nskip':50,
         'ndpost':50,
-        'nadd':1,
+        'nadd':2,
         'random_state':1000,
-        'encoding':log_encoding
+        'encoding':'multi'
     }),
     ("MCBART",     MultiChainBARTAgent,{
-        'bart_class': LogisticBART,
-        'n_ensembles': 4,
+        'bart_class': DefaultBART,
+        'n_ensembles': 3,
+        'n_trees': 100,
+        'nskip': 50,
+        'ndpost': 50,
+        'nadd': 2,
+        'random_state': 1000,
+        'encoding': 'multi'
+    }),
+    ("MCBARTs", MultiChainBARTAgent,{
+        'bart_class': DefaultBART,
+        'n_ensembles': 3,
         'n_trees': 50,
         'nskip': 50,
         'ndpost': 50,
         'nadd': 2,
         'random_state': 1000,
-        'encoding': log_encoding
+        'encoding': 'multi'
+    }),
+    ("MCBART3", MultiChainBARTAgent,{
+        'bart_class': DefaultBART,
+        'n_ensembles': 3,
+        'n_trees': 100,
+        'nskip': 50,
+        'ndpost': 50,
+        'nadd': 3,
+        'random_state': 1000,
+        'encoding': 'multi'
     }),
     ("Ensemble",   EnsembleAgent,   {
         'bcf_kwargs':       dict(nskip=100, ndpost=10, nadd=2, random_state=1000),
@@ -129,20 +165,23 @@ all_agent_specs: List[AgentSpec] = [
 ]
 # %%
 # Filter agents to include only those we want to test
-agent_specs = [agent for agent in all_agent_specs if agent[0] in ["MCBART", "LinearTS"]]
+agent_specs = [agent for agent in all_agent_specs if agent[0] in ["BARTs", "LinearTS"]]
 
 # %%
-n_simulations = 3  # Number of simulations per scenario
-max_draws = 200      # Number of draws per simulation
+n_simulations = 8  # Number of simulations per scenario
+max_draws = 10000      # Number of draws per simulation
 
-results_dir = "./results/agent_comparison"
+if cli:
+    results_dir = "./results/compare_cli" # call from CLI
+else:
+    results_dir = "./results/compare_test_nb" # call from notebook
 os.makedirs(results_dir, exist_ok=True)
 
 def call_func():
     return compare_agents_across_scenarios(
         scenarios=scenarios,
         agent_specs=agent_specs,
-        sim_indices=[0, 1],
+        sim_indices=list(range(n_simulations)),
         max_draws=max_draws,
         parallel=False,
         save_dir=results_dir,
@@ -150,7 +189,13 @@ def call_func():
     )
 
 # %%
-results = call_func()
+if not cli:
+    # %prun -s cumtime -D profile_c2.prof -q call_func()
+    # !gprof2dot -f pstats profile_c2.prof -o profile_c2.dot
+    # !dot -Tpng profile_c2.dot -o profile_c2.png
+    pass  # For notebook, we run the function and generate a profile
+else:
+    results = call_func()
 
 # %% [markdown]
 # ## Summary Results
