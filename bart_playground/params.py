@@ -466,7 +466,7 @@ class Tree:
 
     @property
     def n_leaves(self):
-        return len(self.leaves)
+        return np.count_nonzero(self.vars == -1)
     
     @property
     def split_nodes(self):

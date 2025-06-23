@@ -33,36 +33,21 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     """
     # Explicitly convert boolean array to float32
     leaf_basis_float = leaf_basis.astype(np.float32)
-    
-    # Now use the float32 array with SVD
-    U, S, _ = np.linalg.svd(leaf_basis_float, full_matrices=False)
+    # Suppose each row of leaf_basis sums to 1,
+    # so we can use counts instead of svd.
+    counts = leaf_basis_float.sum(axis=0)
     noise_ratio = eps_sigma2 / f_sigma2
-    logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
-    resid_u_coefs = U.T @ resids
-    resids_u = U @ resid_u_coefs
-    ls_resids = np.sum((resids - resids_u) ** 2)
-    ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / noise_ratio + 1))
+    logdet = np.sum(np.log(counts / noise_ratio + 1))
+    # resid_u_coefs is resid_sums / sqrt(counts)
+    resid_sums = leaf_basis_float.T @ resids
+    ls_resids = np.sum(resids ** 2) - np.sum((resid_sums ** 2) / counts)
+
+    ridge_bias = np.sum(resid_sums ** 2 / (counts * (counts / noise_ratio + 1)))
+
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
 @njit
 def _trees_log_prior_numba(tree_vars, alpha, beta):
-    """
-    Numba-optimized function to calculate log prior probability of a tree.
-    
-    Parameters:
-    -----------
-    tree_vars : numpy.ndarray
-        An array of variables used for splitting at each node.
-    alpha : float
-        Alpha parameter for the tree prior.
-    beta : float
-        Beta parameter for the tree prior.
-        
-    Returns:
-    --------
-    float
-        The log prior probability of the tree.
-    """
     # Calculate depth for each node
     d = np.ceil(np.log2(np.arange(len(tree_vars)) + 2)) - 1
     # Calculate log probability of split
@@ -310,8 +295,11 @@ class BARTLikelihood:
         """
         resids = (data_y - bart_params.evaluate(all_except=tree_ids))
         leaf_basis = bart_params.leaf_basis(tree_ids)
-        
-        # Use the standalone numba function instead
+        # Assert tree_ids has length 1 so that leaf_basis's each row sums to 1
+        if len(tree_ids) != 1:
+            raise NotImplementedError("Log marginal likelihood calculation only supports single tree evaluation for faster computation.")
+
+        # Use the standalone numba function
         return _trees_log_marginal_lkhd_numba(
             leaf_basis, 
             resids, 
