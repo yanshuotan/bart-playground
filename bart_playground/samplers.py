@@ -242,6 +242,10 @@ class DefaultSampler(Sampler):
 
         # store seed forest for XGBoost init
         self.init_trees = init_trees
+        # --- Add move statistics ---
+        self.move_selected_counts = {k: 0 for k in self.proposals}
+        self.move_success_counts = {k: 0 for k in self.proposals}
+        self.move_accepted_counts = {k: 0 for k in self.proposals}
 
     def get_init_state(self) -> Parameters:
         """
@@ -280,12 +284,17 @@ class DefaultSampler(Sampler):
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
         for k in range(self.tree_prior.n_trees):
-            move = self.sample_move()(
+            move_cls = self.sample_move()
+            move_key = [k for k, v in all_moves.items() if v == move_cls][0]
+            self.move_selected_counts[move_key] += 1
+            move = move_cls(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
-                )
+            )
             if move.propose(self.generator): # Check if a valid move was proposed
+                self.move_success_counts[move_key] += 1
                 Z = self.generator.uniform(0, 1)
                 if np.log(Z) < self.log_mh_ratio(move, temp):
+                    self.move_accepted_counts[move_key] += 1
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
@@ -313,6 +322,17 @@ class MultiSampler(Sampler):
         self.global_prior = prior.global_prior
         self.likelihood = prior.likelihood
         super().__init__(prior, proposal_probs, generator, temp_schedule, multi_tries=multi_tries)
+        # --- Add move statistics ---
+        self.move_selected_counts = {k: 0 for k in self.proposals}
+        self.move_success_counts = {k: 0 for k in self.proposals}
+        self.move_accepted_counts = {k: 0 for k in self.proposals}
+        self.multi_ratios = {
+            "multigrow": [],
+            "multiprune": [],
+            "multichange": [],
+            "multiswap": []
+        }
+
 
     def get_init_state(self) -> Parameters:
         """
@@ -342,14 +362,25 @@ class MultiSampler(Sampler):
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
         for k in range(self.tree_prior.n_trees):
-            move = self.sample_move()(
+            move_cls = self.sample_move()
+            move_key = [k for k, v in all_moves.items() if v == move_cls][0]
+            self.move_selected_counts[move_key] += 1
+            move = move_cls(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol,
                 likelihood=self.likelihood, tree_prior=self.tree_prior, data_y=self.data.y,
                 n_samples_list=self.multi_tries
             )
             if move.propose(self.generator): # Check if a valid move was proposed
+                self.move_success_counts[move_key] += 1
+                move_name = type(move).__name__.lower()
+                if hasattr(move, "candidate_sampling_ratio"): # Record the sampling ratio for multi-moves
+                    for key in self.multi_ratios:
+                        if key in move_name:
+                            self.multi_ratios[key].append(move.candidate_sampling_ratio)
+                            break
                 Z = self.generator.uniform(0, 1)
                 if np.log(Z) < move.log_tran_ratio: # Already consider prior and likelihood in move
+                    self.move_accepted_counts[move_key] += 1
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed

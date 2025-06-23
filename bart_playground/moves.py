@@ -190,12 +190,16 @@ class MultiGrow(Grow):
         generator.shuffle(all_candidates)
 
         sampled_candidates = []
+        n_candidate_trials = 0
         for node_id, var, threshold in all_candidates:
+            n_candidate_trials += 1
             tree_copy = tree.copy()
             if tree_copy.split_leaf(node_id, var, threshold):
                 sampled_candidates.append((node_id, var, threshold))
                 if len(sampled_candidates) >= n_samples:
                     break
+
+        self.candidate_sampling_ratio = n_candidate_trials / min(n_samples, len(all_candidates))
 
         if not sampled_candidates:
             return False
@@ -289,6 +293,7 @@ class MultiPrune(Prune):
         tree = proposed.trees[self.trees_changed[0]]
         n_samples = self._get_n_samples(tree)
         all_candidates = list(tree.terminal_split_nodes)
+        self.candidate_sampling_ratio = 1 # Just a placeholder, not used in MultiPrune because prune always succeeds
 
         if not all_candidates:
             return False
@@ -406,12 +411,16 @@ class MultiChange(Change):
         generator.shuffle(all_candidates)
 
         sampled_candidates = []
+        n_candidate_trials = 0
         for node_id, var, threshold in all_candidates:
+            n_candidate_trials += 1
             tree_copy = tree.copy()
             if tree_copy.change_split(node_id, var, threshold):
                 sampled_candidates.append((node_id, var, threshold))
                 if len(sampled_candidates) >= n_samples:
                     break
+
+        self.candidate_sampling_ratio = n_candidate_trials / min(n_samples, len(all_candidates))
 
         if not sampled_candidates:
             return False
@@ -513,12 +522,16 @@ class MultiSwap(Swap):
         generator.shuffle(all_candidates)
 
         sampled_candidates = []
+        n_candidate_trials = 0
         for parent_id, child_id in all_candidates:
+            n_candidate_trials += 1
             tree_copy = tree.copy()
             if tree_copy.swap_split(parent_id, child_id):
                 sampled_candidates.append((parent_id, child_id))
                 if len(sampled_candidates) >= n_samples:
                     break
+
+        self.candidate_sampling_ratio = n_candidate_trials / min(n_samples, len(all_candidates))
 
         if not sampled_candidates:
             return False
