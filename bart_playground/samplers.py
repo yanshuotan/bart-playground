@@ -345,7 +345,7 @@ class MultiSampler(Sampler):
             move = self.sample_move()(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol,
                 likelihood=self.likelihood, tree_prior=self.tree_prior, data_y=self.data.y,
-                n_samples=self.multi_tries
+                n_samples_list=self.multi_tries
             )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)

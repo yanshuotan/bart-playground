@@ -155,15 +155,31 @@ class Swap(Move):
     
 class MultiGrow(Grow):
     def __init__(self, current, trees_changed, possible_thresholds, tol=100,
-                 likelihood=None, tree_prior=None, data_y=None, n_samples=10, **kwargs):
+                 likelihood=None, tree_prior=None, data_y=None, n_samples_list=[10, 5], **kwargs):
         self.likelihood = likelihood
         self.tree_prior = tree_prior
         self.data_y = data_y
-        self.n_samples = n_samples
+        self.n_samples_list = n_samples_list
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
 
+    def _get_max_depth(self, tree):
+        leaf_indices = [i for i, v in enumerate(tree.vars) if v == -1]
+        max_leaf_id = max(leaf_indices)
+        max_depth = int(np.log2(max_leaf_id + 1))
+        return max_depth
+    
+    def _get_n_samples(self, tree):
+        if isinstance(self.n_samples_list, int):
+            return self.n_samples_list
+        max_depth = self._get_max_depth(tree)
+        if max_depth < len(self.n_samples_list):
+            return self.n_samples_list[max_depth]
+        else:
+            return 1
+    
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
+        n_samples = self._get_n_samples(tree)
         all_candidates = [
             (node_id, var, threshold)
             for node_id in tree.leaves
@@ -178,7 +194,7 @@ class MultiGrow(Grow):
             tree_copy = tree.copy()
             if tree_copy.split_leaf(node_id, var, threshold):
                 sampled_candidates.append((node_id, var, threshold))
-                if len(sampled_candidates) >= self.n_samples:
+                if len(sampled_candidates) >= n_samples:
                     break
 
         if not sampled_candidates:
@@ -212,7 +228,7 @@ class MultiGrow(Grow):
         temp_tree = tree
         all_prune_candidates = list(temp_tree.terminal_split_nodes)
         n_all = len(all_prune_candidates)
-        n_samples = min(self.n_samples, n_all)
+        n_samples = min(self._get_n_samples(tree), n_all)
 
         # Make sure we sample the node_id itself and n_samples - 1 other candidates
         other_candidates = [nid for nid in all_prune_candidates if nid != node_id]
@@ -243,24 +259,42 @@ class MultiGrow(Grow):
     
 class MultiPrune(Prune):
     def __init__(self, current, trees_changed, possible_thresholds, tol=100,
-                 likelihood=None, tree_prior=None, data_y=None, n_samples=10, **kwargs):
+                 likelihood=None, tree_prior=None, data_y=None, n_samples_list=[10, 5], **kwargs):
         self.likelihood = likelihood
         self.tree_prior = tree_prior
         self.data_y = data_y
-        self.n_samples = n_samples
+        self.n_samples_list = n_samples_list
         if possible_thresholds is None:
             raise ValueError("possible_thresholds must be provided for MultiPrune.")
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
+        
+    def _get_max_depth(self, tree):
+        leaf_indices = [i for i, v in enumerate(tree.vars) if v == -1]
+        if not leaf_indices:
+            return 0
+        max_leaf_id = max(leaf_indices)
+        max_depth = int(np.log2(max_leaf_id + 1))
+        return max_depth
 
+    def _get_n_samples(self, tree):
+        if isinstance(self.n_samples_list, int):
+            return self.n_samples_list
+        max_depth = self._get_max_depth(tree)
+        if max_depth < len(self.n_samples_list):
+            return self.n_samples_list[max_depth]
+        else:
+            return 1
+        
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
+        n_samples = self._get_n_samples(tree)
         all_candidates = list(tree.terminal_split_nodes)
 
         if not all_candidates:
             return False
 
-        if len(all_candidates) > self.n_samples:
-            idxs = generator.choice(len(all_candidates), size=self.n_samples, replace=False)
+        if len(all_candidates) > n_samples:
+            idxs = generator.choice(len(all_candidates), size=n_samples, replace=False)
             sampled_candidates = [all_candidates[i] for i in idxs]
         else:
             sampled_candidates = all_candidates
@@ -292,6 +326,7 @@ class MultiPrune(Prune):
 
         # Calculate the log transition ratio
         temp_tree = tree
+        n_samples = self._get_n_samples(temp_tree)
         all_grow_candidates = [
             (leaf_id, var, threshold)
             for leaf_id in temp_tree.leaves
@@ -307,7 +342,7 @@ class MultiPrune(Prune):
             tree_copy = temp_tree.copy()
             if tree_copy.split_leaf(leaf_id, var, threshold):
                 sampled_others.append((leaf_id, var, threshold))
-                if len(sampled_others) >= self.n_samples - 1:
+                if len(sampled_others) >= n_samples - 1:
                     break
 
         grow_candidates = [grow_candidate] + sampled_others
@@ -334,15 +369,33 @@ class MultiPrune(Prune):
     
 class MultiChange(Change):
     def __init__(self, current, trees_changed, possible_thresholds, tol=100,
-                 likelihood=None, tree_prior=None, data_y=None, n_samples=10, **kwargs):
+                 likelihood=None, tree_prior=None, data_y=None, n_samples_list=[10, 5], **kwargs):
         self.likelihood = likelihood
         self.tree_prior = tree_prior
         self.data_y = data_y
-        self.n_samples = n_samples
+        self.n_samples_list = n_samples_list
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
+
+    def _get_max_depth(self, tree):
+        leaf_indices = [i for i, v in enumerate(tree.vars) if v == -1]
+        if not leaf_indices:
+            return 0
+        max_leaf_id = max(leaf_indices)
+        max_depth = int(np.log2(max_leaf_id + 1))
+        return max_depth
+
+    def _get_n_samples(self, tree):
+        if isinstance(self.n_samples_list, int):
+            return self.n_samples_list
+        max_depth = self._get_max_depth(tree)
+        if max_depth < len(self.n_samples_list):
+            return self.n_samples_list[max_depth]
+        else:
+            return 1
 
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
+        n_samples = self._get_n_samples(tree)
         all_candidates = [
             (node_id, var, threshold)
             for node_id in tree.split_nodes
@@ -357,7 +410,7 @@ class MultiChange(Change):
             tree_copy = tree.copy()
             if tree_copy.change_split(node_id, var, threshold):
                 sampled_candidates.append((node_id, var, threshold))
-                if len(sampled_candidates) >= self.n_samples:
+                if len(sampled_candidates) >= n_samples:
                     break
 
         if not sampled_candidates:
@@ -399,7 +452,7 @@ class MultiChange(Change):
             tree_copy = temp_tree.copy()
             if tree_copy.change_split(node_id, var, threshold):
                 sampled_others.append((node_id, var, threshold))
-                if len(sampled_others) >= self.n_samples - 1:
+                if len(sampled_others) >= n_samples - 1:
                     break
         rev_candidates = [rev_candidate] + sampled_others
 
@@ -424,15 +477,33 @@ class MultiChange(Change):
 
 class MultiSwap(Swap):
     def __init__(self, current, trees_changed, possible_thresholds=None, tol=100,
-                 likelihood=None, tree_prior=None, data_y=None, n_samples=10, **kwargs):
+                 likelihood=None, tree_prior=None, data_y=None, n_samples_list=[10, 5], **kwargs):
         self.likelihood = likelihood
         self.tree_prior = tree_prior
         self.data_y = data_y
-        self.n_samples = n_samples
+        self.n_samples_list = n_samples_list
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
+
+    def _get_max_depth(self, tree):
+        leaf_indices = [i for i, v in enumerate(tree.vars) if v == -1]
+        if not leaf_indices:
+            return 0
+        max_leaf_id = max(leaf_indices)
+        max_depth = int(np.log2(max_leaf_id + 1))
+        return max_depth
+
+    def _get_n_samples(self, tree):
+        if isinstance(self.n_samples_list, int):
+            return self.n_samples_list
+        max_depth = self._get_max_depth(tree)
+        if max_depth < len(self.n_samples_list):
+            return self.n_samples_list[max_depth]
+        else:
+            return 1
 
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
+        n_samples = self._get_n_samples(tree)
         all_candidates = [
             (parent_id, 2 * parent_id + lr)
             for parent_id in tree.nonterminal_split_nodes
@@ -446,7 +517,7 @@ class MultiSwap(Swap):
             tree_copy = tree.copy()
             if tree_copy.swap_split(parent_id, child_id):
                 sampled_candidates.append((parent_id, child_id))
-                if len(sampled_candidates) >= self.n_samples:
+                if len(sampled_candidates) >= n_samples:
                     break
 
         if not sampled_candidates:
@@ -492,7 +563,7 @@ class MultiSwap(Swap):
             tree_copy = temp_tree.copy()
             if tree_copy.swap_split(p_id, c_id):
                 sampled_others.append((p_id, c_id))
-                if len(sampled_others) >= self.n_samples - 1:
+                if len(sampled_others) >= n_samples - 1:
                     break
         rev_candidates = [rev_candidate] + sampled_others
 

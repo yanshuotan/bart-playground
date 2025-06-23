@@ -224,7 +224,7 @@ class MultiBART(BART):
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
-                 random_state=42, temperature=1.0, multi_tries=10):
+                 random_state=42, temperature=1.0, multi_tries=[10,5]):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
