@@ -120,8 +120,14 @@ class Sampler(ABC):
                 print(f"Running iteration {iter}/{n_iter}")
             
             temp = self.temp_schedule(iter)
-            backup_current = current.copy(copy_cache=False) if iter >= n_skip else None
-            
+            backup_current = None
+            if iter >= n_skip:
+                if isinstance(current, list):
+                    # If current is a list (e.g., in LogisticSampler), copy each category
+                    backup_current = [c.copy(copy_cache=False) for c in current]
+                else:
+                    backup_current = current.copy(copy_cache=False)
+
             current = self.one_iter(current, temp, return_trace=False)
             
             if iter >= n_skip:
