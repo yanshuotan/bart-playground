@@ -111,15 +111,6 @@ class BARTAgent(BanditAgent):
         # self.actions = np.empty((0, self.n_arms)) # only for forest encoding
         self.encoded_features = np.empty((0, self.combined_dim))  # Encoded features
         
-        # Initialize the BART model
-        self.model = DefaultBART(
-            n_trees=n_trees,
-            ndpost=ndpost,
-            nskip=nskip,
-            random_state=random_state,
-            proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1}
-        )
-        
         # Track if model is fitted
         self.is_model_fitted = False
         # The number of additional posterior iterations to add when updating the model
@@ -290,6 +281,13 @@ class DefaultBARTAgent(BARTAgent):
                  random_state: int = 42,
                  encoding: str = 'multi') -> None:
         super().__init__(n_arms, n_features, ndpost, nskip, nadd, n_trees, random_state, encoding)
+        self.model = DefaultBART(
+            n_trees=n_trees,
+            ndpost=ndpost,
+            nskip=nskip,
+            random_state=random_state,
+            proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1}
+        )
         
 class LogisticBARTAgent(BARTAgent):
     """

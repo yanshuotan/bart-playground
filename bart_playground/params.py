@@ -186,24 +186,26 @@ class Tree:
         return new_tree
 
     @classmethod
-    def from_existing(cls, other: "Tree"):
+    def from_existing(cls, other: "Tree", copy_cache: bool = True):
         """
         Create a new Tree object by copying data from an existing Tree.
         """
         # Copy all arrays
+        if other.n is None:
+            copy_cache = False  # If n is None, we cannot copy cache arrays
         
         return cls(
             other.dataX,  # dataX is not copied since it's shared across trees
             other.vars.copy(),
             other.thresholds.copy(), 
             other.leaf_vals.copy(),
-            other.n.copy() if other.n is not None else None,
-            other.leaf_ids.copy() if other.leaf_ids is not None else None,
-            other.evals.copy() if other.evals is not None else None
+            other.n.copy() if copy_cache else None,
+            other.node_indicators.copy() if copy_cache else None,
+            other.evals.copy() if copy_cache else None
         )
 
-    def copy(self):
-        return Tree.from_existing(self)
+    def copy(self, copy_cache: bool = True) -> "Tree":
+        return Tree.from_existing(self, copy_cache=copy_cache)
 
     def traverse_tree(self, X: np.ndarray) -> np.ndarray:
         """
@@ -489,12 +491,9 @@ class Tree:
                 and not self.is_terminal_split_node(i)]
 
     @property
-    def leaf_basis(self) -> NDArray[Float32Or64]:
-        leaves = self.leaves
-        basis = np.zeros((len(self.leaf_ids), len(leaves)), dtype=self.float_dtype)
-        for i, leaf in enumerate(leaves):
-            basis[:, i] = (self.leaf_ids == leaf).astype(self.float_dtype)
-        return basis
+    def leaf_basis(self) -> NDArray[np.bool_]:
+        return self.node_indicators[:, self.vars == -1]
+        # return _compute_leaf_basis(self.node_indicators, self.vars)
 
     def __str__(self):
         return self._print_tree()
@@ -602,12 +601,12 @@ class Parameters:
             tree.leaf_ids = None
             tree.n = None
             
-    def copy(self, modified_tree_ids=None):
+    def copy(self, modified_tree_ids=None, copy_cache=True):
         if modified_tree_ids is None:
             modified_tree_ids = range(self.n_trees)
         copied_trees = self.trees.copy() # Shallow copy
         for tree_id in modified_tree_ids:
-            copied_trees[tree_id] = self.trees[tree_id].copy()
+            copied_trees[tree_id] = self.trees[tree_id].copy(copy_cache)
         # No need to deep copy global_params and cache
         # because they only contain numerical values (which are immutable)
         return Parameters(trees=copied_trees, 
