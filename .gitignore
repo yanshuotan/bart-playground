@@ -2,8 +2,8 @@
 *.egg-info/
 .venv
 venv/
-notebooks/*.dot
-notebooks/*.prof
+*.dot
+*.prof
 scripts/
 .hydra/hydra.yaml
 .DS_Store
