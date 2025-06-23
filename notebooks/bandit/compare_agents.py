@@ -164,7 +164,7 @@ def generate_simulation_data_for_agents(scenario_name: str, scenario: Scenario, 
                 "time_agents": time_agents.tolist()
             }
             if save_dir is not None:
-                file_path = os.path.join(save_dir, f"simulation_results_{scenario_name}_{sim}.json")
+                file_path = os.path.join(save_dir, f"{scenario_name}_sim{sim}_{datetime.now().strftime('%m%d_%H%M')}.json")
                 with open(file_path, "w") as f:
                     json.dump(serializable_result, f, indent=4) 
                 _ca_logger.info(f"Saved results for simulation {sim} of {scenario_name} in {file_path}.")

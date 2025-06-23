@@ -82,6 +82,20 @@ def _update_n_and_indicators_numba(starting_node, dataX, append: bool, vars, thr
     # success = True if all updated n are > 0 else False
     return success
 
+@njit
+def traverse_tree_numba(vars, thresholds, split_nodes, X):
+    n, p = X.shape
+    node_ids = np.zeros(n, np.int64)
+    for si in range(split_nodes.shape[0]):
+        node = split_nodes[si]
+        var = vars[node]
+        thr = thresholds[node]
+        for i in range(n):
+            if node_ids[i] == node:
+                # boolean test gets coerced to 0/1
+                node_ids[i] = node * 2 + 1 + (X[i, var] > thr)
+    return node_ids
+
 class Tree:
     """
     Represents the parameters of a single tree in the BART model, combining both
@@ -174,28 +188,12 @@ class Tree:
         return Tree.from_existing(self, copy_cache=copy_cache)
 
     def traverse_tree(self, X: np.ndarray) -> np.ndarray:
-        """
-        Traverse the tree to find the leaf nodes for a given input data matrix.
-
-        Parameters:
-        - X: np.ndarray
-            Input data (2D array).
-
-        Returns:
-        - int
-            Index of the leaf node.
-        """
-        node_ids = np.full(X.shape[0], 0, dtype=int)
-        if len(self.split_nodes) == 0: # Tree has no splits
-            return node_ids
-        routing = X[:, self.vars[self.split_nodes]] > self.thresholds[self.split_nodes]
-        split_node_counter = 0
-        for k in range(len(self.vars)):
-            if self.is_split_node(k):
-                node_ids[node_ids == k] = node_ids[node_ids == k] * 2 + \
-                    1 + routing[node_ids == k, split_node_counter]
-                split_node_counter += 1
-        return node_ids
+        return traverse_tree_numba(
+            self.vars, 
+            self.thresholds, 
+            np.array(self.split_nodes, dtype=np.int64), 
+            X
+        )
 
     def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float32]:
         """

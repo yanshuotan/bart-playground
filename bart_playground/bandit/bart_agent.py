@@ -133,26 +133,6 @@ class BARTAgent(BanditAgent):
     def _mixing_bonus(self, iteration):
        return 1.0 / (1.0 + np.exp(iteration))
     
-    def _default_schedule_backup(self) -> Callable[[int], float]:
-        _epsilon = 1e-5
-        total_k = self.model._trace_length
-        raw_prob = np.zeros(total_k)
-        for i in range(total_k):
-            data_idx = self._data_cnt_for_it(i)
-            total_data_cnt = self._data_cnt_for_it(total_k)
-            # half life: log 2 / self.nadd 
-            raw_prob[i] = math.exp(self.nadd * (data_idx + 1 - total_data_cnt))
-            if data_idx == 0:
-                # Initial posterior samples have no mixing bonus
-                # and their probability share should be normalized by division by ndpost
-                raw_prob[i] /= (self.ndpost / self.nadd)
-            if raw_prob[i] < _epsilon:
-                raw_prob[i] = 0 # Use zero probability for very small values
-                self.model.trace[i] = None  # Set trace to None for very small probabilities
-        prob = raw_prob / np.sum(raw_prob)
-        prob_schedule = lambda k: float(prob[k])
-        return prob_schedule
-    
     def _default_schedule(self) -> Callable[[int], float]:
         total_k = self.model._trace_length
         raw_prob = self._mixing_bonus(np.arange(total_k))
