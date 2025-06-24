@@ -77,7 +77,7 @@ cli = True
 # Determine which scenarios to run; default to Mushroom if none or invalid
 if len(args) == 0 or not any(arg in scenario_factories for arg in args):
     print("No valid scenarios specified, using Mushroom.")
-    args = ['Mushroom']
+    args = ['Shuttle']
     cli = False
 
 selected_keys = [k for k in scenario_factories if k in args]
@@ -113,7 +113,7 @@ all_agent_specs: List[AgentSpec] = [
         'nadd':3,               
         'random_state':1000}),
     ("LogisticBART", LogisticBARTAgent,{
-        'n_trees': 100,
+        'n_trees': 50,
         'nskip':50,
         'ndpost':50,
         'nadd':2,
@@ -165,7 +165,7 @@ all_agent_specs: List[AgentSpec] = [
 ]
 # %%
 # Filter agents to include only those we want to test
-agent_specs = [agent for agent in all_agent_specs if agent[0] in ["BARTs", "LinearTS"]]
+agent_specs = [agent for agent in all_agent_specs if agent[0] in ["BART", "LinearTS"]]
 
 # %%
 n_simulations = 8  # Number of simulations per scenario
@@ -190,9 +190,9 @@ def call_func():
 
 # %%
 if not cli:
-    # %prun -s cumtime -D profile_c2.prof -q call_func()
-    # !gprof2dot -f pstats profile_c2.prof -o profile_c2.dot
-    # !dot -Tpng profile_c2.dot -o profile_c2.png
+    # %prun -s cumtime -D profile_clog.prof -q call_func()
+    # !gprof2dot -f pstats profile_clog.prof -o profile_clog.dot
+    # !dot -Tpng profile_clog.dot -o profile_clog.png
     pass  # For notebook, we run the function and generate a profile
 else:
     results = call_func()
