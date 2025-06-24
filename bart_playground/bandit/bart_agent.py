@@ -19,12 +19,11 @@ class BanditEncoder:
             self.combined_dim = n_features + n_arms
         elif encoding == 'multi':
             self.combined_dim = n_features * n_arms
-        elif encoding == 'forest':
-            raise NotImplementedError("Forest encoding is not yet implemented.")
-        elif encoding == 'native':
+        elif encoding == 'separate' or encoding == 'native':
             self.combined_dim = n_features
-            # Native encoding is just the feature vector itself
+            # "native" encoding is just the feature vector itself
             # This is useful for models that can handle categorical features directly
+            # "separate" encoding means that we will use different models with the feature vector as is
         else:
             raise ValueError(f"Unknown encoding: {encoding}")
         
@@ -61,10 +60,7 @@ class BanditEncoder:
                 start_idx = arm * self.n_features
                 end_idx = start_idx + self.n_features
                 x_combined[row_idx, start_idx:end_idx] = x
-        elif self.encoding == 'forest':
-            raise NotImplementedError("Forest encoding is not yet implemented.")
-        elif self.encoding == 'native':
-            # Native encoding just returns the feature vector as is
+        elif self.encoding == 'separate' or self.encoding == 'native':
             x_combined = x
         else:
             raise ValueError(f"Unknown encoding: {self.encoding}")
@@ -75,9 +71,8 @@ class BARTAgent(BanditAgent):
     A bandit agent that uses a Bayesian Additive Regression Trees (BART) model to choose an arm.
     BART models provide flexible nonparametric modeling of the reward function.
     """
-    def __init__(self, n_arms: int, n_features: int, 
-                 ndpost: int = 1000, nskip: int = 100, nadd: int = 3,
-                 n_trees: int = 200, 
+    def __init__(self, n_arms: int, n_features: int, model_factory: Callable,
+                 nadd: int = 3,
                  random_state: int = 42,
                  encoding: str = 'multi') -> None:
         """
@@ -96,8 +91,6 @@ class BARTAgent(BanditAgent):
         self.n_features = n_features
         
         # BART model parameters
-        self.ndpost = ndpost
-        self.nskip = nskip
         self.random_state = random_state
         self.rng = np.random.default_rng(self.random_state)
 
@@ -106,11 +99,16 @@ class BARTAgent(BanditAgent):
         self.combined_dim = self.encoder.combined_dim
         
         # Initialize storage for all data
-        self.features = np.empty((0, n_features))  # X features
-        self.outcomes = np.empty((0, 1))           # y outcomes
-        # self.actions = np.empty((0, self.n_arms)) # only for forest encoding
-        self.encoded_features = np.empty((0, self.combined_dim))  # Encoded features
+        self._clear_internal_data()
         
+        self.model_factory = model_factory
+        if self.encoding == 'separate':
+            self.models = [model_factory() for _ in range(n_arms)]
+        else:
+            # Create a single BART model for all arms
+            self.models = [model_factory()]
+        self.is_logistic = isinstance(self.model, LogisticBART) or \
+                        (isinstance(self.model, MultiChainBART) and self.model.bart_class == LogisticBART)
         # Track if model is fitted
         self.is_model_fitted = False
         # The number of additional posterior iterations to add when updating the model
@@ -119,22 +117,20 @@ class BARTAgent(BanditAgent):
         self.cnt = 0  # Counter for number of data
         
     @property
-    def n_onehot_arms(self) -> int:
-        """
-        Number of one-hot encoded arms.
-        """
-        return self.n_arms - 1
+    def model(self):
+        return self.models[0]
     
-    def _data_cnt_for_it(self, iteration):
-        if iteration <= self.ndpost:
-            return 0
-        return (iteration - self.ndpost - 1) // self.nadd + 1
-    
+    @property
+    def separate_models(self) -> bool:
+        return self.encoding == 'separate'
+
     def _mixing_bonus(self, iteration):
        return 1.0 / (1.0 + np.exp(iteration))
     
-    def _default_schedule(self) -> Callable[[int], float]:
-        total_k = self.model._trace_length
+    def total_iter(self, model_idx=0) -> int:
+        return self.models[model_idx]._trace_length
+    
+    def _default_schedule(self, total_k) -> Callable[[int], float]:
         raw_prob = self._mixing_bonus(np.arange(total_k))
         raw_prob = raw_prob / np.sum(raw_prob)
         return lambda k: raw_prob[k]
@@ -146,13 +142,35 @@ class BARTAgent(BanditAgent):
         # Ensure x is a 2D array with one row
         x = np.array(x).reshape(1, -1)
         
-        x_combined = self.encoder.encode(x, arm=-1)  # Encode for all arms
-        
         # Thompson Sampling:
         # Get posterior sample from BART model
-        prob_schedule = self._default_schedule()
-        post_mean_samples = self.model.posterior_sample(x_combined, schedule=prob_schedule)
-        action_estimates = post_mean_samples
+        
+        def _reformat(post_sample):
+            if self.is_logistic:
+                # For LogisticBART 'multi', the shape is (n_arms, 2), we only need the second column (the probability of success)
+                if self.encoding == 'multi':
+                    post_sample = post_sample[:, 1] 
+                # For LogisticBART 'native', the shape is (1, n_arms) with n_arms=2
+                elif self.encoding == 'native':
+                    post_sample = post_sample.flatten()
+                # For LogisticBART 'separate', the shape is (1, 2) for each arm
+                elif self.encoding == 'separate':
+                    post_sample = post_sample[:, 1]
+            return post_sample
+
+        if not self.separate_models:
+            prob_schedule = self._default_schedule(self.total_iter())
+            x_combined = self.encoder.encode(x, arm=-1)  # Encode for all arms
+            post_mean_samples = self.model.posterior_sample(x_combined, schedule=prob_schedule)
+            action_estimates = _reformat(post_mean_samples)
+        else:
+            # For separate encoding, we need to get estimates for each arm separately
+            action_estimates = np.zeros((self.n_arms))
+            for arm in range(self.n_arms):
+                prob_schedule = self._default_schedule(self.total_iter(model_idx=arm))
+                post_mean_samples = self.models[arm].posterior_sample(x, schedule=prob_schedule)
+                
+                action_estimates[arm] = _reformat(post_mean_samples)
 
         return action_estimates
 
@@ -171,10 +189,6 @@ class BARTAgent(BanditAgent):
             return self.rng.integers(0, self.n_arms)
         
         action_estimates = self._get_action_estimates(x)
-        if action_estimates.ndim > 1 and action_estimates.shape[0] > 1:
-            # For LogisticBART 'multi', the shape is (n_arms, 2), we only need the second column (the probability of success)
-            action_estimates = action_estimates[:, 1] 
-        # Note that for LogisticBART 'native', the shape is (1, n_arms) with n_arms=2, and we can use it directly
         
         # Choose the arm with the highest predicted outcome
         return int(np.argmax(action_estimates))
@@ -183,9 +197,9 @@ class BARTAgent(BanditAgent):
         """
         Clear internal data arrays after initial model fit.
         """
-        self.features = np.empty((0, self.n_features))
-        self.outcomes = np.empty((0, 1))    
-        self.encoded_features = np.empty((0, self.combined_dim))
+        self.ini_arms = np.empty((0, 1))
+        self.ini_outcomes = np.empty((0, 1))    
+        self.ini_enc_features = np.empty((0, self.combined_dim))
     
     def update_state(self, arm: int, x: Union[np.ndarray, List[float]], 
                      y: Union[float, np.ndarray]) -> "BARTAgent":
@@ -205,7 +219,7 @@ class BARTAgent(BanditAgent):
         y = np.array(y).reshape(1)
         
         # Common encoding logic for both phases
-        new_features = self.encoder.encode(x, arm=arm)
+        new_enc_features = self.encoder.encode(x, arm=arm)
         
         if self.encoding == 'native':
             # Native encoding just uses the feature vector as is
@@ -215,25 +229,40 @@ class BARTAgent(BanditAgent):
         
         if not self.is_model_fitted:
             # Accumulation phase: collect data for initial fit
-            self.features = np.vstack([self.features, x])
-            self.encoded_features = np.vstack([self.encoded_features, new_features])
-            self.outcomes = np.vstack([self.outcomes, y.reshape(-1, 1)])
+            self.ini_arms = np.vstack([self.ini_arms, arm])
+            self.ini_enc_features = np.vstack([self.ini_enc_features, new_enc_features])
+            self.ini_outcomes = np.vstack([self.ini_outcomes, y.reshape(-1, 1)])
             
             self.cnt += 1
             
             # Check if we have enough data for initial fit
             # For LogisticBART, we need less observations and more than one unique outcome
             # For DefaultBART, we need more observations
-            is_logistic = (isinstance(self.model, LogisticBART)) or (isinstance(self.model, MultiChainBART) and self.model.bart_class == LogisticBART)
-            criteria = (self.cnt >= 10 and np.unique(self.outcomes).size > 1) if is_logistic else (self.cnt >= 20)
+            criteria = (
+                self.cnt >= 10 and 
+                (
+                    np.all([np.unique(self.ini_outcomes[self.ini_arms.flatten() == arm]).size > 1 for arm in range(self.n_arms)])
+                    if self.separate_models else 
+                    np.unique(self.ini_outcomes).size > 1
+                )) if self.is_logistic else (self.cnt >= 20)
             if criteria:
                 # Initial fit using all collected data
                 print(f"Fitting initial BART model with first {self.cnt} observations...", end="")
-                self.model.fit(
-                    X=self.encoded_features, 
-                    y=self.outcomes.flatten(),
-                    quietly=True
-                )
+                # TODO
+                if self.separate_models:
+                    for arm in range(self.n_arms):
+                        mask = (self.ini_arms.flatten() == arm)
+                        self.models[arm].fit(
+                            X=self.ini_enc_features[mask, :],
+                            y=self.ini_outcomes[mask].flatten(),
+                            quietly=True
+                        )
+                else: 
+                    self.model.fit(
+                        X=self.ini_enc_features,
+                        y=self.ini_outcomes.flatten(),
+                        quietly=True
+                    )
                 print(" Done.")
                 self.is_model_fitted = True
                 
@@ -242,13 +271,19 @@ class BARTAgent(BanditAgent):
         else:
             # Online update phase: process single observation without accumulation
             # Update the model with the new data point only
-            self.model.update_fit(
-                X=new_features, 
+            if self.separate_models:
+                # For separate encoding, we update the specific model for the chosen arm
+                updatee = self.models[arm]
+            else:
+                updatee = self.model
+
+            updatee.update_fit(
+                X=new_enc_features, 
                 y=y.flatten(),
                 add_ndpost=self.nadd,
                 quietly=True
             )
-        
+
         return self
 
 class DefaultBARTAgent(BARTAgent):
@@ -260,14 +295,14 @@ class DefaultBARTAgent(BARTAgent):
                  n_trees: int = 200, 
                  random_state: int = 42,
                  encoding: str = 'multi') -> None:
-        super().__init__(n_arms, n_features, ndpost, nskip, nadd, n_trees, random_state, encoding)
-        self.model = DefaultBART(
+        model_factory = lambda: DefaultBART(
             n_trees=n_trees,
             ndpost=ndpost,
             nskip=nskip,
             random_state=random_state,
             proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1}
         )
+        super().__init__(n_arms, n_features, model_factory, nadd, random_state, encoding)
         
 class LogisticBARTAgent(BARTAgent):
     """
@@ -278,18 +313,18 @@ class LogisticBARTAgent(BARTAgent):
                  n_trees: int = 200, 
                  random_state: int = 42,
                  encoding: str = 'native') -> None:
-        if encoding != 'native' and encoding != 'multi':
-            raise NotImplementedError("LogisticBARTAgent currently only supports 'native' encoding.")
+        if encoding == 'one-hot':
+            raise NotImplementedError("LogisticBARTAgent currently does not support one-hot encoding.")
         if n_arms > 2 and encoding == 'native':
             raise NotImplementedError("LogisticBARTAgent: native encoding currently only supports n_arms = 2.")
-        super().__init__(n_arms, n_features, ndpost, nskip, nadd, n_trees, random_state, encoding)
-        self.model = LogisticBART(
+        model_factory = lambda: LogisticBART(
             n_trees=n_trees,
             ndpost=ndpost,
             nskip=nskip,
             random_state=random_state,
             proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1}
         )
+        super().__init__(n_arms, n_features, model_factory, nadd, random_state, encoding)
         
 class MultiChainBARTAgent(BARTAgent):
     """
@@ -303,8 +338,7 @@ class MultiChainBARTAgent(BARTAgent):
                  encoding: str = '') -> None:
         if encoding == '':
             encoding = 'multi' # Should be very carefull if you want to use 'native' encoding here
-        super().__init__(n_arms, n_features, ndpost, nskip, nadd, n_trees, random_state, encoding)
-        self.model = MultiChainBART(
+        model_factory = lambda: MultiChainBART(
             n_ensembles=n_ensembles,  # Number of BART ensembles
             bart_class=bart_class,
             random_state=42,
@@ -313,10 +347,11 @@ class MultiChainBARTAgent(BARTAgent):
             nskip=nskip,
             proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1}
         )
-    
+        super().__init__(n_arms, n_features, model_factory, nadd, random_state, encoding)
+
     def clean_up(self) -> None:
         """
         Release resources held by the MultiChainBART agent.
         """
-        self.model.clean_up()
-        
+        for model in self.models:
+            model.clean_up()
