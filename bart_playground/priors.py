@@ -276,6 +276,13 @@ class BARTLikelihood:
         """
         self.f_sigma2 = f_sigma2
 
+    def compute_weights(self, data_y, R = None):
+        """
+        Computes weights for each observation. While the default is uniform weights,
+        this method can be overridden in subclasses to provide custom weights.
+        """
+        return np.ones(len(data_y))
+
     def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
         """
         Calculate the log marginal likelihood of the trees in a BART model.
@@ -556,4 +563,60 @@ class LogisticPrior:
     def set_latents(self, latents):
         self.tree_prior.set_latents(latents)
         self.likelihood.set_latents(latents)
+
+class OWLLikelihood(LogisticLikelihood):
+    """
+    Likelihood for weighted logistic regression tasks.
+    
+    Inherits from LogisticLikelihood and overrides the weights method.
+    """
+    def __init__(self, c, d, parent=None, treatment=None, reward=None):
+        """
+        For weighted logistic regression tasks.
+        """
+        super().__init__(c, d, parent)
+        self.treatment = treatment
+        self.reward = reward
+
+    def compute_weights(self):
+        """
+        Compute OWL weights
+        y: Binary treatment variable (-1 or 1)
+        R: Reward (continuous; larger values are more desirable)
+        """
+        y = self.treatment
+        R = self.reward
+        p = np.mean(y == 1)
+        denom = np.clip(y * p + 0.5 * (1 - y), 1e-10, None)
+        return R / denom
+
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
+        """
+        Compute weighted log marginal likelihood
+        """
+        weights = self.compute_weights()
+        weighted_data_y = data_y * weights
+        return super().trees_log_marginal_lkhd(bart_params, weighted_data_y, tree_ids)
+
+class OWLPrior:
+    """
+    BART Prior for weighted logistic classification tasks.
+    """
+    def __init__(self, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, treatment=None, reward=None, generator=np.random.default_rng()):
+        if c == 0.0 or d == 0.0:
+            a0 = 3.5 / math.sqrt(2)
+            c = n_trees/(a0 ** 2) + 0.5
+            d = n_trees/(a0 ** 2)
         
+        self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self)
+        self.likelihood = OWLLikelihood(c, d, parent=self, treatment=None, reward=None)
+        
+        # Placeholders for values reused in resampling
+        self.rh = None  
+        self.sh = None
+        self.pi_h = None
+        self.param = None
+    
+    def set_latents(self, latents):
+        self.tree_prior.set_latents(latents)
+        self.likelihood.set_latents(latents)
