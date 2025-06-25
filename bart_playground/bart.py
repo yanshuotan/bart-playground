@@ -223,7 +223,7 @@ class MultiBART(BART):
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
-                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
+                 proposal_probs=default_proposal_probs, tol=1, max_bins=100,
                  random_state=42, temperature=1.0, multi_tries=[10,5]):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)

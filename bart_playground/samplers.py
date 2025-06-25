@@ -2,7 +2,7 @@
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 from scipy.stats import truncnorm
 
 from .params import Tree, Parameters
@@ -312,8 +312,8 @@ class MultiSampler(Sampler):
     Default implementation of the BART sampler.
     """
     def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
-                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100, 
-                 multi_tries: int = 10):
+                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=1, 
+                 multi_tries: Union[int, list[int]] = 10):
         self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
