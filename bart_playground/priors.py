@@ -88,9 +88,9 @@ def _trees_log_prior_numba(tree_vars, alpha, beta):
 
 def _get_sqrt_weights(n, weights, temperature):
     if weights is None:
-        weights = np.ones(n, dtype=np.float64) * temperature
+        weights = np.ones(n, dtype=np.float64) / temperature
     else:
-        weights = weights.astype(np.float64) * temperature
+        weights = weights.astype(np.float64) / temperature
     sqrt_weights = np.sqrt(weights)
     return sqrt_weights
 
