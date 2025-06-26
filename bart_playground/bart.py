@@ -24,14 +24,14 @@ class BART:
         self.is_fitted = False
         self.data = None
 
-    def fit(self, X, y, weights=None, quietly=False):
+    def fit(self, X, y, sample_weight=None, quietly=False):
         """
         Fit the BART model.
         """
         self.data = self.preprocessor.fit_transform(X, y)
         self.sampler.add_data(self.data)
         self.sampler.add_thresholds(self.preprocessor.thresholds)
-        self.trace = self.sampler.run(self.ndpost + self.nskip, weights, quietly=quietly, n_skip=self.nskip)
+        self.trace = self.sampler.run(self.ndpost + self.nskip, sample_weight, quietly=quietly, n_skip=self.nskip)
         self.is_fitted = True
     
     def update_fit(self, X, y, add_ndpost=20, add_nskip=10, quietly=False):
