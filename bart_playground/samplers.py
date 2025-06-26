@@ -1,4 +1,3 @@
-
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
@@ -78,7 +77,7 @@ class Sampler(ABC):
         if len(self.trace) > 0:
             self.trace[-1].clear_cache()
         
-    def run(self, n_iter, progress_bar = True, quietly = False, current = None, n_skip = 0):
+    def run(self, n_iter, weights=None, progress_bar = True, quietly = False, current = None, n_skip = 0):
         """
         Run the sampler for a specified number of iterations from `current` or a fresh start.
 
@@ -110,7 +109,7 @@ class Sampler(ABC):
                 print(f"Running iteration {iter}/{n_iter}")
             
             temp = self.temp_schedule(iter)
-            current = self.one_iter(current, temp, return_trace=False)
+            current = self.one_iter(current, temp, weights, return_trace=False)
 
             if iter >= n_skip:
                 self.clear_last_cache()  # Clear cache of the last trace
@@ -155,7 +154,7 @@ class Sampler(ABC):
         pass
 
     @abstractmethod
-    def one_iter(self, current, temp, return_trace=False):
+    def one_iter(self, current, temp, weights=None, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
@@ -264,14 +263,14 @@ class DefaultSampler(Sampler):
         global_params = self.global_prior.init_global_params(self.data)
         return Parameters(trees, global_params)
     
-    def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
+    def log_mh_ratio(self, move : Move, temp, weights, data_y = None, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
         data_y = self.data.y if data_y is None else data_y
         return (self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize, weights, temp)) + \
             move.log_tran_ratio
 
-    def one_iter(self, current, temp, return_trace=False):
+    def one_iter(self, current, temp, weights=None, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
@@ -283,13 +282,13 @@ class DefaultSampler(Sampler):
                 )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
-                if np.log(Z) < self.log_mh_ratio(move, temp):
-                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
+                if np.log(Z) < self.log_mh_ratio(move, temp, weights):
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids=[k], weights=weights, temperature=temp)
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
                         iter_trace.append((k+1, move.proposed))
-        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
+        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y, weights=weights, temperature=temp)
         if return_trace:
             return iter_trace
         else:
@@ -349,7 +348,7 @@ class ProbitSampler(Sampler):
 
         return Z
 
-    def one_iter(self, current, temp, return_trace=False):
+    def one_iter(self, current, temp, weights=None, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
@@ -473,7 +472,7 @@ class LogisticSampler(Sampler):
             self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
             move.log_tran_ratio
     
-    def one_iter(self, current, temp, return_trace=False):
+    def one_iter(self, current, temp, weights=None, return_trace=False):
         """
         Perform one iteration of the sampler.
         """
