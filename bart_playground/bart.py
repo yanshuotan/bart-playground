@@ -388,7 +388,9 @@ class ChangeNumTreeBART(BART):
                  eps_nu: float=3, specification="linear", 
                  theta_0_ini = 200, theta_0_min = 10, theta_0_nskip_prop = 0.5, theta_df = 100, tau_k = 2.0,
                  proposal_probs=default_proposal_probs, special_probs=default_special_probs, tol=100, max_bins=100,
-                 random_state=42, temperature=1.0, tree_num_prior_type="poisson", special_move_interval = 1):
+                 random_state=42, temperature=1.0, tree_num_prior_type="poisson", special_move_interval = 1,
+                 min_gp_eta=-0.999, gp_eta_nskip_prop=0.3, 
+                 max_com_nu=10.0, com_nu_nskip_prop=0.3):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
@@ -403,8 +405,12 @@ class ChangeNumTreeBART(BART):
         else:
             raise ValueError("Invalid temperature type ", type(temperature))
         change_theta_0 = theta_0_min != theta_0_ini
+        change_gp_eta = min_gp_eta != 0.0
+        change_com_nu = max_com_nu != 1.0
         sampler = NTreeSampler(prior = prior, proposal_probs = proposal_probs, special_probs = special_probs, 
                                generator = rng, tol = tol, temp_schedule=temp_schedule, 
                                special_move_interval=special_move_interval, 
-                               change_theta_0 = change_theta_0, min_theta_0=theta_0_min, theta_0_nskip_prop=theta_0_nskip_prop)
+                               change_theta_0 = change_theta_0, min_theta_0=theta_0_min, theta_0_nskip_prop=theta_0_nskip_prop,
+                               change_gp_eta=change_gp_eta, min_gp_eta=min_gp_eta, gp_eta_nskip_prop=gp_eta_nskip_prop,
+                               change_com_nu=change_com_nu, max_com_nu=max_com_nu, com_nu_nskip_prop=com_nu_nskip_prop)
         super().__init__(preprocessor, sampler, ndpost, nskip)

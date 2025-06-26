@@ -9,6 +9,8 @@ from .moves import all_moves, Move
 from .util import Dataset
 from .priors import *
 
+import warnings
+
 class TemperatureSchedule:
 
     def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
@@ -23,7 +25,9 @@ class Sampler(ABC):
     """
     def __init__(self, prior, proposal_probs: dict,  
                  generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule(),
-                 change_theta_0: bool = False, min_theta_0: float = 10, theta_0_nskip_prop: float = 0.5):
+                 change_theta_0: bool = False, min_theta_0: float = 10, theta_0_nskip_prop: float = 0.5,
+                 change_gp_eta: bool = False, min_gp_eta: float = -0.999, gp_eta_nskip_prop: float = 0.3,
+                 change_com_nu: bool = False, max_com_nu: float = 10.0, com_nu_nskip_prop: float = 0.3):
         """
         Initialize the sampler with the given parameters.
 
@@ -34,6 +38,13 @@ class Sampler(ABC):
             temp_schedule (TemperatureSchedule): Temperature schedule for the sampler.
             change_theta_0 (bool): Whether to enable theta_0 functionality. This is only relevant for NTreeSampler.
             min_theta_0 (float): Minimum value for theta_0 during updates (if enabled).
+            theta_0_nskip_prop (float): Proportion of n_skip for theta_0 decay (if enabled).
+            change_gp_eta (bool): Whether to enable gp_eta functionality. This is only relevant for NTreeSampler.
+            min_gp_eta (float): Minimum value for gp_eta during updates (if enabled).
+            gp_eta_nskip_prop (float): Proportion of n_skip for gp_eta decay (if enabled).
+            change_com_nu (bool): Whether to enable com_nu functionality. This is only relevant for NTreeSampler.
+            max_com_nu (float): Maximum value for com_nu during updates (if enabled).
+            com_nu_nskip_prop (float): Proportion of n_skip for com_nu increase (if enabled).
 
         Attributes:
             data: Placeholder for data, initially set to None.
@@ -44,6 +55,15 @@ class Sampler(ABC):
             trace (list): A list to store the trace of the sampling process.
             generator (np.random.Generator): A random number generator.
         """
+        total_prop = theta_0_nskip_prop + gp_eta_nskip_prop
+        if total_prop > 1:
+            raise ValueError("theta_0_nskip_prop + gp_eta_nskip_prop must not exceed 1.")
+        elif total_prop > 0.9:
+            warnings.warn(
+                "theta_0_nskip_prop + gp_eta_nskip_prop > 0.9. This may leave little room for regular burn-in period.",
+                UserWarning
+            )
+            
         self._data : Optional[Dataset] = None
         self.prior = prior
         self.n_iter = None
@@ -54,7 +74,13 @@ class Sampler(ABC):
         self.change_theta_0 = change_theta_0  # Enable or disable theta_0 functionality
         self.min_theta_0 = min_theta_0  # Minimum theta_0 value if enabled
         self.theta_0_nskip_prop = theta_0_nskip_prop  # Proportion of n_skip for theta_0 decay
-        
+        self.change_gp_eta = change_gp_eta
+        self.min_gp_eta = min_gp_eta
+        self.gp_eta_nskip_prop = gp_eta_nskip_prop
+        self.change_com_nu = change_com_nu
+        self.max_com_nu = max_com_nu
+        self.com_nu_nskip_prop = com_nu_nskip_prop
+
         # create cache for moves
         self.moves_cache = None
         # current move cache iterator
@@ -65,7 +91,19 @@ class Sampler(ABC):
             self.initial_theta_0 = prior.global_prior.theta_0  # Save the initial value
         else:
             self.initial_theta_0 = None  # Handle cases where theta_0 is not defined
-        
+
+        # Save the initial value of gp_eta if enabled and generalized_poisson
+        if self.change_gp_eta and hasattr(prior.tree_num_prior, 'gp_eta'):
+            self.initial_gp_eta = prior.tree_num_prior.gp_eta
+        else:
+            self.initial_gp_eta = None
+
+        # Save the initial value of com_nu if enabled and generalized_poisson
+        if self.change_com_nu and hasattr(prior.tree_num_prior, 'com_nu'):
+            self.initial_com_nu = prior.tree_num_prior.com_nu
+        else:
+            self.initial_com_nu = None
+
     @property
     def data(self) -> Dataset:
         assert self._data, "Data has not been added yet."
@@ -100,6 +138,32 @@ class Sampler(ABC):
             self.global_prior.theta_0 = max(
                 self.min_theta_0,
                 max_theta_0 - (max_theta_0 - self.min_theta_0) * (iteration / total_iterations)
+            )
+
+    def update_gp_eta(self, iteration, total_iterations):
+        """ Linearly decrease gp_eta in self.tree_num_prior as iterations progress.
+        """
+        if not self.change_gp_eta:
+            return
+        if self.initial_gp_eta is not None and total_iterations > 0:
+            max_gp_eta = self.initial_gp_eta
+            # Linearly decrease gp_eta to min_gp_eta, but never reach exactly -1
+            self.prior.tree_num_prior.gp_eta = max(
+                self.min_gp_eta,
+                max_gp_eta - (max_gp_eta - self.min_gp_eta) * (iteration / total_iterations)
+            )
+            # Ensure gp_eta never equals -1
+            if self.prior.tree_num_prior.gp_eta <= -1:
+                self.prior.tree_num_prior.gp_eta = -0.999
+
+    def update_com_nu(self, iteration, total_iterations):
+        """Linearly increase nu in self.tree_num_prior as iterations progress."""
+        if not self.change_com_nu:
+            return
+        if hasattr(self.prior.tree_num_prior, 'com_nu') and total_iterations > 0:
+            self.prior.tree_num_prior.com_nu = min(
+                self.max_com_nu,
+                self.initial_com_nu + (self.max_com_nu - self.initial_com_nu) * (iteration / total_iterations)
             )
         
     def clear_last_cache(self):
@@ -146,6 +210,18 @@ class Sampler(ABC):
             # Update theta_0
             if self.change_theta_0 and iter <= int(self.theta_0_nskip_prop * n_skip):
                 self.update_theta_0(iter, int(self.theta_0_nskip_prop*n_skip))
+
+            # Update gp_eta only after theta_0_nskip_prop burn-in, and within gp_eta_nskip_prop window
+            eta_start = int(self.theta_0_nskip_prop * n_skip)
+            eta_end = int((self.theta_0_nskip_prop + self.gp_eta_nskip_prop) * n_skip)
+            if self.change_gp_eta and eta_start < iter <= eta_end:
+                self.update_gp_eta(iter - eta_start, eta_end - eta_start)
+
+            # Update com_nu only after theta_0_nskip_prop burn-in, and within com_nu_nskip_prop window
+            com_nu_start = int(self.theta_0_nskip_prop * n_skip)
+            com_nu_end = int((self.theta_0_nskip_prop + self.com_nu_nskip_prop) * n_skip)
+            if self.change_com_nu and com_nu_start < iter <= com_nu_end:
+                self.update_com_nu(iter - com_nu_start, com_nu_end - com_nu_start)
 
             if iter >= n_skip:
                 self.clear_last_cache()  # Clear cache of the last trace
@@ -554,7 +630,9 @@ class NTreeSampler(Sampler):
     def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
                  generator: np.random.Generator, temp_schedule=TemperatureSchedule(),
                  special_probs: dict = None, tol=100, special_move_interval=10, 
-                 change_theta_0=True, min_theta_0=10, theta_0_nskip_prop: float = 0.5):
+                 change_theta_0=True, min_theta_0=10, theta_0_nskip_prop: float = 0.5,
+                 change_gp_eta=True, min_gp_eta=-0.999, gp_eta_nskip_prop: float = 0.3,
+                 change_com_nu=True, max_com_nu=10.0, com_nu_nskip_prop: float = 0.3):
         self.tol = tol
         # Number of iterations of default moves before considering special moves.
         self.special_move_interval = special_move_interval 
@@ -585,7 +663,9 @@ class NTreeSampler(Sampler):
         self.ini_ntrees = self.tree_prior.n_trees
 
         super().__init__(prior, proposal_probs, generator, temp_schedule, 
-                         change_theta_0=change_theta_0, min_theta_0=min_theta_0, theta_0_nskip_prop=theta_0_nskip_prop)
+                         change_theta_0=change_theta_0, min_theta_0=min_theta_0, theta_0_nskip_prop=theta_0_nskip_prop,
+                         change_gp_eta=change_gp_eta, min_gp_eta=min_gp_eta, gp_eta_nskip_prop=gp_eta_nskip_prop,
+                         change_com_nu=change_com_nu, max_com_nu=max_com_nu, com_nu_nskip_prop=com_nu_nskip_prop)
 
     def get_init_state(self) -> Parameters:
         """
@@ -627,12 +707,14 @@ class NTreeSampler(Sampler):
         special_probs = [self.special_probs.get(move, 0) for move in special_moves]
         selected_move = self.generator.choice(special_moves, p=special_probs)
 
+        tol = 10 # No need to consider too many trees
+
         if selected_move == "birth" and (
             self.tree_num_prior.prior_type != "bernoulli" or 
             self.tree_prior.n_trees < self.ini_ntrees + 1
         ):
             birth_id = self.generator.integers(0, len(iter_current.trees)) # Just a dummy id for easier mh ratio calculation
-            move = Birth(iter_current, [birth_id], tol=self.tol)
+            move = Birth(iter_current, [birth_id], tol=tol)
             if move.propose(self.generator):
                 Z = self.generator.uniform(0, 1)
                 self.birth_mh_ratios.append(np.exp(self.log_mh_ratio(move) / temp))
@@ -652,7 +734,7 @@ class NTreeSampler(Sampler):
             death_id = 0 # Select the first tree after permutation (might not be only_root)
             possible_indices = [i for i in range(len(iter_current.trees)) if i != death_id]
             random_id = self.generator.choice(possible_indices) # Just a dummy id for easier mh ratio calculation
-            move = Death(iter_current, [random_id, death_id], tol=self.tol)
+            move = Death(iter_current, [random_id, death_id], tol=tol)
             if move.propose(self.generator):
                 Z = self.generator.uniform(0, 1)
                 self.death_mh_ratios.append(np.exp(self.log_mh_ratio(move) / temp))
@@ -668,7 +750,7 @@ class NTreeSampler(Sampler):
             self.tree_prior.n_trees < self.ini_ntrees + 1
         ):
             break_id = [0] # Select the first tree after permutation
-            move = Break(iter_current, break_id, self.tol)   
+            move = Break(iter_current, break_id, tol=tol)   
             if move.propose(self.generator):
                 self.break_mh_ratios.append(np.exp(self.log_mh_ratio(move) / temp))
                 Z = self.generator.uniform(0, 1)
@@ -687,7 +769,7 @@ class NTreeSampler(Sampler):
         ):
             combine_ids = [0, 1] # Select the first two trees after permutation
             combine_position = combine_ids[0] if combine_ids[0] < combine_ids[1] else combine_ids[0] - 1
-            move = Combine(iter_current, combine_ids, self.tol)   
+            move = Combine(iter_current, combine_ids, tol=tol)   
             if move.propose(self.generator):
                 self.combine_mh_ratios.append(np.exp(self.log_mh_ratio(move) / temp))
                 Z = self.generator.uniform(0, 1)

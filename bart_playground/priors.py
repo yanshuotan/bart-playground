@@ -1,5 +1,6 @@
 
 import math
+from matplotlib.pylab import f
 import numpy as np
 from scipy.stats import invgamma, chi2, gamma
 from sklearn.linear_model import LinearRegression
@@ -299,7 +300,7 @@ class GlobalParamPrior:
         return theta_new
     
 class TreeNumPrior:
-    def __init__(self, prior_type="poisson"):
+    def __init__(self, prior_type="poisson",  gp_eta=0.0, com_nu=1.0):
         """
         Initialize the TreeNumPrior.
 
@@ -308,20 +309,45 @@ class TreeNumPrior:
             The type of prior to use for the number of trees. Options are:
             - "poisson": Poisson distribution (default).
             - "bernoulli": Bernoulli distribution with m = 1 or 2, each with probability 0.5.
+            - "generalized_poisson": Generalized Poisson distribution with parameters theta and gp_eta.
+        - gp_eta: float, parameter for Generalized Poisson (default 0.0, |gp_eta| < 1)
+        - com_nu: float, parameter ν for COM-Poisson (default 1.0)
         """
-        if prior_type not in ["poisson", "bernoulli"]:
-            raise ValueError("Invalid prior_type. Must be 'poisson' or 'bernoulli'.")
+        if prior_type not in ["poisson", "bernoulli", "generalized_poisson", "com_poisson"]:
+            raise ValueError("Invalid prior_type. Must be 'poisson', 'bernoulli', 'generalized_poisson', or 'com_poisson'.")
+        if prior_type == "generalized_poisson" and abs(gp_eta) >= 1:
+            raise ValueError("For generalized_poisson, |gp_eta| must be less than 1.")
         self.prior_type = prior_type
+        self.gp_eta = gp_eta
+        self.com_nu = com_nu
 
     def tree_num_log_prior(self, bart_params: Parameters, ntree_theta):
         m = bart_params.n_trees
 
         if self.prior_type == "poisson":
-            # Poisson prior
             theta = ntree_theta
-            log_prior = m * np.log(theta) - theta - math.lgamma(m + 1)
+            log_prior = m * np.log(theta) - math.lgamma(m + 1) # Omit "-theta"
         elif self.prior_type == "bernoulli":
-            log_prior = np.log(0.5)  # Both m have equal probability
+            log_prior = np.log(0.5)
+        elif self.prior_type == "generalized_poisson":
+            theta = ntree_theta
+            gp_eta = self.gp_eta
+            if theta + gp_eta * m <= 0:
+                # Avoid invalid log or negative probability
+                return -np.inf # TODO: Handle this case more gracefully if needed
+            # log P(X=m) = log(theta) + (m-1)*log(theta+gp_eta*m) - theta - gp_eta*m - lgamma(m+1)
+            log_prior = (
+                np.log(theta)
+                + (m - 1) * np.log(theta + gp_eta * m)
+                - theta
+                - gp_eta * m
+                - math.lgamma(m + 1)
+            )
+        elif self.prior_type == "com_poisson":
+            theta = ntree_theta
+            nu = self.com_nu
+            # Omit normalizing constant because it does not depend on m
+            log_prior = m * np.log(theta) - nu * math.lgamma(m + 1) 
         return log_prior
 
     def tree_num_log_prior_ratio(self, move: Move):
@@ -453,11 +479,12 @@ class BARTLikelihood:
 class ComprehensivePrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, 
                  eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
-                 theta_0=200, theta_df=100, tau_k = 2.0, tree_num_prior_type="poisson"):
+                 theta_0=200, theta_df=100, tau_k = 2.0, tree_num_prior_type="poisson", 
+                 tree_num_eta=0.0, com_nu=1.0):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
         self.global_prior = GlobalParamPrior(eps_q, eps_nu, theta_0, theta_df, specification, generator)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
-        self.tree_num_prior = TreeNumPrior(prior_type=tree_num_prior_type)
+        self.tree_num_prior = TreeNumPrior(prior_type=tree_num_prior_type, gp_eta=tree_num_eta, com_nu=com_nu)
         self.leaf_val_prior = LeafValPrior(tau_k)
 
 class ProbitPrior:
