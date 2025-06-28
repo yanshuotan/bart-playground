@@ -14,6 +14,5 @@ notebooks/results
 notebooks/bandit/temp_results
 notebooks/bandit/test_results
 notebooks/bandit/results
-notebooks/bandit/*.dot
-notebooks/bandit/*.prof
+notebooks/bandit/*.png
 bart_playground/bandit/NeuralTS

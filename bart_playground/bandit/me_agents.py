@@ -5,11 +5,12 @@ from .agent import BanditAgent
 
 class LinearTSAgent2(BanditAgent):
     """
-    Linear Thompson Sampling agent for contextual bandits.
+    Linear Thompson Sampling agent for contextual bandits by Aouali, et al. 2023 (Mixed-Effects Thompson Sampling).
     """
     def __init__(self, n_arms: int, n_features: int, sigma: float = 1.0, 
                  prior_mean: Optional[np.ndarray] = None,
-                 prior_cov: Optional[np.ndarray] = None) -> None:
+                 prior_cov: Optional[np.ndarray] = None,
+                 random_state: Optional[int] = None) -> None:
         """
         Initialize the LinearTS agent.
         
@@ -19,7 +20,10 @@ class LinearTSAgent2(BanditAgent):
             sigma (float): Noise standard deviation.
             prior_mean (array-like, optional): Prior means of arm parameters.
             prior_cov (array-like, optional): Prior covariance of arm parameters.
+            random_state (int, optional): Random state for reproducibility.
         """
+        self.random_state = random_state
+        self.rng = np.random.default_rng(self.random_state)
         super().__init__(n_arms, n_features)
         self.sigma = sigma
         
@@ -72,7 +76,7 @@ class LinearTSAgent2(BanditAgent):
             theta_hat = np.linalg.solve(Gt, self.Lambda0[i].dot(self.Theta0[i]) + self.B[i])
             
             # Posterior sampling
-            theta_tilde = np.random.multivariate_normal(theta_hat, Sigma_hat)
+            theta_tilde = self.rng.multivariate_normal(theta_hat, Sigma_hat)
             mu[i] = x[i].dot(theta_tilde)
         
         return int(np.argmax(mu))

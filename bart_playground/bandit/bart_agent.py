@@ -125,15 +125,16 @@ class BARTAgent(BanditAgent):
         return self.encoding == 'separate'
 
     def _mixing_bonus(self, iteration):
-       return 1.0 / (1.0 + np.exp(iteration))
+       return 1.0 / (1.0 + np.exp(-iteration))
     
     def total_iter(self, model_idx=0) -> int:
         return self.models[model_idx]._trace_length
     
     def _default_schedule(self, total_k) -> Callable[[int], float]:
-        raw_prob = self._mixing_bonus(np.arange(total_k))
-        raw_prob = raw_prob / np.sum(raw_prob)
-        return lambda k: raw_prob[k]
+        # raw_prob = self._mixing_bonus(np.arange(total_k))
+        # raw_prob = raw_prob / np.sum(raw_prob)
+        # return lambda k: raw_prob[k]
+        return lambda k: 0.0 if k == 0 else 1.0 / (total_k - 1)
     
     def _get_action_estimates(self, x: Union[np.ndarray, List[float]]) -> np.ndarray:
         """
@@ -236,18 +237,22 @@ class BARTAgent(BanditAgent):
             self.cnt += 1
             
             # Check if we have enough data for initial fit
-            # For LogisticBART, we need less observations and more than one unique outcome
-            # For DefaultBART, we need more observations
-            criteria = (
-                self.cnt >= 10 and 
-                (
-                    np.all([np.unique(self.ini_outcomes[self.ini_arms.flatten() == arm]).size > 1 for arm in range(self.n_arms)])
-                    if self.separate_models else 
-                    np.unique(self.ini_outcomes).size > 1
-                )) if self.is_logistic else (self.cnt >= 20)
+            # we need more than one unique outcome
+            # and at least some (say, 4) observations per arm (or overall if not separate models)
+            def _enough_data(outcomes, min_obs=4):
+                return outcomes.size >= min_obs and np.unique(outcomes).size > 1
+
+            if self.separate_models:
+                criteria = all(
+                    _enough_data(self.ini_outcomes[self.ini_arms.flatten() == arm])
+                    for arm in range(self.n_arms)
+                )
+            else:
+                criteria = _enough_data(self.ini_outcomes)
+                
             if criteria:
                 # Initial fit using all collected data
-                print(f"Fitting initial BART model with first {self.cnt} observations...", end="")
+                print(f"Fitting initial BART model with first {self.cnt} observation(s)...", end="")
                 # TODO
                 if self.separate_models:
                     for arm in range(self.n_arms):

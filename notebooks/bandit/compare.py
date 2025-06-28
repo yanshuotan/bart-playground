@@ -49,17 +49,50 @@ from bart_playground.bart import DefaultBART, LogisticBART
 # from bart_playground.bandit.neural_ts_agent import NeuralTSDiagAgent
 
 # %% [markdown]
-# ## Tunable Parameters
+# ### Initialization
+
+# %%
+# Initialize numba
+
+bart_ini = DefaultBART(ndpost=1, nskip=1, n_trees=25)
+logistic_bart_ini = LogisticBART(ndpost=1, nskip=1, n_trees=25)
+
+# Simple dataset
+X_ini = np.random.uniform(-1, 1, size=(100, 1))
+y_ini = np.sin(2 * np.pi * X_ini) + np.random.normal(0, 0.1, size=X_ini.shape)
+
+bart_ini.fit(X_ini, y_ini)
+
+# %% [markdown]
+# ### Simulation Parameters
+
+# %%
+# default scenario
+default_arg = 'Shuttle'
+# include more agent variations
+extensive = True
+
+n_simulations = 4  # Number of simulations per scenario
+max_draws = 2000      # Number of draws per simulation
+
+profile = False # Profile the simulation (if True, will use a profiler)
+
+# %% [markdown]
+# ### Scenarios and Agents
+
+# %% [markdown]
+# #### Scenarios
 
 # %%
 # Create test scenarios
 scenario_factories = {
-    # "Linear": lambda: LinearScenario(P=4, K=3, sigma2=1.0),
-    # "LinearOffset": lambda: LinearOffsetScenario(P=4, K=3, sigma2=1.0),
-    # "Offset": lambda: OffsetScenario(P=4, K=3, sigma2=1.0),
-    # "Offset2": lambda: OffsetScenario(P=4, K=3, sigma2=0.1),
-    # "Friedman": lambda: FriedmanScenario(P=5, K=3, sigma2=1.0, lambda_val=15),
-    # "Sparse": lambda: FriedmanScenario(P=50, K=3, sigma2=1.0, lambda_val=5),
+    "Linear": lambda: LinearScenario(P=10, K=5, d=2, sigma2=1.0),
+    "GLM": lambda: GLMScenario(P=5, K=5, sigma2=1.0),
+    "Friedman": lambda: FriedmanScenario(P=10, K=2, sigma2=1.0),
+    "Friedman2": lambda: FriedmanScenario(P=4, K=2, sigma2=1.0, f_type='friedman2'),
+    "Friedman3": lambda: FriedmanScenario(P=4, K=2, sigma2=1.0, f_type='friedman3'),
+    "LinFriedman": lambda: LinearFriedmanScenario(P=10, K=2, sigma2=1.0),
+    "Sparse": lambda: FriedmanScenario(P=20, K=5, sigma2=1.0),
     ## "Isolet": lambda: OpenMLScenario('isolet', version=1),
     "Magic": lambda: OpenMLScenario('MagicTelescope', version=1),
     "Adult": lambda: OpenMLScenario('adult', version=2),
@@ -74,103 +107,99 @@ scenario_factories = {
 args = sys.argv[1:]
 cli = True
 
-# Determine which scenarios to run; default to Mushroom if none or invalid
+# Determine which scenarios to run; default if none or invalid
 if len(args) == 0 or not any(arg in scenario_factories for arg in args):
-    print("No valid scenarios specified, using Mushroom.")
-    args = ['Shuttle']
+    print(f"No valid scenarios specified, using {default_arg}.")
+    args = [default_arg]
     cli = False
 
 selected_keys = [k for k in scenario_factories if k in args]
 scenarios = {key: scenario_factories[key]() for key in selected_keys}
 
 rep_dataset = selected_keys[0]
-log_encoding = 'native' if rep_dataset in ['Adult', 'Magic', 'Mushroom'] else 'multi' 
+# log_encoding = 'native' if rep_dataset in ['Adult', 'Magic', 'Mushroom'] else 'multi' 
 
 # import torch
 # torch.manual_seed(0)
 # torch.cuda.manual_seed_all(42)
 
-# %%
+# %% [markdown]
+# #### Agents
 
+# %%
 all_agent_specs: List[AgentSpec] = [
-    ("BCF",        BCFAgent,        {'nskip':100, 'ndpost':100, 'nadd':3, 'nbatch':1, 'random_state':1000}),
-    ("BART",       DefaultBARTAgent,       {
-        'n_trees': 100,
-        'nskip':50,  
-        'ndpost':50, 
-        'nadd':2,               
-        'random_state':1000}),
-    ("BARTs",       DefaultBARTAgent,       {
-        'n_trees': 50,
-        'nskip':50,  
-        'ndpost':50, 
-        'nadd':2,               
-        'random_state':1000}),
-    ("BART3",       DefaultBARTAgent,       {
-        'n_trees': 100,
-        'nskip':50,  
-        'ndpost':50, 
-        'nadd':3,               
-        'random_state':1000}),
-    ("LogisticBART", LogisticBARTAgent,{
-        'n_trees': 50,
-        'nskip':50,
-        'ndpost':50,
-        'nadd':2,
-        'random_state':1000,
-        'encoding':'multi'
-    }),
-    ("MCBART",     MultiChainBARTAgent,{
-        'bart_class': DefaultBART,
-        'n_ensembles': 3,
-        'n_trees': 100,
-        'nskip': 50,
-        'ndpost': 50,
-        'nadd': 2,
-        'random_state': 1000,
-        'encoding': 'multi'
-    }),
-    ("MCBARTs", MultiChainBARTAgent,{
-        'bart_class': DefaultBART,
-        'n_ensembles': 3,
-        'n_trees': 50,
-        'nskip': 50,
-        'ndpost': 50,
-        'nadd': 2,
-        'random_state': 1000,
-        'encoding': 'multi'
-    }),
-    ("MCBART3", MultiChainBARTAgent,{
-        'bart_class': DefaultBART,
-        'n_ensembles': 3,
-        'n_trees': 100,
-        'nskip': 50,
-        'ndpost': 50,
-        'nadd': 3,
-        'random_state': 1000,
-        'encoding': 'multi'
-    }),
-    ("Ensemble",   EnsembleAgent,   {
-        'bcf_kwargs':       dict(nskip=100, ndpost=10, nadd=2, random_state=1000),
-        'linear_ts_kwargs': dict(v=1)
-    }),
-    ("BCF_PSOff",  BCFAgentPSOff,   {'nskip':100, 'ndpost':10, 'nadd':2, 'nbatch':1, 'random_state':1000}),
+    ("Random",      SillyAgent,      {'random_state':0}),
+    ("BARTs",       DefaultBARTAgent,       {}),
+    ("BARTm",       DefaultBARTAgent,       {}),
+    ("BARTo",       DefaultBARTAgent,       {}),
+    ("LogisticBARTm", LogisticBARTAgent, {}),
+    ("MCBARTs",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
+    ("MCBARTm",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
+    ("LogisticMCBARTm", MultiChainBARTAgent, { 'bart_class': LogisticBART }),
     ("LinearTS",   LinearTSAgent,   {'v':1}),
-    ("LinearTS2",  LinearTSAgent2,  {}),
-    # commented out for on-demand testing:
+    ("LinearTSme",  LinearTSAgent2,  {}),
     # ("RoME",             RoMEAgent,              {'featurize':_featurize, 't_max':n_draws, 'pool_users':False}),
     # ("StandardTS",       StandardTSAgent,        {'featurize':_featurize}),
     # ("ActionCenteredTS", ActionCenteredTSAgent,  {'featurize':_featurize}),
     # ("IntelligentPooling", IntelligentPoolingAgent, {'featurize':_featurize, 't_max':n_draws}),
+    # ("BCF",        BCFAgent,        {'nskip':100, 'ndpost':100, 'nadd':3, 'nbatch':1, 'random_state':0}),
+    # ("Ensemble",   EnsembleAgent,   {
+    #     'bcf_kwargs':       dict(nskip=100, ndpost=10, nadd=2, random_state=0),
+    #     'linear_ts_kwargs': dict(v=1)
+    # }),
+    # ("BCF_PSOff",  BCFAgentPSOff,   {'nskip':100, 'ndpost':10, 'nadd':2, 'nbatch':1, 'random_state':0}),
 ]
+
+more_agent_specs = []
+
+# generate more agent specifications for parameter variations
+for agent_name, agent_class, agent_kwargs in all_agent_specs:
+    agent_kwargs['random_state'] = 0
+    if 'BART' in agent_name:
+        agent_kwargs['nskip'] = 30
+        agent_kwargs['ndpost'] = 30
+        agent_kwargs['n_trees'] = 50 # default number of trees
+        agent_kwargs['nadd'] = 2 # default number of additional iterations
+        
+        if 'BARTm' in agent_name:
+            agent_kwargs['encoding'] = 'multi'
+        elif 'BARTo' in agent_name:
+            agent_kwargs['encoding'] = 'one-hot'
+        elif 'BARTs' in agent_name:
+            agent_kwargs['encoding'] = 'separate'
+        
+        if not 'MCBART' in agent_name:
+            agent_kwargs_new = agent_kwargs.copy()
+            agent_kwargs_new['n_trees'] = 25
+            more_agent_specs.append((f"{agent_name}_tree0.5x", agent_class, agent_kwargs_new.copy()))
+            agent_kwargs_new['n_trees'] = 100
+            more_agent_specs.append((f"{agent_name}_tree2x", agent_class, agent_kwargs_new.copy()))
+            agent_kwargs_new = agent_kwargs.copy()
+            agent_kwargs_new['nadd'] = 1
+            more_agent_specs.append((f"{agent_name}_iter0.5x", agent_class, agent_kwargs_new.copy()))
+            agent_kwargs_new['nadd'] = 4
+            more_agent_specs.append((f"{agent_name}_iter2x", agent_class, agent_kwargs_new.copy()))
+        else:
+            agent_kwargs['nadd'] = 1 # MultiChainBART only needs to use one additional iteration
+            agent_kwargs['n_ensembles'] = 4 # default number of ensembles          
 # %%
+if extensive:
+    all_agent_specs.extend(more_agent_specs)
+else:
+    # If not extensive, we only keep some of the agents
+    all_agent_specs = [
+        agent for agent in all_agent_specs if "MCBART" not in agent[0]
+    ]
+
+all_agent_specs = sorted(all_agent_specs, key=lambda x: x[0])
+
 # Filter agents to include only those we want to test
-agent_specs = [agent for agent in all_agent_specs if agent[0] in ["BART", "LinearTS"]]
+agent_specs = all_agent_specs
+
+# %% [markdown]
+# ### Simulation
 
 # %%
-n_simulations = 8  # Number of simulations per scenario
-max_draws = 10000      # Number of draws per simulation
-
 if cli:
     results_dir = "./results/compare_cli" # call from CLI
 else:
@@ -189,7 +218,7 @@ def call_func():
     )
 
 # %%
-if not cli:
+if profile and not cli:
     # %prun -s cumtime -D profile_clog.prof -q call_func()
     # !gprof2dot -f pstats profile_clog.prof -o profile_clog.dot
     # !dot -Tpng profile_clog.dot -o profile_clog.png
@@ -198,15 +227,15 @@ else:
     results = call_func()
 
 # %% [markdown]
-# ## Summary Results
+# ### Summary Results
 
 # %%
 print_summary_results(results)
 
 # %% [markdown]
-# ## Visualize Results
+# ### Visualize Results
 #
-# Finally, let's visualize the cumulative regret for each agent across scenarios.
+# Visualize the cumulative regret for each agent across scenarios.
 
 # %%
 import pickle

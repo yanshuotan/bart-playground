@@ -4,7 +4,7 @@ from tqdm import tqdm
 import time, logging
 import pandas as pd
 import math
-from sklearn.datasets import fetch_openml
+from sklearn.datasets import fetch_openml, make_friedman1
 from sklearn.preprocessing import normalize, OrdinalEncoder
 from sklearn.utils import shuffle
 
@@ -41,8 +41,8 @@ class Scenario:
         self.init_params()
 
     def generate_covariates(self):
-        # Generate a vector of P covariates (features) sampled from a normal distribution.
-        return self.rng.normal(0, 1, size=self.P).astype(np.float32)
+        # Generate a vector of P covariates (features) sampled from a uniform distribution.
+        return self.rng.uniform(-1, 1, size=self.P).astype(np.float32)
 
     def reward_function(self, x):
         """
@@ -62,20 +62,36 @@ class Scenario:
         return self.rng.bit_generator.state
 
 class LinearScenario(Scenario):
-    def __init__(self, P, K, sigma2, random_generator=None):
+    def __init__(self, P, K, sigma2, d=None, random_generator=None):
+        self.d = d if d is not None else P
         super().__init__(P, K, sigma2, random_generator)
 
     def init_params(self):
-        # Generate a K x P matrix of arm-specific coefficients uniformly between -1 and 1.
-        self.mu_a = self.rng.uniform(-1, 1, size=(self.K, self.P))
-    
+        # Generate a K x P (d useful) matrix of arm-specific coefficients normally distributed with mean 0 and std 1.
+        self.mu_a = self.rng.normal(0, 1, size=(self.K, self.d))
+        self.mu_a = np.append(self.mu_a, np.zeros((self.K, self.P - self.d)), axis=1)
+
     def reward_function(self, x):
         # Compute noise for each arm.
         epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
         # Compute expected rewards (outcome means) for each arm.
-        outcome_mean = 10 * self.mu_a.dot(x)
+        outcome_mean = self.mu_a.dot(x)
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
+
+class GLMScenario(Scenario):
+    def __init__(self, P, K, sigma2, random_generator=None):
+        super().__init__(P, K, sigma2, random_generator)
+
+    def init_params(self):
+        self.mu_a = self.rng.normal(0, 1, size=(self.K, self.P))
+        self.mu_a = normalize(self.mu_a, axis=1)
     
+    def reward_function(self, x):
+        # Compute noise for each arm.
+        epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
+        outcome_mean = self.mu_a.dot(x)
+        return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
+
 class LinearOffsetScenario(Scenario):
     def __init__(self, P, K, sigma2, random_generator=None):
         super().__init__(P, K, sigma2, random_generator)
@@ -107,24 +123,83 @@ class OffsetScenario(Scenario):
         outcome_mean = 10 * np.sin(self.mu.dot(x)) + self.lambda_val * self.arm_offsets
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
+def _friedman1(x):
+    _f1 = 10 * np.sin(np.pi * x[0] * x[1]) + \
+            20 * (x[2] - 0.5) ** 2 + \
+            10 * x[3] + 5 * x[4]
+    return _f1
+
+def _friedman_helper(x):
+    # x_1 = self.rng.uniform(0, 100)
+    # x_2 = self.rng.uniform(40*math.pi, 560*math.pi)
+    # x_3 = self.rng.uniform(0, 1)
+    # x_4 = self.rng.uniform(1, 11)
+    res = x.copy()
+    res[0] = res[0] * 100
+    res[1] = res[1] * 520 * math.pi + 40 * math.pi
+    res[2] = res[2] * 1
+    res[3] = res[3] * 10 + 1
+    return res
+
+def _friedman2(x):
+    x = _friedman_helper(x)
+    _f2 = np.sqrt(x[0]**2 +
+                   (x[1]*x[2] - 1/(x[1]*x[3]))**2)
+    return _f2 / 125 # equivalent to standard deviation of 125 by mlbench
+    
+def _friedman3(x):
+    x = _friedman_helper(x)
+    _f3 = np.arctan((x[1]*x[2] - 1/(x[1]*x[3])) / x[0])
+    return _f3 / 0.1
+
 class FriedmanScenario(Scenario):
-    def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
-        if P < 5:
-            raise ValueError("Friedman is for P>=5")
-        self.lambda_val = lambda_val
+    def __init__(self, P, K, sigma2, random_generator=None, f_type='friedman1'):
+        if K != 2:
+            raise ValueError("Friedman is for K=2")
+        if f_type not in ['friedman1', 'friedman2', 'friedman3']:
+            raise ValueError("f_type must be one of 'friedman1', 'friedman2', 'friedman3'")
+        elif f_type == 'friedman1':
+            self._friedman = _friedman1
+            if P < 5:
+                raise ValueError("Friedman1 requires P >= 5")
+        elif P < 4:
+            raise ValueError("Friedman2 and Friedman3 require P >= 4")
+        else:
+            if f_type == 'friedman2':
+                self._friedman = _friedman2
+            else:
+                self._friedman = _friedman3
+        
         super().__init__(P, K, sigma2, random_generator)
+        
+    def generate_covariates(self):
+        # Uniform [0, 1]
+        x = self.rng.uniform(0, 1, size=self.P).astype(np.float32)
+        return x
     
     def init_params(self):
-        self.arm_offsets = self.rng.uniform(-5, 5, size=self.K)
+        pass
 
     def reward_function(self, x):
         epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
-        outcome_mean = 10 * np.sin(np.pi * x[0] * x[1]) + \
-                      20 * (x[2] - 0.5) ** 2 + \
-                      10 * x[3] + 5 * x[4] + \
-                      self.lambda_val * self.arm_offsets
+        x_reverse = x[::-1]
+        outcome_mean = np.hstack([self._friedman(x), self._friedman(x_reverse)], dtype=np.float32)
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
+    
+class LinearFriedmanScenario(Scenario):
+    def __init__(self, P, K, sigma2, random_generator=None):
+        assert P >= 5 and K == 2, "LinearFriedmanScenario is for P>=5, K=2"
+        super().__init__(P, K, sigma2, random_generator)
 
+    def init_params(self):
+        self.mu_a = self.rng.normal(0, 1, size=(1, self.P))
+
+    def reward_function(self, x):
+        epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
+        outcome_mean0 = self.mu_a.dot(x)
+        outcome_mean = np.hstack([outcome_mean0, outcome_mean0 + _friedman1(x)], dtype=np.float32)
+        return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
+    
 class OpenMLScenario(Scenario):
     def __init__(self, dataset='mushroom', version=1, random_generator:Union[np.random.Generator, int, None]=None):
         X, y = fetch_openml(dataset, version=version, return_X_y=True)
@@ -180,11 +255,8 @@ class OpenMLScenario(Scenario):
     @property
     def max_draws(self):
         return self.X.shape[0]
-    
-    def finish(self):
-        return self._cursor >= self.max_draws
 
-class Friedman2Scenario(Scenario):
+class FriedmanDScenario(Scenario):
     def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
         if P < 5:
             raise ValueError("Friedman is for P>=5")
@@ -209,7 +281,7 @@ class Friedman2Scenario(Scenario):
 
 sim_logger = logging.getLogger("bandit_simulator")
 
-def simulate(scenario, agents, n_draws):
+def simulate(scenario, agents, n_draws, agent_names: list[str]=[]):
     """
     Simulate a bandit problem using the provided scenario and agents. The `simulate` function takes a scenario, a list of agents, and the number of draws. For each draw:
 
@@ -253,11 +325,16 @@ def simulate(scenario, agents, n_draws):
         # Log current status every sqrt(n_draws) draws.
         logging_frequency = int(math.sqrt(n_draws))
         if (draw + 1) % logging_frequency == 0 or draw == n_draws - 1:   
-            formatter={"float_kind": lambda x: f"{x:.6f}"}         
-            sim_logger.debug(f"Draw {draw+1}/{n_draws}: "
-                             f"Cumulative Regrets: {np.array2string(cum_regrets[draw, :], formatter=formatter)}, "
-                             f"Cumulative Time: {np.array2string(np.sum(time_agents[:draw, :], axis=0), formatter=formatter)}"
-                             )
+                df = pd.DataFrame({
+                    "AgentName":       agent_names,
+                    "CumRegret":   cum_regrets[draw, :],
+                    "CumTime":     np.sum(time_agents[:draw, :], axis=0)
+                })
+                # log it with fixed‐width columns and 6 decimal places
+                sim_logger.debug(f"Draw {draw+1}/{n_draws}: \n" + df.to_string(
+                    index=False,
+                    float_format="%.6f"
+                ))
             
     for agent in agents:
         if hasattr(agent, 'clean_up'):

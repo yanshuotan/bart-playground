@@ -6,7 +6,7 @@ class SillyAgent(BanditAgent):
     """
     A simple agent that selects arms randomly.
     """
-    def __init__(self, n_arms: int, n_features: int) -> None:
+    def __init__(self, n_arms: int, n_features: int, random_state: Optional[int] = None) -> None:
         """
         Initialize the agent.
         
@@ -14,6 +14,8 @@ class SillyAgent(BanditAgent):
             n_arms (int): Number of arms.
             n_features (int): Number of features.
         """
+        self.random_state = random_state
+        self.rng = np.random.default_rng(self.random_state)
         super().__init__(n_arms, n_features)
     
     def choose_arm(self, x: np.ndarray, **kwargs: Dict[str, Any]) -> int:
@@ -26,7 +28,7 @@ class SillyAgent(BanditAgent):
         Returns:
             int: The randomly selected arm index.
         """
-        return np.random.randint(0, self.n_arms)
+        return self.rng.integers(0, self.n_arms)
     
     def update_state(self, arm: int, x: np.ndarray, y: float) -> "SillyAgent":
         """
@@ -48,7 +50,7 @@ class LinearTSAgent(BanditAgent):
     Linear Thompson Sampling agent based on Agrawal and Goyal (2012), Appendix C.
     """
     def __init__(self, n_arms: int, n_features: int, v: Optional[float] = None, 
-                 eps: float = 0.5, delta: float = 0.2, R: float = 1) -> None:
+                 eps: float = 0.5, delta: float = 0.2, R: float = 1.0, random_state: Optional[int] = None) -> None:
         """
         Initialize the LinearTS agent.
         
@@ -60,30 +62,33 @@ class LinearTSAgent(BanditAgent):
             delta (float): Delta parameter for confidence bound.
             R (float): Bound on the reward.
         """
-        super().__init__(n_arms, n_features)
+        self.random_state = random_state
+        self.rng = np.random.default_rng(self.random_state)
+        super().__init__(n_arms, n_features + 1)  # +1 for the intercept term
         
         # Set exploration parameter v if not provided
         if v is None:
-            v = R * np.sqrt(24 / eps * n_features * np.log(1 / delta))
+            v = R * np.sqrt(24 / eps * self.n_features * np.log(1 / delta))
         
         self.v = v
         
         # Initialize matrices for each arm
-        self.B = [np.eye(n_features) for _ in range(n_arms)]
-        self.m2_r = [np.zeros((n_features, 1)) for _ in range(n_arms)]
-        self.B_inv = [np.eye(n_features) for _ in range(n_arms)]
-        self.B_inv_sqrt = [np.eye(n_features) for _ in range(n_arms)]
-        self.mean = [np.zeros((n_features, 1)) for _ in range(n_arms)]
+        self.B = [np.eye(self.n_features) for _ in range(n_arms)]
+        self.m2_r = [np.zeros((self.n_features, 1)) for _ in range(n_arms)]
+        self.B_inv = [np.eye(self.n_features) for _ in range(n_arms)]
+        self.B_inv_sqrt = [np.eye(self.n_features) for _ in range(n_arms)]
+        self.mean = [np.zeros((self.n_features, 1)) for _ in range(n_arms)]
     
     def _get_action_estimates(self, x: np.ndarray) -> List[float]:
         """
         Get action estimates for all arms based on input features x.
         """
-        x = np.array(x).reshape(-1, 1)  # Ensure column vector
+        x = np.array(x)
+        x = np.append(x, 1).reshape(-1, 1)
         
         # Sample parameters from the posterior for each arm
         w = [
-            self.mean[i] + self.v * (self.B_inv_sqrt[i] @ np.random.normal(0, 1, (self.n_features, 1)))
+            self.mean[i] + self.v * (self.B_inv_sqrt[i] @ self.rng.normal(0, 1, (self.n_features, 1)))
             for i in range(self.n_arms)
         ]
         
@@ -119,7 +124,8 @@ class LinearTSAgent(BanditAgent):
             self: Updated instance.
         """
         arm_idx = arm
-        x = np.array(x).reshape(-1, 1)  # Ensure column vector
+        x = np.array(x)
+        x = np.append(x, 1).reshape(-1, 1)
         
         # Update the precision matrix
         self.B[arm_idx] = self.B[arm_idx] + x @ x.T
