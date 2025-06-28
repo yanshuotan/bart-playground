@@ -117,13 +117,16 @@ class DefaultPreprocessor(Preprocessor):
     
     def transform_y(self, y) -> np.ndarray:
         if self.y_max == self.y_min:
-            y_res = y
+            y_res = y # do not transform if all values are the same
         else:
             y_res = (y - self.y_min) / (self.y_max - self.y_min) - 0.5
         return y_res.reshape(-1, ).astype(np.float32)
     
     def backtransform_y(self, y) -> np.ndarray:
-        return (self.y_max - self.y_min) * (y + 0.5) + self.y_min
+        if self.y_max == self.y_min: # y not transformed
+            return y
+        else:
+            return (self.y_max - self.y_min) * (y + 0.5) + self.y_min
     
 class ClassificationPreprocessor(Preprocessor):
     """

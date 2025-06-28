@@ -1,5 +1,4 @@
 import numpy as np
-import xgboost as xgb
 import json
 from .params import Tree
 from typing import Optional, Tuple

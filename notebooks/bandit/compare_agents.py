@@ -101,7 +101,7 @@ def _run_single_simulation(sim, scenario, agent_specs, n_draws):
 
     _ca_logger.debug(f"Scenario random generator state: {scenario.rng_state}")
     # Run simulation
-    cum_regrets, time_agents = simulate(scenario, sim_agents, n_draws=n_draws)
+    cum_regrets, time_agents = simulate(scenario, sim_agents, n_draws=n_draws, agent_names=[name for name, _, _ in agent_specs])
     
     # Return results for this simulation
     return sim, cum_regrets, time_agents
@@ -122,13 +122,18 @@ def generate_simulation_data_for_agents(scenario_name: str, scenario: Scenario, 
     Returns:
         Dict: Dictionary containing simulation results
     """
+    internal_name = scenario.__class__.__name__
+    # LogisticBART is not suitable for continuous scenarios (i.e. non-OpenMLScenario)
+    if internal_name != "OpenMLScenario":
+        agent_specs = [spec for spec in agent_specs if not spec[0].startswith("Logistic")]
+        
     agent_names = [name for name, _, _ in agent_specs]
     n_simulations = len(sim_indices)
     all_regrets = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
     all_times = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
     
     _ca_logger.debug("Scenario information:")
-    _ca_logger.debug(f"  Name: {scenario_name}. Internal name: {scenario.__class__.__name__}")
+    _ca_logger.debug(f"  Name: {scenario_name}. Internal name: {internal_name}")
     if hasattr(scenario, 'dataset_name'):
         _ca_logger.debug(f"    Dataset: {scenario.dataset_name}")
     _ca_logger.debug(f"  K (arms): {scenario.K}")
@@ -159,7 +164,9 @@ def generate_simulation_data_for_agents(scenario_name: str, scenario: Scenario, 
                 
             sim_id, cum_regrets, time_agents = result
             serializable_result = {
+                "scenario_name": scenario_name,
                 "sim_id": sim_id,
+                "agent_names": agent_names,
                 "cum_regrets": cum_regrets.tolist(),
                 "time_agents": time_agents.tolist()
             }
@@ -180,6 +187,8 @@ def generate_simulation_data_for_agents(scenario_name: str, scenario: Scenario, 
     _ca_logger.debug("Simulation data generation completed successfully.")
 
     return {
+        "scenario_name": scenario_name,
+        "sim_id": sim_id,
         'regrets': all_regrets,
         'times': all_times
     }
@@ -251,7 +260,7 @@ def plot_comparison_results(results: Dict[str, Dict], save_loc: str = None):
     n_scenarios = len(results)
     n_rows = (n_scenarios + 1) // 2  # Ceiling division for number of rows
     
-    fig, axes = plt.subplots(n_rows, 2, figsize=(15, 5 * n_rows))
+    fig, axes = plt.subplots(n_rows, 2, figsize=(16, 6 * n_rows))
     
     # Flatten axes if needed
     if n_rows == 1:
@@ -301,6 +310,9 @@ def plot_comparison_results(results: Dict[str, Dict], save_loc: str = None):
         ax.set_ylabel("Cumulative Regret", fontsize=12)
         ax.grid(True, alpha=0.3)
         ax.legend()
+        
+        colors = plt.get_cmap('tab20').colors  # up to 20 distinct colors
+        ax.set_prop_cycle(color=colors)
         
         scenario_idx += 1
     
