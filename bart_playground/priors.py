@@ -19,7 +19,7 @@ def _resample_leaf_vals_numba(leaf_basis, resids, eps_sigma2, f_sigma2, random_n
     sqrt_weights = _get_sqrt_weights(n, weights, temperature)
 
     # Explicitly convert boolean array to float64
-    num_lbs = leaf_basis.astype(np.float64) * sqrt_weights
+    num_lbs = leaf_basis.astype(np.float64) * sqrt_weights[:, np.newaxis]
     resids = resids * sqrt_weights
 
     post_cov = np.linalg.inv(num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2)
@@ -40,7 +40,7 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2, wei
     sqrt_weights = _get_sqrt_weights(n, weights, temperature)
     
     # Now use the float64 array with SVD
-    U, S, _ = np.linalg.svd(leaf_basis_float * sqrt_weights, full_matrices=False)
+    U, S, _ = np.linalg.svd(leaf_basis_float * sqrt_weights[:, np.newaxis], full_matrices=False)
     resids = resids * sqrt_weights
 
     noise_ratio = eps_sigma2 / f_sigma2
@@ -86,6 +86,7 @@ def _trees_log_prior_numba(tree_vars, alpha, beta):
     
     return log_prior
 
+@njit
 def _get_sqrt_weights(n, weights, temperature):
     if weights is None:
         weights = np.ones(n, dtype=np.float64) / temperature
