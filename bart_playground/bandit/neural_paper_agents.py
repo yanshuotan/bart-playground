@@ -4,12 +4,17 @@ from .agent import BanditAgent
 from .NeuralTS.learner_diag import NeuralTSDiag
 from .NeuralTS.learner_diag_linear import LinearTSDiag
 from .NeuralTS.learner_diag_kernel import KernelTSDiag
+from .NeuralTS.learner_neural import NeuralTS
+from .NeuralTS.learner_kernel import KernelTS
+from .NeuralTS.learner_linear import LinearTS
 
 class NeuralPaperAgent(BanditAgent):
     def __init__(self,
                  n_arms: int,
                  n_features: int):
         self.augmented_dim = n_features * n_arms
+        self.model.delay = 1
+        self.t = 0
         # self.model should have `select` and `train` methods
         super().__init__(n_arms, n_features)
         
@@ -61,8 +66,12 @@ class NeuralPaperAgent(BanditAgent):
         # NeuralTSDiag.select expects a numpy array and returns the index of the best row.
         # This index directly corresponds to our arm index.
         # The select method in NeuralTSDiag handles moving data to CUDA internally.
-        chosen_arm_index, _, _, _ = self.model.select(augmented_context_batch_np)
+        chosen_arm_index, nrm, sig, ave_rwd = self.model.select(augmented_context_batch_np)
         
+        # self.t += 1
+        # if self.t % 50 == 0:
+        #     print('nrm, sig, ave_rwd: {:.3f}, {:.3e}, {:.3e}'.format(nrm, sig, ave_rwd))
+
         if isinstance(chosen_arm_index, torch.Tensor):
             chosen_arm_index = chosen_arm_index.item()
             
@@ -75,7 +84,7 @@ class NeuralPaperAgent(BanditAgent):
         x: original context vector.
         y: observed reward.
         """
-        augmented_x_chosen_arm_np = self._create_single_augmented_context(x, arm)
+        augmented_x_chosen_arm_np = self._create_single_augmented_context(x, arm).flatten()
         
         self.model.train(augmented_x_chosen_arm_np, float(y))
         return self
@@ -94,7 +103,7 @@ class NeuralTSDiagAgent(NeuralPaperAgent):
     def __init__(self,
                  n_arms: int,
                  n_features: int,
-                 lambda_param: float = 0.00001,
+                 lamdba_param: float = 0.00001,
                  nu_param: float = 0.00001,
                  style: str = 'ts'):
         """
@@ -103,18 +112,32 @@ class NeuralTSDiagAgent(NeuralPaperAgent):
         Parameters:
             n_arms (int): Number of arms.
             n_features (int): Number of features in the original context.
-            lambda_param (float): Lambda regularization parameter for NeuralTSDiag (passed as 'lamdba').
+            lamdba_param (float): Lambda regularization parameter for NeuralTSDiag (passed as 'lamdba').
             nu_param (float): Nu exploration parameter for NeuralTSDiag.
             style (str): Exploration style for NeuralTSDiag, 'ts' or 'ucb'.
         """
         self.augmented_dim = n_features * n_arms
-        super().__init__(n_arms, n_features)
 
         self.model = NeuralTSDiag(dim=self.augmented_dim,
-                                  lamdba=1/lambda_param, # lamdba = 1/lambda
+                                  lamdba=lamdba_param, # lamdba = 1/lambda
                                   nu=nu_param,
                                   style=style)
+        super().__init__(n_arms, n_features)
 
+class NeuralTSAgent(NeuralPaperAgent):
+    def __init__(self,
+                 n_arms: int,
+                 n_features: int,
+                 lamdba_param: float = 0.00001,
+                 nu_param: float = 0.00001,
+                 style: str = 'ts'):
+        self.augmented_dim = n_features * n_arms
+
+        self.model = NeuralTS(dim=self.augmented_dim,
+                              lamdba=lamdba_param, # lamdba = 1/lambda
+                              nu=nu_param,
+                              style=style)
+        super().__init__(n_arms, n_features)
 
 class LinearTSDiagAgent(NeuralPaperAgent):
     """
@@ -123,16 +146,34 @@ class LinearTSDiagAgent(NeuralPaperAgent):
     def __init__(self,
                  n_arms: int,
                  n_features: int,
-                 lambda_param: float = 1,
+                 lamdba_param: float = 1,
                  nu_param: float = 0.3, # 0.1 or 1
                  style: str = 'ts'):
         self.augmented_dim = n_features * n_arms
-        super().__init__(n_arms, n_features)
 
         self.model = LinearTSDiag(dim=self.augmented_dim,
-                                  lamdba=1/lambda_param, # lamdba = 1/lambda
+                                  lamdba=lamdba_param, # lamdba = 1/lambda
                                   nu=nu_param,
                                   style=style)
+        super().__init__(n_arms, n_features)
+        
+class NLinearTSAgent(NeuralPaperAgent):
+    """
+    The underlying LinearTS model from NeuralTS-main.
+    """
+    def __init__(self,
+                 n_arms: int,
+                 n_features: int,
+                 lamdba_param: float = 1,
+                 nu_param: float = 0.3, # 0.1 or 1
+                 style: str = 'ts'):
+        self.augmented_dim = n_features * n_arms
+
+        self.model = LinearTS(dim=self.augmented_dim,
+                              lamdba=lamdba_param, # lamdba = 1/lambda
+                              nu=nu_param,
+                              style=style)
+        super().__init__(n_arms, n_features)
         
 class KernelTSDiagAgent(NeuralPaperAgent):
     """
@@ -141,16 +182,31 @@ class KernelTSDiagAgent(NeuralPaperAgent):
     def __init__(self,
                  n_arms: int,
                  n_features: int,
-                 lambda_param: float = 1,
+                 lamdba_param: float = 1,
                  nu_param: float = 0.01,
                  style: str = 'ts'):
         self.augmented_dim = n_features * n_arms
-        super().__init__(n_arms, n_features)
 
         self.model = KernelTSDiag(dim=self.augmented_dim,
-                                  lamdba=1/lambda_param, # lamdba = 1/lambda
+                                  lamdba=lamdba_param, # lamdba = 1/lambda
                                   nu=nu_param,
                                   style=style)
-        
-# To make it directly usable if someone imports *, though explicit import is better.
-__all__ = ['NeuralTSDiagAgent', 'LinearTSDiagAgent', 'KernelTSDiagAgent']
+        super().__init__(n_arms, n_features)
+    
+class NKernelTSAgent(NeuralPaperAgent):
+    """
+    The underlying KernelTS model from NeuralTS-main.
+    """
+    def __init__(self,
+                 n_arms: int,
+                 n_features: int,
+                 lamdba_param: float = 1,
+                 nu_param: float = 0.01,
+                 style: str = 'ts'):
+        self.augmented_dim = n_features * n_arms
+
+        self.model = KernelTS(dim=self.augmented_dim,
+                              lamdba=lamdba_param, # lamdba = 1/lambda
+                              nu=nu_param,
+                              style=style)
+        super().__init__(n_arms, n_features)
