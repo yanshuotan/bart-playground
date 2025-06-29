@@ -273,8 +273,8 @@ class MultiGrow(Grow):
 
         # Make sure we sample the node_id itself and n_samples - 1 other candidates
         other_candidates = [nid for nid in all_prune_candidates if nid != node_id]
-        sampled_others = generator.choice(len(other_candidates), size=n_samples-1, replace=False)
-        sampled_others = [other_candidates[i] for i in sampled_others]
+        others_idx = generator.choice(len(other_candidates), size=n_samples-1, replace=False)
+        sampled_others = [other_candidates[i] for i in others_idx]
 
         prune_candidates = [node_id] + sampled_others
 
@@ -381,11 +381,11 @@ class MultiPrune(Prune):
         other_candidates = [cand for cand in all_grow_candidates if cand != grow_candidate]
         sampled_others = []
         for leaf_id, var, threshold in other_candidates:
+            if len(sampled_others) >= n_samples - 1:
+                break
             tree_copy = temp_tree.copy()
             if tree_copy.split_leaf(leaf_id, var, threshold):
                 sampled_others.append((leaf_id, var, threshold))
-                if len(sampled_others) >= n_samples - 1:
-                    break
 
         grow_candidates = [grow_candidate] + sampled_others
 
@@ -495,11 +495,12 @@ class MultiChange(Change):
 
         sampled_others = []
         for node_id, var, threshold in other_rev_candidates:
+            if len(sampled_others) >= n_samples - 1:
+                break
             tree_copy = temp_tree.copy()
             if tree_copy.change_split(node_id, var, threshold):
                 sampled_others.append((node_id, var, threshold))
-                if len(sampled_others) >= n_samples - 1:
-                    break
+
         rev_candidates = [rev_candidate] + sampled_others
 
         log_fwd_weights = []
@@ -547,16 +548,18 @@ class MultiSwap(Swap):
         else:
             return 1
 
-    def try_propose(self, proposed, generator):
-        tree = proposed.trees[self.trees_changed[0]]
-        n_samples = self._get_n_samples(tree)
+    def propose(self, generator):
+        if not self.is_feasible():
+            return False
+        tree = self.current.trees[self.trees_changed[0]]
         all_candidates = [
             (parent_id, 2 * parent_id + lr)
-            for parent_id in tree.nonterminal_split_nodes
+            for parent_id in self.cur_nonterminal_split_nodes
             for lr in [1, 2]
             if tree.vars[2 * parent_id + lr] != -1
         ]
         generator.shuffle(all_candidates)
+        n_samples = self._get_n_samples(tree)
 
         sampled_candidates = []
         n_candidate_trials = 0
@@ -568,14 +571,14 @@ class MultiSwap(Swap):
                 if len(sampled_candidates) >= n_samples:
                     break
 
-        self.candidate_sampling_ratio = n_candidate_trials / min(n_samples, len(all_candidates))
+        self.candidate_sampling_ratio = n_candidate_trials / min(n_samples, len(all_candidates)) if all_candidates else 1
 
         if not sampled_candidates:
             return False
 
         candidates = []
         for parent_id, child_id in sampled_candidates:
-            temp = proposed.copy(self.trees_changed)
+            temp = self.current.copy(self.trees_changed)
             temp_tree = temp.trees[self.trees_changed[0]]
             temp_tree.swap_split(parent_id, child_id)
             log_pi = self.likelihood.trees_log_marginal_lkhd(
@@ -593,8 +596,9 @@ class MultiSwap(Swap):
         parent_id, child_id, _ = candidates[idx]
         log_p_bwd = np.log(bwd_weights.mean()) + max_log_bwd
 
+        proposed = self.current.copy(self.trees_changed)
         tree = proposed.trees[self.trees_changed[0]]
-        success = tree.swap_split(parent_id, child_id)
+        success = self.try_propose(proposed, generator, parent_id, child_id)
 
         # Calculate the log transition ratio
         temp_tree = tree
@@ -610,11 +614,12 @@ class MultiSwap(Swap):
         other_rev_candidates = [cand for cand in all_rev_candidates if cand != rev_candidate]
         sampled_others = []
         for p_id, c_id in other_rev_candidates:
+            if len(sampled_others) >= n_samples - 1:
+                break
             tree_copy = temp_tree.copy()
             if tree_copy.swap_split(p_id, c_id):
                 sampled_others.append((p_id, c_id))
-                if len(sampled_others) >= n_samples - 1:
-                    break
+
         rev_candidates = [rev_candidate] + sampled_others
 
         log_fwd_weights = []
@@ -634,6 +639,13 @@ class MultiSwap(Swap):
         log_p_fwd = np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
+        if success:
+            self.proposed = proposed
+        return success
+
+    def try_propose(self, proposed, generator, parent_id, child_id):
+        tree = proposed.trees[self.trees_changed[0]]
+        success = tree.swap_split(parent_id, child_id)
         return success
 
  
