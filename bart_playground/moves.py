@@ -156,15 +156,37 @@ class Swap(Move):
         tree = self.current.trees[self.trees_changed[0]]
         self.cur_nonterminal_split_nodes = tree.nonterminal_split_nodes
         return len(self.cur_nonterminal_split_nodes) > 0
+    
+    def propose(self, generator):
+        """
+        Try all possible parent-child pairs, return True if any swap succeeds.
+        """
+        if not self.is_feasible():
+            return False
+        tree = self.current.trees[self.trees_changed[0]]
+        # Collect all possible parent-child pairs
+        pairs = [
+            (parent_id, 2 * parent_id + lr)
+            for parent_id in self.cur_nonterminal_split_nodes
+            for lr in [1, 2]
+            if tree.vars[2 * parent_id + lr] != -1
+        ]
 
-    def try_propose(self, proposed, generator):
-        tree = proposed.trees[self.trees_changed[0]]
-        parent_id = fast_choice(generator, self.cur_nonterminal_split_nodes)
-        lr = generator.integers(1, 3) # Choice of left/right child
-        child_id = 2 * parent_id + lr
-        if tree.vars[child_id] == -1: # Change to the other child if this is a leaf
-            child_id = 2 * parent_id + 3 - lr
-            
+        generator.shuffle(pairs)
+        tries = 0
+        for parent_id, child_id in pairs:
+            if tries >= self.tol:
+                break
+            proposed = self.current.copy(self.trees_changed)
+            success = self.try_propose(proposed, generator, parent_id, child_id)
+            tries += 1
+            if success:
+                self.proposed = proposed
+                return True
+        return False
+    
+    def try_propose(self, proposed, generator, parent_id, child_id):
+        tree = proposed.trees[self.trees_changed[0]]   
         success = tree.swap_split(parent_id, child_id) # If no empty leaves are created
         return success
     
