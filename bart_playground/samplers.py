@@ -191,17 +191,18 @@ class Sampler(ABC):
                 self.add_data(new_data)
 
                 if new_n > old_n:
-                    new_X = new_data.X[old_n:]
+                    # new_X = new_data.X[old_n:]
                     if hasattr(new_data, 'Z'): # check if treatment assignments are available, e.g. for BCFDataset
+                        raise NotImplementedError("Adding new data with treatment assignments (Z) has a changed interface and should be handled before using.")
                         new_z = new_data.Z[old_n:]
                         current_state = last_state.add_data_points(new_X, new_z)
                     elif isinstance(last_state, list):
                         # If last_state is a list (e.g., in LogisticSampler), handle each category
                         current_state = []
                         for i, state in enumerate(last_state):
-                            current_state.append(state.add_data_points(new_X))
+                            current_state.append(state.update_data(new_data.X))
                     else: # Default case for Parameters
-                        current_state = last_state.add_data_points(new_X)
+                        current_state = last_state.update_data(new_data.X)
                 else: # No new data, just continue from last state
                     current_state = last_state
             else: # No new data, just continue from last state
