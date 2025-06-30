@@ -27,9 +27,9 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     return leaf_params_new
 
 @njit
-def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
+def _single_tree_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     """
-    Numba-optimized function to calculate log marginal likelihood.
+    Numba-optimized function to calculate log marginal likelihood when there is only one tree.
     """
     # Explicitly convert boolean array to float32
     leaf_basis_float = leaf_basis.astype(np.float32)
@@ -44,6 +44,25 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
 
     ridge_bias = np.sum(resid_sums ** 2 / (counts * (counts / noise_ratio + 1)))
 
+    return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
+
+@njit
+def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
+    """
+    Numba-optimized function to calculate log marginal likelihood when there are multiple trees.
+    This function uses SVD for the leaf basis matrix.
+    """
+    # Explicitly convert boolean array to float32
+    leaf_basis_float = leaf_basis.astype(np.float32)
+    
+    # Now use the float32 array with SVD
+    U, S, _ = np.linalg.svd(leaf_basis_float, full_matrices=False)
+    noise_ratio = eps_sigma2 / f_sigma2
+    logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
+    resid_u_coefs = U.T @ resids
+    resids_u = U @ resid_u_coefs
+    ls_resids = np.sum((resids - resids_u) ** 2)
+    ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / noise_ratio + 1))
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
 @njit
@@ -295,17 +314,22 @@ class BARTLikelihood:
         """
         resids = (data_y - bart_params.evaluate(all_except=tree_ids))
         leaf_basis = bart_params.leaf_basis(tree_ids)
-        # Assert tree_ids has length 1 so that leaf_basis's each row sums to 1
-        if len(tree_ids) != 1:
-            raise NotImplementedError("Log marginal likelihood calculation only supports single tree evaluation for faster computation.")
-
-        # Use the standalone numba function
-        return _trees_log_marginal_lkhd_numba(
-            leaf_basis, 
-            resids, 
-            bart_params.global_params["eps_sigma2"], 
-            self.f_sigma2
-        )
+        if len(tree_ids) == 1:
+            # For single tree, we can use the optimized function
+            return _single_tree_log_marginal_lkhd_numba(
+                leaf_basis, 
+                resids, 
+                bart_params.global_params["eps_sigma2"], 
+                self.f_sigma2
+            )
+        else:
+            return _trees_log_marginal_lkhd_numba(
+                leaf_basis, 
+                resids, 
+                bart_params.global_params["eps_sigma2"], 
+                self.f_sigma2
+            )
+            
 
     def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, marginalize: bool=False):
         """
