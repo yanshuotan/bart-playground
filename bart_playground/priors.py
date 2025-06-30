@@ -11,29 +11,46 @@ from .util import Dataset, GIG
 
 # Standalone Numba-optimized functions
 @njit
-def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, random_normal_p):
+def _resample_leaf_vals_numba(leaf_basis, resids, eps_sigma2, f_sigma2, random_normal_p, weights=None, temperature=1.0):
     """
     Numba-optimized function to resample leaf values.
     """
-    p = leaf_basis.shape[1]
+
     # Explicitly convert boolean array to float64
-    num_lbs = leaf_basis.astype(np.float64)
-    post_cov = np.linalg.inv(num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2)
-    post_mean = post_cov @ num_lbs.T @ residuals / eps_sigma2
-    
+    leaf_basis = leaf_basis.astype(np.float64)
+    n, p = leaf_basis.shape
+    # Preproces the weights
+    if weights is None and temperature == 1.0:
+        pass
+    else:
+        sqrt_weights = _get_sqrt_weights(n, weights, temperature)
+        leaf_basis *= sqrt_weights[:, np.newaxis]
+        resids *= sqrt_weights
+    # Compute posterior mean and covariance
+    post_cov = np.linalg.inv(leaf_basis.T @ leaf_basis / eps_sigma2 + np.eye(p) / f_sigma2)
+    post_mean = post_cov @ leaf_basis.T @ resids / eps_sigma2
+    # Resample leaf parameters from the posterior distribution
     leaf_params_new = np.sqrt(np.diag(post_cov)) * random_normal_p + post_mean
     return leaf_params_new
 
 @njit
-def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
+def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2, weights=None, temperature=1.0):
     """
     Numba-optimized function to calculate log marginal likelihood.
     """
+
     # Explicitly convert boolean array to float64
-    leaf_basis_float = leaf_basis.astype(np.float64)
-    
-    # Now use the float64 array with SVD
-    U, S, _ = np.linalg.svd(leaf_basis_float, full_matrices=False)
+    leaf_basis = leaf_basis.astype(np.float64)
+    n, _ = leaf_basis.shape
+    # Preproces the weights
+    if weights is None and temperature == 1.0:
+        pass
+    else:
+        sqrt_weights = _get_sqrt_weights(n, weights, temperature)
+        leaf_basis *= sqrt_weights[:, np.newaxis]
+        resids *= sqrt_weights
+    # Compute log marginal likelihood formula components
+    U, S, _ = np.linalg.svd(leaf_basis, full_matrices=False)
     noise_ratio = eps_sigma2 / f_sigma2
     logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
     resid_u_coefs = U.T @ resids
@@ -77,6 +94,15 @@ def _trees_log_prior_numba(tree_vars, alpha, beta):
     
     return log_prior
 
+@njit
+def _get_sqrt_weights(n, weights, temperature):
+    if weights is None:
+        weights = np.ones(n, dtype=np.float64) / temperature
+    else:
+        weights = weights.astype(np.float64) / temperature
+    sqrt_weights = np.sqrt(weights)
+    return sqrt_weights
+
 class TreesPrior:
     """
     Prior for tree structure and leaf values.
@@ -97,7 +123,7 @@ class TreesPrior:
         self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.generator = generator
 
-    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
+    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids, weights=None, temperature=1.0):
         """
         Resample the values of the leaf nodes for the specified trees.
         
@@ -125,7 +151,9 @@ class TreesPrior:
             residuals, 
             eps_sigma2 = bart_params.global_params["eps_sigma2"], 
             f_sigma2 = self.f_sigma2,
-            random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1])
+            random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1]),
+            weights=weights,
+            temperature=temperature
         )
         return leaf_params_new
 
@@ -205,7 +233,7 @@ class GlobalParamPrior:
         eps_sigma2 = self._sample_eps_sigma2(data.y)
         return {"eps_sigma2" : eps_sigma2}
     
-    def resample_global_params(self, bart_params : Parameters, data_y):
+    def resample_global_params(self, bart_params : Parameters, data_y, weights=None, temperature=1.0):
         """
         Resamples the global parameters for the BART model.
 
@@ -220,7 +248,7 @@ class GlobalParamPrior:
         Returns:
             dict: A dictionary containing the resampled global parameters.
         """
-        eps_sigma2 = self._sample_eps_sigma2(data_y - bart_params.evaluate())
+        eps_sigma2 = self._sample_eps_sigma2(data_y - bart_params.evaluate(), weights, temperature)
         return {"eps_sigma2" : eps_sigma2}
     
     def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:
@@ -245,7 +273,7 @@ class GlobalParamPrior:
         eps_lambda_val = (sigma_hat**2 * c) / self.eps_nu
         return eps_lambda_val
 
-    def _sample_eps_sigma2(self, residuals):
+    def _sample_eps_sigma2(self, residuals, weights=None, temperature=1.0):
         """
         Sample noise variance parameter.
 
@@ -256,6 +284,13 @@ class GlobalParamPrior:
             float: Sampled noise variance
         """
         n = len(residuals)
+        # Preproces the weights
+        if weights is None and temperature == 1.0:
+            pass
+        else:
+            sqrt_weights = _get_sqrt_weights(n, weights, temperature)
+            residuals *= sqrt_weights
+
         # Convert to inverse gamma params
         prior_alpha = self.eps_nu / 2
         prior_beta = self.eps_nu * self.eps_lambda / 2
@@ -276,7 +311,7 @@ class BARTLikelihood:
         """
         self.f_sigma2 = f_sigma2
 
-    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids, weights=None, temperature=1.0):
         """
         Calculate the log marginal likelihood of the trees in a BART model.
 
@@ -314,10 +349,12 @@ class BARTLikelihood:
             leaf_basis, 
             resids, 
             bart_params.global_params["eps_sigma2"], 
-            self.f_sigma2
+            self.f_sigma2,
+            weights=weights,
+            temperature=temperature
         )
 
-    def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, marginalize: bool=False):
+    def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, marginalize: bool=False, weights=None, temperature=1.0):
         """
         Compute the ratio of marginal likelihoods for a given move.
 
@@ -333,11 +370,11 @@ class BARTLikelihood:
             Marginal likelihood ratio.
         """
         if not marginalize:
-            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, move.trees_changed)
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, move.trees_changed)
+            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, move.trees_changed, weights, temperature)
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, move.trees_changed, weights, temperature)
         else:
-            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, np.arange(move.current.n_trees))
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, np.arange(move.current.n_trees))
+            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, np.arange(move.current.n_trees), weights, temperature)
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, np.arange(move.current.n_trees), weights, temperature)
         return log_lkhd_proposed - log_lkhd_current
 
 class ComprehensivePrior:
