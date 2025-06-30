@@ -15,16 +15,21 @@ def _resample_leaf_vals_numba(leaf_basis, resids, eps_sigma2, f_sigma2, random_n
     """
     Numba-optimized function to resample leaf values.
     """
-    n, p = leaf_basis.shape
-    sqrt_weights = _get_sqrt_weights(n, weights, temperature)
 
     # Explicitly convert boolean array to float64
-    num_lbs = leaf_basis.astype(np.float64) * sqrt_weights[:, np.newaxis]
-    resids = resids * sqrt_weights
-
-    post_cov = np.linalg.inv(num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2)
-    post_mean = post_cov @ num_lbs.T @ resids / eps_sigma2
-    
+    leaf_basis = leaf_basis.astype(np.float64)
+    n, p = leaf_basis.shape
+    # Preproces the weights
+    if weights is None and temperature == 1.0:
+        pass
+    else:
+        sqrt_weights = _get_sqrt_weights(n, weights, temperature)
+        leaf_basis *= sqrt_weights[:, np.newaxis]
+        resids *= sqrt_weights
+    # Compute posterior mean and covariance
+    post_cov = np.linalg.inv(leaf_basis.T @ leaf_basis / eps_sigma2 + np.eye(p) / f_sigma2)
+    post_mean = post_cov @ leaf_basis.T @ resids / eps_sigma2
+    # Resample leaf parameters from the posterior distribution
     leaf_params_new = np.sqrt(np.diag(post_cov)) * random_normal_p + post_mean
     return leaf_params_new
 
@@ -33,16 +38,19 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2, wei
     """
     Numba-optimized function to calculate log marginal likelihood.
     """
-    # Explicitly convert boolean array to float64
-    leaf_basis_float = leaf_basis.astype(np.float64)
-    # Preprocess weights and temperature
-    n, _ = leaf_basis.shape
-    sqrt_weights = _get_sqrt_weights(n, weights, temperature)
-    
-    # Now use the float64 array with SVD
-    U, S, _ = np.linalg.svd(leaf_basis_float * sqrt_weights[:, np.newaxis], full_matrices=False)
-    resids = resids * sqrt_weights
 
+    # Explicitly convert boolean array to float64
+    leaf_basis = leaf_basis.astype(np.float64)
+    n, _ = leaf_basis.shape
+    # Preproces the weights
+    if weights is None and temperature == 1.0:
+        pass
+    else:
+        sqrt_weights = _get_sqrt_weights(n, weights, temperature)
+        leaf_basis *= sqrt_weights[:, np.newaxis]
+        resids *= sqrt_weights
+    # Compute log marginal likelihood formula components
+    U, S, _ = np.linalg.svd(leaf_basis, full_matrices=False)
     noise_ratio = eps_sigma2 / f_sigma2
     logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
     resid_u_coefs = U.T @ resids
@@ -276,8 +284,12 @@ class GlobalParamPrior:
             float: Sampled noise variance
         """
         n = len(residuals)
-        sqrt_weights = _get_sqrt_weights(n, weights, temperature)
-        residuals = residuals * sqrt_weights
+        # Preproces the weights
+        if weights is None and temperature == 1.0:
+            pass
+        else:
+            sqrt_weights = _get_sqrt_weights(n, weights, temperature)
+            residuals *= sqrt_weights
 
         # Convert to inverse gamma params
         prior_alpha = self.eps_nu / 2
