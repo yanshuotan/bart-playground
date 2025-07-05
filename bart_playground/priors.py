@@ -1,4 +1,3 @@
-
 import math
 import numpy as np
 from scipy.stats import invgamma, chi2
@@ -17,7 +16,7 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     """
     p = leaf_basis.shape[1]
     # Explicitly convert boolean array to float32
-    num_lbs = leaf_basis.astype(np.float32)
+    num_lbs = leaf_basis
     post_cov = np.linalg.inv(
         num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2
         ).astype(np.float32)
@@ -27,21 +26,27 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     return leaf_params_new
 
 @njit
-def _single_tree_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
+def _single_tree_log_marginal_lkhd_numba(leaf_ids, leaves, resids, eps_sigma2, f_sigma2):
     """
     Numba-optimized function to calculate log marginal likelihood when there is only one tree.
     """
-    # Explicitly convert boolean array to float32
-    leaf_basis_float = leaf_basis.astype(np.float32)
-    # Suppose each row of leaf_basis sums to 1,
-    # so we can use counts instead of svd.
-    counts = leaf_basis_float.sum(axis=0)
+    # Calculate counts for each leaf
+    counts = np.zeros(len(leaves), dtype=np.float32)
+    resid_sums = np.zeros(len(leaves), dtype=np.float32)
+    
+    for i in range(len(leaf_ids)):
+        leaf_sample = leaf_ids[i]
+        # Find which leaf index this corresponds to
+        for j in range(len(leaves)):
+            if leaves[j] == leaf_sample:
+                counts[j] += 1.0
+                resid_sums[j] += resids[i]
+                break
+    
     noise_ratio = eps_sigma2 / f_sigma2
     logdet = np.sum(np.log(counts / noise_ratio + 1))
-    # resid_u_coefs is resid_sums / sqrt(counts)
-    resid_sums = leaf_basis_float.T @ resids
+    
     ls_resids = np.sum(resids ** 2) - np.sum((resid_sums ** 2) / counts)
-
     ridge_bias = np.sum(resid_sums ** 2 / (counts * (counts / noise_ratio + 1)))
 
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
@@ -313,16 +318,18 @@ class BARTLikelihood:
         8. Combine the log determinant, least squares residuals, and ridge bias to obtain the log marginal likelihood.
         """
         resids = (data_y - bart_params.evaluate(all_except=tree_ids))
-        leaf_basis = bart_params.leaf_basis(tree_ids)
         if len(tree_ids) == 1:
-            # For single tree, we can use the optimized function
+            # For single tree, we can use the optimized function with leaf_ids
+            tree = bart_params.trees[tree_ids[0]]
             return _single_tree_log_marginal_lkhd_numba(
-                leaf_basis, 
+                tree.leaf_ids, 
+                tree.leaves,
                 resids, 
                 bart_params.global_params["eps_sigma2"], 
                 self.f_sigma2
             )
         else:
+            leaf_basis = bart_params.leaf_basis(tree_ids)
             return _trees_log_marginal_lkhd_numba(
                 leaf_basis, 
                 resids, 
@@ -570,4 +577,3 @@ class LogisticPrior:
     def set_latents(self, latents):
         self.tree_prior.set_latents(latents)
         self.likelihood.set_latents(latents)
-        
