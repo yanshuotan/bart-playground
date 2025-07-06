@@ -9,6 +9,48 @@ from .moves import Move
 from .util import Dataset, GIG
 
 # Standalone Numba-optimized functions
+
+@njit 
+def _get_resid_all(leaf_ids, node_counts, residuals):
+    resid_all = np.zeros(node_counts, dtype=np.float32)
+    leaves = np.zeros(node_counts, dtype=np.bool_)
+    for i in range(len(leaf_ids)):
+        leaf_sample = leaf_ids[i]
+        resid_all[leaf_sample] += residuals[i]
+        # Here, we suppose a leaf contains at least one sample
+        # We need to record leaves because resid_all[node] may add to 0.0
+        leaves[leaf_sample] = True
+    return resid_all, leaves
+
+@njit
+def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_sigma2, f_sigma2, random_normal_p):
+    """
+    Numba-optimized function to resample leaf values using leaf_ids and sample_n_in_node.
+    """
+    node_counts = len(sample_n_in_node)
+    resid_all, leaves = _get_resid_all(leaf_ids, node_counts, residuals)
+        
+    n_leaves = 0
+    for node in range(node_counts):
+        if leaves[node]:
+            n_leaves += 1
+            
+    noise_ratio = eps_sigma2 / f_sigma2
+    
+    # Compute posterior parameters only for leaf nodes
+    post_cov_diag = np.zeros(n_leaves, dtype=np.float32)
+    post_mean = np.zeros(n_leaves, dtype=np.float32)
+    
+    leaf_idx = 0
+    for node in range(node_counts):
+        if leaves[node]:
+            post_cov_diag[leaf_idx] = eps_sigma2 / (sample_n_in_node[node] + noise_ratio)
+            post_mean[leaf_idx] = resid_all[node] / (sample_n_in_node[node] + noise_ratio)
+            leaf_idx += 1
+    
+    leaf_params_new = np.sqrt(post_cov_diag) * random_normal_p + post_mean
+    return leaf_params_new
+
 @njit
 def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, random_normal_p):
     """
@@ -26,17 +68,14 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     return leaf_params_new
 
 @njit
-def _single_tree_log_marginal_lkhd_numba(leaf_ids, n_nodes, resids, eps_sigma2, f_sigma2):
+def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps_sigma2, f_sigma2):
     """
     Numba-optimized function to calculate log marginal likelihood when there is only one tree.
+    sample_n_in_node is the number of samples in each node, which is not limited to the samples counts in the leaves.
     """
     # Calculate counts for each leaf
-    node_counts = len(n_nodes)
-    resid_all = np.zeros(node_counts, dtype=np.float32)
-
-    for i in range(len(leaf_ids)):
-        leaf_sample = leaf_ids[i]
-        resid_all[leaf_sample] += resids[i]
+    node_counts = len(sample_n_in_node)
+    resid_all, leaves = _get_resid_all(leaf_ids, node_counts, resids)
     
     ls_resids = np.sum(resids ** 2)
     ridge_bias = 0.0
@@ -44,11 +83,10 @@ def _single_tree_log_marginal_lkhd_numba(leaf_ids, n_nodes, resids, eps_sigma2, 
     noise_ratio = eps_sigma2 / f_sigma2
     
     for node in range(node_counts):
-        # resid is non-zero only for leaf nodes
-        if resid_all[node] != 0.0:
-            logdet += math.log(n_nodes[node] / noise_ratio + 1.0)
-            ls_resids -= (resid_all[node] ** 2) / n_nodes[node]
-            ridge_bias += (resid_all[node] ** 2) / (n_nodes[node] * (n_nodes[node] / noise_ratio + 1.0))
+        if leaves[node]:
+            logdet += math.log(sample_n_in_node[node] / noise_ratio + 1.0)
+            ls_resids -= (resid_all[node] ** 2) / sample_n_in_node[node]
+            ridge_bias += (resid_all[node] ** 2) / (sample_n_in_node[node] * (sample_n_in_node[node] / noise_ratio + 1.0))
 
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
@@ -130,15 +168,28 @@ class TreesPrior:
             The resampled leaf parameters.
         """
         residuals = data_y - bart_params.evaluate(all_except=tree_ids)
-        leaf_basis = bart_params.leaf_basis(tree_ids)
-        
-        leaf_params_new = _resample_leaf_vals_numba(
-            leaf_basis, 
-            residuals, 
-            eps_sigma2 = bart_params.global_params["eps_sigma2"], 
-            f_sigma2 = self.f_sigma2,
-            random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1])
-        )
+        if len(tree_ids) == 1:
+            # For single tree, we can use the optimized function with leaf_ids
+            tree = bart_params.trees[tree_ids[0]]
+            leaf_ids = tree.leaf_ids
+            return _single_tree_resample_leaf_vals(
+                leaf_ids,
+                tree.n,
+                residuals,
+                eps_sigma2=bart_params.global_params["eps_sigma2"][0],
+                f_sigma2=self.f_sigma2,
+                random_normal_p=self.generator.standard_normal(size=len(tree.leaves))
+            )
+        else:
+            leaf_basis = bart_params.leaf_basis(tree_ids)
+
+            leaf_params_new = _resample_leaf_vals_numba(
+                leaf_basis,
+                residuals,
+                eps_sigma2=bart_params.global_params["eps_sigma2"],
+                f_sigma2 = self.f_sigma2,
+                random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1])
+            )
         return leaf_params_new
 
     def trees_log_prior(self, bart_params : Parameters, tree_ids):
