@@ -22,14 +22,14 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
         if _is_in_subtree(j, starting_node):
             subtree_nodes[j] = True
             if not append:
-                n[j] = 0
+                n[j] = 0 # starting node is not updated
         else:
             subtree_nodes[j] = False
     
     for i in range(dataX.shape[0]):
-        current_leaf = leaf_ids[offset + i]
+        current_node = leaf_ids[offset + i]
         # Need update
-        if append or subtree_nodes[current_leaf]:
+        if append or current_node == starting_node or subtree_nodes[current_node]:
             leaf_ids[offset + i] = _traverse_tree_single(
                 dataX[i], vars, thresholds, starting_node, n
             )
@@ -47,8 +47,8 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
 def _is_in_subtree(node_id, ancestor_id):
     # A node cannot be in the subtree of a node with a larger index
     # in this binary tree representation.
-    # The ancestor node is considered to be in its own subtree.
-    if node_id < ancestor_id:
+    # The ancestor node is not considered to be in its own subtree.
+    if node_id <= ancestor_id:
         return False
     
     current_node = node_id
@@ -89,16 +89,14 @@ def _traverse_tree_single(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarra
     """
     current_node = starting_node
     while vars[current_node] >= 0:  # While it's a split node
-        if n_to_update is not None:
-            n_to_update[current_node] += 1 # Increment count for the current split node
         split_var = vars[current_node]
         threshold = thresholds[current_node]
         if X[split_var] <= threshold:
             current_node = 2 * current_node + 1
         else:
             current_node = 2 * current_node + 2
-    if n_to_update is not None:
-        n_to_update[current_node] += 1 # Increment count for the leaf node
+        if n_to_update is not None:
+            n_to_update[current_node] += 1 # Increment count for the subtree node
     return current_node
 
 class Tree:
@@ -603,7 +601,7 @@ class Parameters:
         self.cache = None
         for tree in self.trees:
             tree.evals = None
-            tree.node_indicators = None
+            tree.leaf_ids = None
             tree.n = None
             
     def copy(self, modified_tree_ids=None):

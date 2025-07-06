@@ -26,28 +26,29 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     return leaf_params_new
 
 @njit
-def _single_tree_log_marginal_lkhd_numba(leaf_ids, leaves, resids, eps_sigma2, f_sigma2):
+def _single_tree_log_marginal_lkhd_numba(leaf_ids, n_nodes, resids, eps_sigma2, f_sigma2):
     """
     Numba-optimized function to calculate log marginal likelihood when there is only one tree.
     """
     # Calculate counts for each leaf
-    counts = np.zeros(len(leaves), dtype=np.float32)
-    resid_sums = np.zeros(len(leaves), dtype=np.float32)
-    
+    node_counts = len(n_nodes)
+    resid_all = np.zeros(node_counts, dtype=np.float32)
+
     for i in range(len(leaf_ids)):
         leaf_sample = leaf_ids[i]
-        # Find which leaf index this corresponds to
-        for j in range(len(leaves)):
-            if leaves[j] == leaf_sample:
-                counts[j] += 1.0
-                resid_sums[j] += resids[i]
-                break
+        resid_all[leaf_sample] += resids[i]
     
+    ls_resids = np.sum(resids ** 2)
+    ridge_bias = 0.0
+    logdet = 0.0
     noise_ratio = eps_sigma2 / f_sigma2
-    logdet = np.sum(np.log(counts / noise_ratio + 1))
     
-    ls_resids = np.sum(resids ** 2) - np.sum((resid_sums ** 2) / counts)
-    ridge_bias = np.sum(resid_sums ** 2 / (counts * (counts / noise_ratio + 1)))
+    for node in range(node_counts):
+        # resid is non-zero only for leaf nodes
+        if resid_all[node] != 0.0:
+            logdet += math.log(n_nodes[node] / noise_ratio + 1.0)
+            ls_resids -= (resid_all[node] ** 2) / n_nodes[node]
+            ridge_bias += (resid_all[node] ** 2) / (n_nodes[node] * (n_nodes[node] / noise_ratio + 1.0))
 
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
@@ -323,9 +324,9 @@ class BARTLikelihood:
             tree = bart_params.trees[tree_ids[0]]
             return _single_tree_log_marginal_lkhd_numba(
                 tree.leaf_ids, 
-                tree.leaves,
+                tree.n,
                 resids, 
-                bart_params.global_params["eps_sigma2"], 
+                bart_params.global_params["eps_sigma2"][0], 
                 self.f_sigma2
             )
         else:
@@ -533,21 +534,22 @@ class LogisticLikelihood(BARTLikelihood):
         if len(tree_ids) != 1:
             raise ValueError("Logistic likelihood only supports single tree evaluation.")
         
-        lb_bool = bart_params.leaf_basis(tree_ids)
-        leaf_basis = lb_bool.astype(np.float32)
-        # leaf_basis is an array of shape (n_samples, n_leaves)
         tree_eval = bart_params.evaluate(all_except=tree_ids)
         # dim of tree_eval is (n_samples)
         latent_tree_product = self.latents * np.exp(tree_eval)
         # dim of latent_tree_product is (n_samples)
+        
+        tree = bart_params.trees[tree_ids[0]]
+        leaf_ids = tree.leaf_ids
+        leaves_id = tree.leaves
 
         # Vectorized computation of rh and sh for all leaves
         # rh[t] = sum of data_y values where leaf_basis[i, t] == 1
-        rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
+        rh = np.bincount(leaf_ids, weights=data_y)[leaves_id]  # Shape: (n_leaves,)
 
         # sh[t] = sum of latents[i] * np.exp(tree_eval)[i] where leaf_basis[i, t] == 1
-        sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
-        
+        sh = np.bincount(leaf_ids, weights=latent_tree_product)[leaves_id]  # Shape: (n_leaves,)
+
         self.parent.rh = rh
         self.parent.sh = sh
         self.parent.param = bart_params
