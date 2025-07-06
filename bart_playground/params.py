@@ -16,15 +16,13 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
     leaf_ids = prev_leaf_id
     # If appending, we need to take the offset into account when accessing leaf_ids
     offset = prev_leaf_id.shape[0] - dataX.shape[0] if append else 0
+    desc = _descendants_numba(starting_node, vars)
     
-    subtree_nodes = np.empty(n_nodes, np.bool_)
-    for j in range(n_nodes):
-        if _is_in_subtree(j, starting_node):
-            subtree_nodes[j] = True
-            if not append:
-                n[j] = 0 # starting node is not updated
-        else:
-            subtree_nodes[j] = False
+    subtree_nodes = np.zeros(n_nodes, np.bool_)
+    for j in desc:
+        subtree_nodes[j] = True
+        if not append:
+            n[j] = 0 # starting node is not updated
     
     for i in range(dataX.shape[0]):
         current_node = leaf_ids[offset + i]
@@ -36,26 +34,36 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
             
     # success = True if all updated n are > 0 else False
     success = True
-    for j in range(n_nodes):
-        if vars[j] == -1 and subtree_nodes[j] and n[j] <= 0:
+    for j in desc:
+        if n[j] <= 0:
             success = False
             break
 
     return success
 
-@njit(inline='always')
-def _is_in_subtree(node_id, ancestor_id):
-    # A node cannot be in the subtree of a node with a larger index
-    # in this binary tree representation.
-    # The ancestor node is not considered to be in its own subtree.
-    if node_id <= ancestor_id:
-        return False
+@njit
+def _descendants_numba(node_id: int, vars: NDArray[np.int32]):
+    """
+    Numba-optimized function to find all descendants of a given node in the tree.
+    """
+    subtree_nodes = np.empty(len(vars), np.int32)
+    queue_start = 0
+    queue_end = 1
+    subtree_nodes[queue_start] = node_id
+    while queue_start < queue_end:
+        current_node = subtree_nodes[queue_start]
+        queue_start += 1
+        # Add child nodes to the queue
+        left_child = current_node * 2 + 1
+        right_child = current_node * 2 + 2
+        if left_child < len(vars) and vars[left_child] > -2:
+            subtree_nodes[queue_end] = left_child
+            queue_end += 1
+        if right_child < len(vars) and vars[right_child] > -2:
+            subtree_nodes[queue_end] = right_child
+            queue_end += 1
     
-    current_node = node_id
-    while current_node > ancestor_id:
-        current_node = (current_node - 1) // 2
-    
-    return current_node == ancestor_id
+    return subtree_nodes[1:queue_end]
 
 @njit
 def _traverse_tree_numba(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
@@ -347,51 +355,21 @@ class Tree:
         # Check if the node is a split node
         if not self.is_split_node(node_id):
             raise ValueError("Node is not a split node and cannot be pruned.")
+        
+        desc = _descendants_numba(node_id, self.vars)
 
-        # Use a stack to manage nodes to prune
-        stack = [node_id]
+        for this_node in desc:
+            self.vars[this_node] = -2  # Mark all descendant nodes as pruned
+            self.thresholds[this_node] = np.nan
+            self.leaf_vals[this_node] = np.nan
+            if self.cache_exists:
+                self.n[this_node] = 0
+                self.leaf_ids[self.leaf_ids == this_node] = node_id  # Update leaf_ids for pruned nodes
 
-        # Store the original node .n
-        ori_n = self.n[node_id]
-
-        while stack:
-            current_node = stack.pop()
-
-            # Check if the current node is a terminal split node
-            if self.is_terminal_split_node(current_node):
-                # If terminal, directly prune its children
-                left_child = current_node * 2 + 1
-                right_child = current_node * 2 + 2
-                self.vars[left_child] = -2
-                self.vars[right_child] = -2
-                self.leaf_vals[left_child] = np.nan
-                self.leaf_vals[right_child] = np.nan
-
-                if self.cache_exists:
-                    self.n[left_child] = 0
-                    self.n[right_child] = 0
-                    # Update leaf_ids for samples that were in the pruned children
-                    self.leaf_ids[self.leaf_ids == left_child] = current_node
-                    self.leaf_ids[self.leaf_ids == right_child] = current_node
-            elif not self.is_leaf(current_node):
-                # If not terminal or leaf, add children to the stack for further pruning
-                left_child = current_node * 2 + 1
-                right_child = current_node * 2 + 2
-
-                if left_child < len(self.vars):
-                    stack.append(left_child)
-                if right_child < len(self.vars):
-                    stack.append(right_child)
-
-            # After processing children, mark the current node as -2
-            self.vars[current_node] = -2
-            self.thresholds[current_node] = np.nan
-            self.leaf_vals[current_node] = np.nan
-            self.n[current_node] = 0
-
-        # Finally, turn the original node into a leaf and set the n correctly
+        # Turn the original node into a leaf
         self.vars[node_id] = -1
-        self.n[node_id] = ori_n
+        self.thresholds[node_id] = np.nan
+        self.leaf_vals[node_id] = np.nan # Leaf value to be determined later
 
         # Truncate unnecessary space in the tree arrays
         self._truncate_tree_arrays()
@@ -614,7 +592,7 @@ class Parameters:
         # because they only contain numerical values (which are immutable)
         return Parameters(trees=copied_trees, 
                           global_params=self.global_params.copy(), # shallow copy suffices
-                          cache=self.cache)
+                          cache=self.cache.copy() if self.cache is not None else None)
     
     def update_data(self, X_new):
         """
