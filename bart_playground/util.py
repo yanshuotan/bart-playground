@@ -179,7 +179,7 @@ class ClassificationPreprocessor(Preprocessor):
         q_vals = np.linspace(0, 1, self.max_bins, endpoint=False)
         return dict({k : np.unique(np.quantile(X[:, k], q_vals)) for k in range(X.shape[1])})
     
-@njit
+@njit(cache=True)
 def log_K_asymptotic(v, x):
     """
     One-term asymptotic: log K_v(x) ~ 
@@ -312,7 +312,7 @@ class GIG:
         return x * math.sqrt(chi / psi)
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def log_gig_normalizing_constant_numba(eta: float, chi: float, psi: float) -> float:
         """
         Compute the GIG normalizing constant for scalar inputs (eta, chi, psi).

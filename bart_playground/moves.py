@@ -30,13 +30,16 @@ class Move(ABC):
     def possible_thresholds(self):
         assert self._possible_thresholds, "possible_thresholds must be initialized"
         return self._possible_thresholds
+    @property
+    def _num_possible_proposals(self):
+        return self.tol
 
     def propose(self, generator):
         """
         Propose a new state.
         """
         if self.is_feasible():
-            for _ in range(self.tol):
+            for _ in range(self._num_possible_proposals):
                 proposed = self.current.copy(self.trees_changed)
                 success = self.try_propose(proposed, generator)
                 if success:
@@ -151,21 +154,41 @@ class Swap(Move):
                  possible_thresholds = None, tol : int = 100):
         super().__init__(current, trees_changed, tol = tol)
         assert len(trees_changed) == 1
+        self.swappable_pairs = None
+        self.idx = None
+        
+    @property
+    def _num_possible_proposals(self):
+        return min(self.tol, len(self.swappable_pairs))
+    
+    def _ini_swappable_pairs(self):
+        tree = self.current.trees[self.trees_changed[0]]
+        nonterminal_split_nodes = tree.nonterminal_split_nodes
+
+        # Collect all valid parent-child pairs where the child is also a split node.
+        self.swappable_pairs = [
+            (parent_id, 2 * parent_id + lr)
+            for parent_id in nonterminal_split_nodes
+            for lr in [1, 2]
+            if tree.vars[2 * parent_id + lr] != -1
+        ]
+        self.idx = 0
 
     def is_feasible(self):
-        tree = self.current.trees[self.trees_changed[0]]
-        self.cur_nonterminal_split_nodes = tree.nonterminal_split_nodes
-        return len(self.cur_nonterminal_split_nodes) > 0
+        '''
+        Note that this method has a side effect of initializing the swappable_pairs.
+        '''
+        self._ini_swappable_pairs()
+        return self._num_possible_proposals > 0
 
     def try_propose(self, proposed, generator):
-        tree = proposed.trees[self.trees_changed[0]]
-        parent_id = fast_choice(generator, self.cur_nonterminal_split_nodes)
-        lr = generator.integers(1, 3) # Choice of left/right child
-        child_id = 2 * parent_id + lr
-        if tree.vars[child_id] == -1: # Change to the other child if this is a leaf
-            child_id = 2 * parent_id + 3 - lr
+        if self.idx == 0: # Shuffle the pairs once at the start
+            generator.shuffle(self.swappable_pairs)
             
-        success = tree.swap_split(parent_id, child_id) # If no empty leaves are created
+        parent_id, child_id = self.swappable_pairs[self.idx]
+        tree = proposed.trees[self.trees_changed[0]]
+        success = tree.swap_split(parent_id, child_id)  # If no empty leaves are created
+        self.idx += 1
         return success
     
  
