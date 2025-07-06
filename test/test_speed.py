@@ -1,7 +1,7 @@
 import time
 
 from bart_playground import DefaultBART
-from bart_playground.util import DataGenerator
+from bart_playground.DataGenerator import DataGenerator
 
 
 def _get_data(scenario: str = "piecewise_flat"):

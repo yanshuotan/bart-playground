@@ -10,7 +10,7 @@ from .util import Dataset, GIG
 
 # Standalone Numba-optimized functions
 
-@njit 
+@njit(cache=True) 
 def _get_resid_all(leaf_ids, node_counts, residuals):
     resid_all = np.zeros(node_counts, dtype=np.float32)
     leaves = np.zeros(node_counts, dtype=np.bool_)
@@ -22,7 +22,7 @@ def _get_resid_all(leaf_ids, node_counts, residuals):
         leaves[leaf_sample] = True
     return resid_all, leaves
 
-@njit
+@njit(cache=True)
 def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_sigma2, f_sigma2, random_normal_p):
     """
     Numba-optimized function to resample leaf values using leaf_ids and sample_n_in_node.
@@ -51,7 +51,7 @@ def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_s
     leaf_params_new = np.sqrt(post_cov_diag) * random_normal_p + post_mean
     return leaf_params_new
 
-@njit
+@njit(cache=True)
 def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, random_normal_p):
     """
     Numba-optimized function to resample leaf values.
@@ -67,7 +67,7 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     leaf_params_new = np.sqrt(np.diag(post_cov)) * random_normal_p + post_mean
     return leaf_params_new
 
-@njit
+@njit(cache=True)
 def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps_sigma2, f_sigma2):
     """
     Numba-optimized function to calculate log marginal likelihood when there is only one tree.
@@ -90,7 +90,7 @@ def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps
 
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
-@njit
+@njit(cache=True)
 def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     """
     Numba-optimized function to calculate log marginal likelihood when there are multiple trees.
@@ -109,7 +109,7 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / noise_ratio + 1))
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
-@njit
+@njit(cache=True)
 def _trees_log_prior_numba(tree_vars, alpha, beta):
     # Calculate depth for each node
     d = np.ceil(np.log2(np.arange(len(tree_vars)) + 2)) - 1
@@ -492,20 +492,6 @@ class LogisticTreesPrior(TreesPrior):
         sh = self.parent.sh
         pi_h = self.parent.pi_h
         
-        # lb_bool = bart_params.leaf_basis(tree_ids)
-        # leaf_basis = lb_bool.astype(np.float32)
-        # tree_eval = bart_params.evaluate(all_except = tree_ids)
-        # latent_tree_product = self.latents * np.exp(tree_eval)
-        # 
-        # rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
-        # sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
-        # 
-        # pi_h = np.zeros(len(rh))
-        # for i in range(len(rh)):
-        #     Z1 = GIG.gig_normalizing_constant_numba(-self.c + rh[i], 2 * self.d, 2 * sh[i])
-        #     Z2 = GIG.gig_normalizing_constant_numba(self.c + rh[i], 0, 2 * (self.d + sh[i]))
-        #     pi_h[i] = Z1 / (Z1 + Z2)
-        
         leaf_params_new = np.zeros(rh.shape[0])
         for i in range(leaf_params_new.shape[0]):
             leaf_params_new[i] = pi_h[i] * GIG.rvs_gig_scalar(
@@ -548,10 +534,23 @@ class LogisticLikelihood(BARTLikelihood):
 
     def set_latents(self, latents):
         self.latents = latents
-    
+        
     @staticmethod
-    @njit
-    def trees_log_marginal_lkhd_numba_backend(c, d, rh, sh):
+    @njit(cache=True)
+    def _get_rh_sh(leaf_ids, latent_tree_product, data_y, node_counts, leaves):
+        rh_all = np.zeros(node_counts, dtype=np.float64)
+        sh_all = np.zeros(node_counts, dtype=np.float64)
+
+        for i in range(len(leaf_ids)):
+            leaf_sample = leaf_ids[i]
+            rh_all[leaf_sample] += data_y[i]
+            sh_all[leaf_sample] += latent_tree_product[i]
+
+        return rh_all[leaves], sh_all[leaves]
+
+    @staticmethod
+    @njit(cache=True)
+    def _trees_log_marginal_lkhd_numba_backend(c, d, rh, sh):
         log_likelihood = np.zeros(len(rh))
         pi_h = np.zeros(len(rh))
         for i in range(len(rh)):
@@ -591,20 +590,16 @@ class LogisticLikelihood(BARTLikelihood):
         # dim of latent_tree_product is (n_samples)
         
         tree = bart_params.trees[tree_ids[0]]
-        leaf_ids = tree.leaf_ids
-        leaves_id = tree.leaves
-
-        # Vectorized computation of rh and sh for all leaves
-        # rh[t] = sum of data_y values where leaf_basis[i, t] == 1
-        rh = np.bincount(leaf_ids, weights=data_y)[leaves_id]  # Shape: (n_leaves,)
-
-        # sh[t] = sum of latents[i] * np.exp(tree_eval)[i] where leaf_basis[i, t] == 1
-        sh = np.bincount(leaf_ids, weights=latent_tree_product)[leaves_id]  # Shape: (n_leaves,)
-
+        
+        rh, sh = self._get_rh_sh(
+            tree.leaf_ids, latent_tree_product, data_y, len(tree.vars), tree.leaves
+        )
         self.parent.rh = rh
         self.parent.sh = sh
         self.parent.param = bart_params
-        log_likelihood_sum, self.parent.pi_h = self.trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
+        
+        # assert np.allclose(rh, rhn) and np.allclose(sh, shn), "Mismatch in rh and sh calculation."
+        log_likelihood_sum, self.parent.pi_h = self._trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
 
         return log_likelihood_sum
 
