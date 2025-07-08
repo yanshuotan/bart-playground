@@ -7,14 +7,14 @@ dgp_params:
   noise: 0.1
 
 bart_params:
-  ndpost: 10000
-  nskip: 1000
-  n_trees: 200
+  ndpost: 1000
+  nskip: 100
+  n_trees: 20
 
 experiment_params:
   main_seed: 1
   n_train_samples_list: [100, 200, 500, 1000, 10000]
-  n_test_samples: 10000
+  n_test_samples: 1000
   n_chains: 10
   plot_results: False
   schedules:

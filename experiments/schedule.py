@@ -196,6 +196,7 @@ def run_and_analyze(cfg: DictConfig):
 
         all_results = {}
         schedules_to_test = exp_params.get("schedules", [])
+        print(f"Schedules to test: {schedules_to_test}")
         total_mcmc_iters = cfg.bart_params.ndpost + cfg.bart_params.nskip
 
         for schedule_cfg in schedules_to_test:
