@@ -200,7 +200,8 @@ class Tree:
             raise ValueError("Node is not a leaf and cannot be split.")
         X = self.dataX[self.node_indicators[:, node_id], :]
         p_thresholds_all = np.concatenate(list(p_thresholds.values()))
-        vars = np.repeat(X.shape[1], [len(p_thresholds_k) for p_thresholds_k in p_thresholds.values()])
+        lens = [len(v) for v in p_thresholds.values()]
+        vars = np.repeat(list(p_thresholds.keys()), lens)
         routing = X[:, vars] > p_thresholds_all
         left_nonempty = np.any(~routing, axis=0)
         right_nonempty = np.any(routing, axis=0)
