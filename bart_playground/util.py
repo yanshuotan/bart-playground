@@ -8,17 +8,14 @@ import math
 # For faster random sampling
 def fast_choice(generator, array):
     """Fast random selection from an array."""
-    if len(array) == 0:
-        raise ValueError("Cannot choose from empty array")
-    elif len(array) == 1:
+    len_arr = len(array)
+    if len_arr == 1:
         return array[0]
-    return array[generator.integers(0, len(array))]
+    return array[generator.integers(0, len_arr)]
 
 class Dataset:
 
     def __init__(self, X, y):
-        # if X is pd.DataFrame:
-            # X = X.to_numpy()
         # if X is pd.DataFrame:
             # X = X.to_numpy()
         self.X = X
@@ -40,7 +37,7 @@ class Preprocessor(ABC):
         self._thresholds = value
     
     @abstractmethod
-    def gen_thresholds(self, X):
+    def gen_thresholds(self, X) -> dict:
         pass
         
     def fit(self, X, y):
@@ -106,9 +103,6 @@ class DefaultPreprocessor(Preprocessor):
         self.y_max = y.max()
         self.y_min = y.min()
         self._thresholds = self.gen_thresholds(X)
-        
-    def transform(self, X, y):
-        return Dataset(X, self.transform_y(y))
     
     def gen_thresholds(self, X):
         q_vals = np.linspace(0, 1, self.max_bins, endpoint=False)
@@ -117,12 +111,16 @@ class DefaultPreprocessor(Preprocessor):
     @staticmethod
     def test_thresholds(X):
         return dict({k : np.unique(X[:, k]) for k in range(X.shape[1])})
-
+    
+    def transform_X(self, X) -> np.ndarray:
+        return X.astype(np.float32)
+    
     def transform_y(self, y) -> np.ndarray:
         if self.y_max == self.y_min:
-            return y
+            y_res = y
         else:
-            return (y - self.y_min) / (self.y_max - self.y_min) - 0.5
+            y_res = (y - self.y_min) / (self.y_max - self.y_min) - 0.5
+        return y_res.reshape(-1, ).astype(np.float32)
     
     def backtransform_y(self, y) -> np.ndarray:
         return (self.y_max - self.y_min) * (y + 0.5) + self.y_min
@@ -178,7 +176,7 @@ class ClassificationPreprocessor(Preprocessor):
         q_vals = np.linspace(0, 1, self.max_bins, endpoint=False)
         return dict({k : np.unique(np.quantile(X[:, k], q_vals)) for k in range(X.shape[1])})
     
-@njit
+@njit(cache=True)
 def log_K_asymptotic(v, x):
     """
     One-term asymptotic: log K_v(x) ~ 
@@ -311,7 +309,7 @@ class GIG:
         return x * math.sqrt(chi / psi)
 
     @staticmethod
-    @njit
+    @njit(cache=True)
     def log_gig_normalizing_constant_numba(eta: float, chi: float, psi: float) -> float:
         """
         Compute the GIG normalizing constant for scalar inputs (eta, chi, psi).

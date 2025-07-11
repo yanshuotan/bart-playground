@@ -1,4 +1,3 @@
-
 import math
 import numpy as np
 from scipy.stats import invgamma, chi2
@@ -10,29 +9,97 @@ from .moves import Move
 from .util import Dataset, GIG
 
 # Standalone Numba-optimized functions
-@njit
+
+@njit(cache=True) 
+def _get_resid_all(leaf_ids, node_counts, residuals):
+    resid_all = np.zeros(node_counts, dtype=np.float32)
+    leaves = np.zeros(node_counts, dtype=np.bool_)
+    for i in range(len(leaf_ids)):
+        leaf_sample = leaf_ids[i]
+        resid_all[leaf_sample] += residuals[i]
+        # Here, we suppose a leaf contains at least one sample
+        # We need to record leaves because resid_all[node] may add to 0.0
+        leaves[leaf_sample] = True
+    return resid_all, leaves
+
+@njit(cache=True)
+def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_sigma2, f_sigma2, random_normal_p):
+    """
+    Numba-optimized function to resample leaf values using leaf_ids and sample_n_in_node.
+    """
+    node_counts = len(sample_n_in_node)
+    resid_all, leaves = _get_resid_all(leaf_ids, node_counts, residuals)
+        
+    n_leaves = 0
+    for node in range(node_counts):
+        if leaves[node]:
+            n_leaves += 1
+            
+    noise_ratio = eps_sigma2 / f_sigma2
+    
+    # Compute posterior parameters only for leaf nodes
+    post_cov_diag = np.zeros(n_leaves, dtype=np.float32)
+    post_mean = np.zeros(n_leaves, dtype=np.float32)
+    
+    leaf_idx = 0
+    for node in range(node_counts):
+        if leaves[node]:
+            post_cov_diag[leaf_idx] = eps_sigma2 / (sample_n_in_node[node] + noise_ratio)
+            post_mean[leaf_idx] = resid_all[node] / (sample_n_in_node[node] + noise_ratio)
+            leaf_idx += 1
+    
+    leaf_params_new = np.sqrt(post_cov_diag) * random_normal_p + post_mean
+    return leaf_params_new
+
+@njit(cache=True)
 def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, random_normal_p):
     """
     Numba-optimized function to resample leaf values.
     """
     p = leaf_basis.shape[1]
-    # Explicitly convert boolean array to float64
-    num_lbs = leaf_basis.astype(np.float64)
-    post_cov = np.linalg.inv(num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2)
+    # Explicitly convert boolean array to float32
+    num_lbs = leaf_basis
+    post_cov = np.linalg.inv(
+        num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2
+        ).astype(np.float32)
     post_mean = post_cov @ num_lbs.T @ residuals / eps_sigma2
     
     leaf_params_new = np.sqrt(np.diag(post_cov)) * random_normal_p + post_mean
     return leaf_params_new
 
-@njit
+@njit(cache=True)
+def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps_sigma2, f_sigma2):
+    """
+    Numba-optimized function to calculate log marginal likelihood when there is only one tree.
+    sample_n_in_node is the number of samples in each node, which is not limited to the samples counts in the leaves.
+    """
+    # Calculate counts for each leaf
+    node_counts = len(sample_n_in_node)
+    resid_all, leaves = _get_resid_all(leaf_ids, node_counts, resids)
+    
+    ls_resids = np.sum(resids ** 2)
+    ridge_bias = 0.0
+    logdet = 0.0
+    noise_ratio = eps_sigma2 / f_sigma2
+    
+    for node in range(node_counts):
+        if leaves[node]:
+            logdet += math.log(sample_n_in_node[node] / noise_ratio + 1.0)
+            ls_resids -= (resid_all[node] ** 2) / sample_n_in_node[node]
+            ridge_bias += (resid_all[node] ** 2) / (sample_n_in_node[node] * (sample_n_in_node[node] / noise_ratio + 1.0))
+
+    return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
+
+@njit(cache=True)
 def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     """
-    Numba-optimized function to calculate log marginal likelihood.
+    Numba-optimized function to calculate log marginal likelihood when there are multiple trees.
+    This function uses SVD for the leaf basis matrix.
     """
-    # Explicitly convert boolean array to float64
-    leaf_basis_float = leaf_basis.astype(np.float64)
+    # Explicitly convert boolean array to float32
+    leaf_basis_float = leaf_basis.astype(np.float32)
     
-    # Now use the float64 array with SVD
+    # Now use the float32 array with SVD
     U, S, _ = np.linalg.svd(leaf_basis_float, full_matrices=False)
     noise_ratio = eps_sigma2 / f_sigma2
     logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
@@ -42,25 +109,8 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / noise_ratio + 1))
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
-@njit
+@njit(cache=True)
 def _trees_log_prior_numba(tree_vars, alpha, beta):
-    """
-    Numba-optimized function to calculate log prior probability of a tree.
-    
-    Parameters:
-    -----------
-    tree_vars : numpy.ndarray
-        An array of variables used for splitting at each node.
-    alpha : float
-        Alpha parameter for the tree prior.
-    beta : float
-        Beta parameter for the tree prior.
-        
-    Returns:
-    --------
-    float
-        The log prior probability of the tree.
-    """
     # Calculate depth for each node
     d = np.ceil(np.log2(np.arange(len(tree_vars)) + 2)) - 1
     # Calculate log probability of split
@@ -118,15 +168,28 @@ class TreesPrior:
             The resampled leaf parameters.
         """
         residuals = data_y - bart_params.evaluate(all_except=tree_ids)
-        leaf_basis = bart_params.leaf_basis(tree_ids)
-        
-        leaf_params_new = _resample_leaf_vals_numba(
-            leaf_basis, 
-            residuals, 
-            eps_sigma2 = bart_params.global_params["eps_sigma2"], 
-            f_sigma2 = self.f_sigma2,
-            random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1])
-        )
+        if len(tree_ids) == 1:
+            # For single tree, we can use the optimized function with leaf_ids
+            tree = bart_params.trees[tree_ids[0]]
+            leaf_ids = tree.leaf_ids
+            return _single_tree_resample_leaf_vals(
+                leaf_ids,
+                tree.n,
+                residuals,
+                eps_sigma2=bart_params.global_params["eps_sigma2"][0],
+                f_sigma2=self.f_sigma2,
+                random_normal_p=self.generator.standard_normal(size=len(tree.leaves))
+            )
+        else:
+            leaf_basis = bart_params.leaf_basis(tree_ids)
+
+            leaf_params_new = _resample_leaf_vals_numba(
+                leaf_basis,
+                residuals,
+                eps_sigma2=bart_params.global_params["eps_sigma2"],
+                f_sigma2 = self.f_sigma2,
+                random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1])
+            )
         return leaf_params_new
 
     def trees_log_prior(self, bart_params : Parameters, tree_ids):
@@ -261,7 +324,7 @@ class GlobalParamPrior:
         prior_beta = self.eps_nu * self.eps_lambda / 2
         post_alpha = prior_alpha + n / 2
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
-        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)# [0]
+        eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)
         return eps_sigma2
 
 class BARTLikelihood:
@@ -306,16 +369,26 @@ class BARTLikelihood:
         7. Compute the least squares residuals and ridge bias.
         8. Combine the log determinant, least squares residuals, and ridge bias to obtain the log marginal likelihood.
         """
-        resids = data_y - bart_params.evaluate(all_except=tree_ids)
-        leaf_basis = bart_params.leaf_basis(tree_ids)
-        
-        # Use the standalone numba function instead
-        return _trees_log_marginal_lkhd_numba(
-            leaf_basis, 
-            resids, 
-            bart_params.global_params["eps_sigma2"], 
-            self.f_sigma2
-        )
+        resids = (data_y - bart_params.evaluate(all_except=tree_ids))
+        if len(tree_ids) == 1:
+            # For single tree, we can use the optimized function with leaf_ids
+            tree = bart_params.trees[tree_ids[0]]
+            return _single_tree_log_marginal_lkhd_numba(
+                tree.leaf_ids, 
+                tree.n,
+                resids, 
+                bart_params.global_params["eps_sigma2"][0], 
+                self.f_sigma2
+            )
+        else:
+            leaf_basis = bart_params.leaf_basis(tree_ids)
+            return _trees_log_marginal_lkhd_numba(
+                leaf_basis, 
+                resids, 
+                bart_params.global_params["eps_sigma2"], 
+                self.f_sigma2
+            )
+            
 
     def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, marginalize: bool=False):
         """
@@ -419,20 +492,6 @@ class LogisticTreesPrior(TreesPrior):
         sh = self.parent.sh
         pi_h = self.parent.pi_h
         
-        # lb_bool = bart_params.leaf_basis(tree_ids)
-        # leaf_basis = lb_bool.astype(np.float64)
-        # tree_eval = bart_params.evaluate(all_except = tree_ids)
-        # latent_tree_product = self.latents * np.exp(tree_eval)
-        # 
-        # rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
-        # sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
-        # 
-        # pi_h = np.zeros(len(rh))
-        # for i in range(len(rh)):
-        #     Z1 = GIG.gig_normalizing_constant_numba(-self.c + rh[i], 2 * self.d, 2 * sh[i])
-        #     Z2 = GIG.gig_normalizing_constant_numba(self.c + rh[i], 0, 2 * (self.d + sh[i]))
-        #     pi_h[i] = Z1 / (Z1 + Z2)
-        
         leaf_params_new = np.zeros(rh.shape[0])
         for i in range(leaf_params_new.shape[0]):
             leaf_params_new[i] = pi_h[i] * GIG.rvs_gig_scalar(
@@ -475,10 +534,23 @@ class LogisticLikelihood(BARTLikelihood):
 
     def set_latents(self, latents):
         self.latents = latents
-    
+        
     @staticmethod
-    @njit
-    def trees_log_marginal_lkhd_numba_backend(c, d, rh, sh):
+    @njit(cache=True)
+    def _get_rh_sh(leaf_ids, latent_tree_product, data_y, node_counts, leaves):
+        rh_all = np.zeros(node_counts, dtype=np.float64)
+        sh_all = np.zeros(node_counts, dtype=np.float64)
+
+        for i in range(len(leaf_ids)):
+            leaf_sample = leaf_ids[i]
+            rh_all[leaf_sample] += data_y[i]
+            sh_all[leaf_sample] += latent_tree_product[i]
+
+        return rh_all[leaves], sh_all[leaves]
+
+    @staticmethod
+    @njit(cache=True)
+    def _trees_log_marginal_lkhd_numba_backend(c, d, rh, sh):
         log_likelihood = np.zeros(len(rh))
         pi_h = np.zeros(len(rh))
         for i in range(len(rh)):
@@ -512,25 +584,22 @@ class LogisticLikelihood(BARTLikelihood):
         if len(tree_ids) != 1:
             raise ValueError("Logistic likelihood only supports single tree evaluation.")
         
-        lb_bool = bart_params.leaf_basis(tree_ids)
-        leaf_basis = lb_bool.astype(np.float64)
-        # leaf_basis is an array of shape (n_samples, n_leaves)
         tree_eval = bart_params.evaluate(all_except=tree_ids)
         # dim of tree_eval is (n_samples)
         latent_tree_product = self.latents * np.exp(tree_eval)
         # dim of latent_tree_product is (n_samples)
-
-        # Vectorized computation of rh and sh for all leaves
-        # rh[t] = sum of data_y values where leaf_basis[i, t] == 1
-        rh = leaf_basis.T @ data_y  # Shape: (n_leaves,)
-
-        # sh[t] = sum of latents[i] * np.exp(tree_eval)[i] where leaf_basis[i, t] == 1
-        sh = leaf_basis.T @ latent_tree_product  # Shape: (n_leaves,)
         
+        tree = bart_params.trees[tree_ids[0]]
+        
+        rh, sh = self._get_rh_sh(
+            tree.leaf_ids, latent_tree_product, data_y, len(tree.vars), tree.leaves
+        )
         self.parent.rh = rh
         self.parent.sh = sh
         self.parent.param = bart_params
-        log_likelihood_sum, self.parent.pi_h = self.trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
+        
+        # assert np.allclose(rh, rhn) and np.allclose(sh, shn), "Mismatch in rh and sh calculation."
+        log_likelihood_sum, self.parent.pi_h = self._trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
 
         return log_likelihood_sum
 
@@ -556,4 +625,3 @@ class LogisticPrior:
     def set_latents(self, latents):
         self.tree_prior.set_latents(latents)
         self.likelihood.set_latents(latents)
-        

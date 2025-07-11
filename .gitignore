@@ -2,8 +2,8 @@
 *.egg-info/
 .venv
 venv/
-notebooks/*.dot
-notebooks/*.prof
+*.dot
+*.prof
 scripts/
 .hydra/hydra.yaml
 .DS_Store
@@ -12,3 +12,7 @@ scripts/
 benchmarks/*.csv
 notebooks/deprecated/*
 notebooks/results/*
+notebooks/bandit/results
+notebooks/bandit/*.png
+bart_playground/bandit/NeuralTS
+*.pkl
