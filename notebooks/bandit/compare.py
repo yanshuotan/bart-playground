@@ -47,13 +47,29 @@ from bart_playground.bandit.me_agents import HierTSAgent, LinearTSAgent2, Linear
 from bart_playground.bandit.bart_agent import BARTAgent, LogisticBARTAgent, DefaultBARTAgent, MultiChainBARTAgent
 from bart_playground.bart import DefaultBART, LogisticBART
 
+from bart_playground.bandit.TEagents import TEAgent
+
+# %% [markdown]
+# ### Initialization
+
+# %%
+# Initialize Numba
+
+bart_ini = DefaultBART(ndpost=1, nskip=1, n_trees=25)
+logistic_bart_ini = LogisticBART(ndpost=1, nskip=1, n_trees=25)
+
+# Simple dataset
+X_ini = np.random.uniform(-1, 1, size=(100, 1))
+y_ini = np.sin(2 * np.pi * X_ini) + np.random.normal(0, 0.1, size=X_ini.shape)
+
+bart_ini.fit(X_ini, y_ini)
 
 # %% [markdown]
 # ### Simulation Parameters
 
 # %%
 # default scenario
-default_arg = 'Friedman'
+default_arg = 'Mushroom'
 # include more agent variations
 extensive = True
 
@@ -136,15 +152,18 @@ else:
     print("No GPU, test BART agents") 
     all_agent_specs = [
         ("Random",      SillyAgent,      {'random_state':0}),
-        ("BARTs",       DefaultBARTAgent,       {}),
-        ("BARTm",       DefaultBARTAgent,       {}),
-        ("BARTo",       DefaultBARTAgent,       {}),
-        ("LogisticBARTm", LogisticBARTAgent, {}),
-        ("MCBARTs",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
-        ("MCBARTm",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
-        ("LogisticMCBARTm", MultiChainBARTAgent, { 'bart_class': LogisticBART }),
-        ("LinearTS",   LinearTSAgent,   {'v':1}),
-        ("LinearTSme",  LinearTSAgent2,  {}),
+        ("XGBoostTS", TEAgent, {'agent_type': 'xgboost'}),
+        ("RFTS", TEAgent, {'agent_type': 'random_forest'}),
+        # ("BARTs",       DefaultBARTAgent,       {}),
+        ## ("BARTm",       DefaultBARTAgent,       {}),
+        ## ("BARTo",       DefaultBARTAgent,       {}),
+        ## ("LogisticBARTm", LogisticBARTAgent, {}),
+        ## ("LogisticBARTo", LogisticBARTAgent, {}),
+        # ("MCBARTs",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
+        # ("MCBARTm",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
+        # ("LogisticMCBARTm", MultiChainBARTAgent, { 'bart_class': LogisticBART }),
+        ## ("LinearTS",   LinearTSAgent,   {'v':1}),
+        # ("LinearTSme",  LinearTSAgent2,  {}),
         # ("RoME",             RoMEAgent,              {'featurize':_featurize, 't_max':n_draws, 'pool_users':False}),
         # ("StandardTS",       StandardTSAgent,        {'featurize':_featurize}),
         # ("ActionCenteredTS", ActionCenteredTSAgent,  {'featurize':_featurize}),
