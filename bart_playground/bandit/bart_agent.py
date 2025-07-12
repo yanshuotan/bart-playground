@@ -148,8 +148,8 @@ class BARTAgent(BanditAgent):
         
         def _reformat(post_sample):
             if self.is_logistic:
-                # For LogisticBART 'multi', the shape is (n_arms, 2), we only need the second column (the probability of success)
-                if self.encoding == 'multi':
+                # For LogisticBART 'multi' or 'one-hot', the shape is (n_arms, 2), we only need the second column (the probability of success)
+                if self.encoding == 'multi' or self.encoding == 'one-hot':
                     post_sample = post_sample[:, 1] 
                 # For LogisticBART 'native', the shape is (1, n_arms) with n_arms=2
                 elif self.encoding == 'native':
@@ -318,8 +318,6 @@ class LogisticBARTAgent(BARTAgent):
                  n_trees: int = 200, 
                  random_state: int = 42,
                  encoding: str = 'native') -> None:
-        if encoding == 'one-hot':
-            raise NotImplementedError("LogisticBARTAgent currently does not support one-hot encoding.")
         if n_arms > 2 and encoding == 'native':
             raise NotImplementedError("LogisticBARTAgent: native encoding currently only supports n_arms = 2.")
         model_factory = lambda: LogisticBART(

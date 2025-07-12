@@ -206,10 +206,21 @@ class OpenMLScenario(Scenario):
         # type annotations
         X : pd.DataFrame
         y : pd.Series
-        # avoid nan, set nan as -1
         for col in X.select_dtypes('category'):
             # -1 in codes indicates NaN by pandas convention
             X[col] = X[col].cat.codes
+        
+        # cat_cols = X.select_dtypes('category').columns
+# 
+        # # one-hot encode them
+        # X = pd.get_dummies(
+        #     X,
+        #     columns=cat_cols,
+        #     prefix=cat_cols,       # keep the original names as prefixes
+        #     # drop_first=True,    # drops the first real level
+        #     # dummy_na=True
+        # )
+        
         X_arr = normalize(X)
         y_arr = y.to_numpy().reshape(-1, 1)
         # Encode categorical labels as integers

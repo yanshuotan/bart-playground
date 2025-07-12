@@ -1,12 +1,12 @@
 import numpy as np
 import torch
 from .agent import BanditAgent
-from .NeuralTS.learner_diag import NeuralTSDiag
-from .NeuralTS.learner_diag_linear import LinearTSDiag
-from .NeuralTS.learner_diag_kernel import KernelTSDiag
-from .NeuralTS.learner_neural import NeuralTS
-from .NeuralTS.learner_kernel import KernelTS
-from .NeuralTS.learner_linear import LinearTS
+from .baselines.NeuralTS.learner_diag import NeuralTSDiag
+from .baselines.NeuralTS.learner_diag_linear import LinearTSDiag
+from .baselines.NeuralTS.learner_diag_kernel import KernelTSDiag
+from .baselines.NeuralTS.learner_neural import NeuralTS
+from .baselines.NeuralTS.learner_kernel import KernelTS
+from .baselines.NeuralTS.learner_linear import LinearTS
 
 class NeuralPaperAgent(BanditAgent):
     def __init__(self,

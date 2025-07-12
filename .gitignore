@@ -11,8 +11,8 @@ scripts/
 *.log
 notebooks/deprecated
 notebooks/results
-notebooks/bandit/temp_results
-notebooks/bandit/test_results
 notebooks/bandit/results
 notebooks/bandit/*.png
-bart_playground/bandit/NeuralTS
+bart_playground/bandit/baselines
+.idea/*
+benchmarks/*.csv

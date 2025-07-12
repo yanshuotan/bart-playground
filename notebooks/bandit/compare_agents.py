@@ -471,13 +471,14 @@ def add_average_scenario(results: Dict[str, Dict]) -> Dict[str, Dict]:
 
     # collect normalised arrays per agent
     per_agent = {}
+    max_iter = max(len(data['regrets']) for data in results.values())
     for _sc, ag, rel_arr, _rm in _iter_relative_regrets(results, target="regrets"):
         # if this agent is not yet in per_agent, start its list
         if ag not in per_agent:
             per_agent[ag] = []
         # append the normalized array
-        per_agent[ag].append(rel_arr)
-
+        per_agent[ag].append(rel_arr[:, :max_iter])
+        
     # build the synthetic “Average” scenario
     new_results["Average"] = {
         "scenario_name": "Average",
