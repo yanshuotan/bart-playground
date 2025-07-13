@@ -8,9 +8,13 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 import logging
 import hashlib
+import pandas as pd
+import wandb
+import yaml
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import RandomizedSearchCV
 
 from bart_playground import DefaultBART, DefaultPreprocessor, DataGenerator
 from bart_playground.samplers import default_proposal_probs
@@ -141,17 +145,67 @@ def run_chain_bart(X_train_raw, X_test_raw, y_train_raw, y_test_raw,
     model.is_fitted = True  # To allow init_from_xgboost
 
     if init_from_xgb:
-        xgb_model_instance = xgb.XGBRegressor(
-            n_estimators=bart_cfg.n_trees,  # Match BART trees
-            max_depth=xgb_cfg.max_depth,
-            learning_rate=xgb_cfg.learning_rate,
-            random_state=seed,
-            tree_method="exact",  # As in original
-            grow_policy="depthwise",  # As in original
-            base_score=0.0  # As in original
-        )
-        # XGBoost should be trained on the same preprocessed X as BART will use internally for init
-        xgb_model_instance.fit(train_data.X, train_data.y)  # Use preprocessed X,y
+        
+        xgb_tuning_cfg = cfg.get('xgb_tuning_params', {'enabled': False})
+
+        if xgb_tuning_cfg.get('enabled', False):
+            LOGGER.info("--- Running RandomizedSearchCV for XGBoost hyperparameters ---")
+            
+            param_distributions = {
+                # Core Boosting Parameters - n_estimators is now capped by BART's n_trees
+                'n_estimators': [50, 100, 150, cfg.bart_params.n_trees],
+                'learning_rate': [0.01, 0.05, 0.1, 0.2, 0.3],
+
+                # Tree Structure and Complexity
+                'max_depth': [3, 4, 5, 6, 7, 8],
+                'min_child_weight': [1, 3, 5, 7],
+                'gamma': [0.0, 0.1, 0.2, 0.3, 0.4],
+
+                # Regularization to prevent overfitting
+                'reg_alpha': [0, 0.005, 0.01, 0.05, 0.1],
+                'reg_lambda': [0.5, 1.0, 1.5, 2.0, 5.0],
+
+                # Subsampling for Robustness
+                'subsample': [0.6, 0.7, 0.8, 0.9, 1.0],
+                'colsample_bytree': [0.6, 0.7, 0.8, 0.9, 1.0],
+            }
+
+            xgb_reg = xgb.XGBRegressor(
+                random_state=seed, 
+                tree_method="exact", 
+                grow_policy="depthwise", 
+                base_score=0.0
+            )
+
+            random_search = RandomizedSearchCV(
+                estimator=xgb_reg,
+                param_distributions=param_distributions,
+                n_iter=xgb_tuning_cfg.get('n_iter', 10),
+                scoring='neg_mean_squared_error',
+                n_jobs=-1,
+                cv=3,
+                verbose=1,
+                random_state=seed
+            )
+            
+            random_search.fit(train_data.X, train_data.y)
+            
+            LOGGER.info(f"Best XGBoost parameters found: {random_search.best_params_}")
+            xgb_model_instance = random_search.best_estimator_
+            
+        else:
+            xgb_model_instance = xgb.XGBRegressor(
+                n_estimators=bart_cfg.n_trees,  # Match BART trees
+                max_depth=xgb_cfg.max_depth,
+                learning_rate=xgb_cfg.learning_rate,
+                random_state=seed,
+                tree_method="exact",  # As in original
+                grow_policy="depthwise",  # As in original
+                base_score=0.0  # As in original
+            )
+            # XGBoost should be trained on the same preprocessed X as BART will use internally for init
+            xgb_model_instance.fit(train_data.X, train_data.y)  # Use preprocessed X,y
+        
         model.init_from_xgboost(xgb_model_instance, train_data.X, train_data.y, debug=cfg.get('debug_xgb_init', False))
 
     # Capture initial BART prediction (scaled)
@@ -217,7 +271,8 @@ def run_chain_bart(X_train_raw, X_test_raw, y_train_raw, y_test_raw,
         'coverage': coverage,
         'chain_sample_for_diag': chain_sample_for_diag,  # Samples for one observation point
         'runtime': runtime,
-        'sigma2_samples': np.array([p.global_params['eps_sigma2'] for p in trace])  # Store sigma^2 samples
+        'sigma2_samples': np.array([p.global_params['eps_sigma2'] for p in trace]),  # Store sigma^2 samples
+        'post_raw': post_raw
     }
 
 
@@ -249,6 +304,10 @@ def run_full_experiment(X_train_specific, y_train_specific, X_test_specific, y_t
     aggregated_chain_samples = np.array(
         [r['chain_sample_for_diag'] for r in all_results if r['chain_sample_for_diag'].size > 0])
 
+    # Each chain's posterior predictions for all test points
+    # Stacking to get shape: (n_test_samples, n_chains, n_posterior_draws)
+    preds_chains = np.stack([r['post_raw'] for r in all_results], axis=1)
+
     # Sigma^2 samples from each chain, shape (n_chains, ndpost)
     aggregated_sigma2_samples = np.array([r['sigma2_samples'] for r in all_results if r['sigma2_samples'].size > 0])
 
@@ -257,7 +316,7 @@ def run_full_experiment(X_train_specific, y_train_specific, X_test_specific, y_t
         gr_fx = gelman_rubin(aggregated_chain_samples)
         ess_fx = effective_sample_size(aggregated_chain_samples)
 
-    return {
+    results_dict = {
         'final_mse': np.mean([r['final_mse'] for r in all_results]),
         'coverage': np.mean([r['coverage'] for r in all_results]),
         'runtime': np.mean([r['runtime'] for r in all_results]),
@@ -266,6 +325,7 @@ def run_full_experiment(X_train_specific, y_train_specific, X_test_specific, y_t
         'gr_fx': gr_fx,
         'ess_fx': ess_fx
     }
+    return results_dict, preds_chains
 
 
 # --- Plotting Functions ---
@@ -306,6 +366,64 @@ def plot_results(results_scratch, results_xgb, cfg: DictConfig, plot_dir_for_run
         else:
             LOGGER.warning(
                 f"Could not compute diagnostics for f(x_test[0]) for {config_name} of DGP {cfg.dgp} (N_train={n_train_samples}).")
+
+
+def log_wandb_artifacts(cfg: DictConfig, experiment_name: str, run_results: dict,
+                        preds_chains: np.ndarray, y_true: np.ndarray,
+                        run_specific_artifact_dir: str, current_n_train: int):
+    """Logs experiment artifacts to Weights & Biases."""
+
+    dgp_name_safe = "".join(c if c.isalnum() else "_" for c in cfg.dgp)
+
+    full_exp_name = (f"init_{dgp_name_safe}_{experiment_name}_ntrain_{current_n_train}_"
+                     f"seed_{cfg.experiment_params.main_seed}")
+
+    wandb.init(
+        project="bart-playground",
+        entity="bart_playground",
+        name=full_exp_name,
+        config=OmegaConf.to_container(cfg, resolve=True),
+        tags=["initialization", cfg.dgp, experiment_name, f"seed_{cfg.experiment_params.main_seed}"],
+        reinit=True
+    )
+
+    wandb_dir = os.path.join(run_specific_artifact_dir, f"wandb_artifacts_{experiment_name}")
+    os.makedirs(wandb_dir, exist_ok=True)
+
+    y_true_df = pd.DataFrame({"y_true": y_true})
+    y_true_file = os.path.join(wandb_dir, "y_true.csv")
+    y_true_df.to_csv(y_true_file, index=False)
+
+    n_samples, n_chains, n_post = preds_chains.shape
+    chain_files = []
+    for chain_idx in range(n_chains):
+        chain_preds = preds_chains[:, chain_idx, :]
+        chain_df = pd.DataFrame(chain_preds, columns=[f"posterior_sample_{i}" for i in range(n_post)])
+        chain_df["sample_index"] = np.arange(n_samples)
+        chain_file = os.path.join(wandb_dir, f"predictions_chain_{chain_idx}.csv")
+        chain_df.to_csv(chain_file, index=False)
+        chain_files.append(chain_file)
+
+    wandb.log({k: v for k, v in run_results.items() if 'samples' not in k})
+
+    artifact = wandb.Artifact(
+        name=f"init_results_{dgp_name_safe}_{experiment_name}_seed_{cfg.experiment_params.main_seed}_ntrain_{current_n_train}",
+        type="experiment_results",
+        description=f"BART initialization experiment for {cfg.dgp} with init method {experiment_name}"
+    )
+
+    config_file = os.path.join(wandb_dir, "config.yaml")
+    with open(config_file, 'w') as f:
+        yaml.dump(OmegaConf.to_container(cfg, resolve=True), f, default_flow_style=False)
+    artifact.add_file(config_file, name="config.yaml")
+    artifact.add_file(y_true_file, name="y_true.csv")
+
+    for chain_idx, chain_file in enumerate(chain_files):
+        artifact.add_file(chain_file, name=f"predictions_chain_{chain_idx}.csv")
+
+    wandb.log_artifact(artifact)
+    wandb.finish()
+    LOGGER.info(f"Finished logging to W&B for {experiment_name}.")
 
 
 def run_and_analyze(cfg: DictConfig):
@@ -372,7 +490,7 @@ def run_and_analyze(cfg: DictConfig):
 
         # Run experiment: FromScratch
         LOGGER.info(f"--- Running Experiment: FromScratch for DGP {cfg.dgp}, N_train={current_n_train} ---")
-        results_scratch = run_full_experiment(X_train_run, y_train_run, X_test_run, y_test_run_true, cfg,
+        results_scratch, preds_chains_scratch = run_full_experiment(X_train_run, y_train_run, X_test_run, y_test_run_true, cfg,
                                               init_from_xgb=False)
         with open(os.path.join(run_specific_artifact_dir, "results_scratch.pkl"), "wb") as f:
             pickle.dump(results_scratch, f)
@@ -380,10 +498,14 @@ def run_and_analyze(cfg: DictConfig):
         for k, v in results_scratch.items():
             if k not in ['chain_samples_for_diag', 'sigma2_samples']:
                 LOGGER.info(f"  {k}: {v}")
+        
+        if cfg.experiment_params.get("log_to_wandb", False):
+            log_wandb_artifacts(cfg, "FromScratch", results_scratch, preds_chains_scratch, 
+                                y_test_run_true, run_specific_artifact_dir, current_n_train)
 
         # Run experiment: XGBoostInit
         LOGGER.info(f"--- Running Experiment: XGBoostInit for DGP {cfg.dgp}, N_train={current_n_train} ---")
-        results_xgb = run_full_experiment(X_train_run, y_train_run, X_test_run, y_test_run_true, cfg,
+        results_xgb, preds_chains_xgb = run_full_experiment(X_train_run, y_train_run, X_test_run, y_test_run_true, cfg,
                                           init_from_xgb=True)
         with open(os.path.join(run_specific_artifact_dir, "results_xgb.pkl"), "wb") as f:
             pickle.dump(results_xgb, f)
@@ -391,6 +513,10 @@ def run_and_analyze(cfg: DictConfig):
         for k, v in results_xgb.items():
             if k not in ['chain_samples_for_diag', 'sigma2_samples']:
                 LOGGER.info(f"  {k}: {v}")
+
+        if cfg.experiment_params.get("log_to_wandb", False):
+            log_wandb_artifacts(cfg, "XGBoostInit", results_xgb, preds_chains_xgb, 
+                                y_test_run_true, run_specific_artifact_dir, current_n_train)
 
         # Plotting
         if exp_params.get("plot_results", True):

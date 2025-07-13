@@ -14,10 +14,11 @@ bart_params:
 experiment_params:
   main_seed: 1                       # Single seed to control all randomness
   n_train_samples_list: [100, 200, 500, 1000, 10000] # List of training sample sizes to iterate over
-  n_test_samples: 1000      0             # Fixed number of test samples
+  n_test_samples: 10000                 # Fixed number of test samples
   n_chains: 10                          # Number of independent MCMC chains to run
   temperatures: [1.0, 2.0, 5.0]         # Temperatures to test
   plot_results: False                    # Whether to generate and save plots
+  log_to_wandb: False                     # Whether to log results to Weights & Biases
 
 artifacts_dir: "experiments/outputs/temperature_runs" # Base directory for saving results and plots
 

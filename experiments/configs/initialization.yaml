@@ -7,9 +7,9 @@ dgp_params:
   noise: 0.1
 
 bart_params:
-  ndpost: 10000     # Number of posterior samples to keep
-  nskip: 1000       # Number of burn-in samples to discard
-  n_trees: 200      # Number of trees in BART
+  ndpost: 200     # Number of posterior samples to keep
+  nskip: 100       # Number of burn-in samples to discard
+  n_trees: 20      # Number of trees in BART
   temperature: 1.0  # MCMC temperature
   # Tree priors (alpha, beta), sigma prior (eps_q, eps_nu), k can be added if needed
 
@@ -17,12 +17,17 @@ xgb_params: # Parameters for XGBoost if used for initialization
   max_depth: 4
   learning_rate: 0.2
 
+xgb_tuning_params:
+  enabled: True  # Set to True to enable randomized search for XGBoost hyperparameters
+  n_iter: 10      # Number of parameter settings that are sampled
+
 experiment_params:
   main_seed: 1                         # Single seed to control all randomness
-  n_train_samples_list: [100, 200, 500, 1000, 10000] # List of training sample sizes to iterate over
-  n_test_samples: 10000                   # Fixed number of test samples
+  n_train_samples_list: [100] # List of training sample sizes to iterate over
+  n_test_samples: 100                   # Fixed number of test samples
   n_chains: 10                          # Number of independent MCMC chains to run
   plot_results: False                    # Whether to generate and save plots
+  log_to_wandb: False                     # Whether to log results to Weights & Biases
 
 artifacts_dir: "experiments/outputs/initialization_runs" # Base directory for saving results and plots
 

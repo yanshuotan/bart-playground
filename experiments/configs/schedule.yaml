@@ -7,16 +7,17 @@ dgp_params:
   noise: 0.1
 
 bart_params:
-  ndpost: 1000
+  ndpost: 100
   nskip: 100
   n_trees: 20
 
 experiment_params:
-  main_seed: 1
-  n_train_samples_list: [100, 200, 500, 1000, 10000]
-  n_test_samples: 1000
-  n_chains: 10
+  main_seed: 98
+  n_train_samples_list: [100]
+  n_test_samples: 100
+  n_chains: 5
   plot_results: False
+  log_to_wandb: True
   schedules:
     - name: "Cosine_5.0_to_0.1"
       type: "cosine"
