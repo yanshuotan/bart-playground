@@ -12,6 +12,7 @@ notebooks/deprecated
 notebooks/results
 notebooks/bandit/results
 notebooks/bandit/*.png
+notebooks/bandit/data
 bart_playground/bandit/baselines
 .idea/*
 benchmarks/*.csv

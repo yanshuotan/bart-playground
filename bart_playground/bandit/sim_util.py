@@ -201,8 +201,8 @@ class LinearFriedmanScenario(Scenario):
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
     
 class OpenMLScenario(Scenario):
-    def __init__(self, dataset='mushroom', version=1, random_generator:Union[np.random.Generator, int, None]=None):
-        X, y = fetch_openml(dataset, version=version, return_X_y=True)
+    def __init__(self, dataset='mushroom', version=1, random_generator:Union[np.random.Generator, int, None]=None, **kwargs):
+        X, y = fetch_openml(dataset, version=version, return_X_y=True, **kwargs)
         # type annotations
         X : pd.DataFrame
         y : pd.Series
