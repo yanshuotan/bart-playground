@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.17.2
 #   kernelspec:
-#     display_name: nts39
+#     display_name: bartpg
 #     language: python
 #     name: python3
 # ---
@@ -38,6 +38,7 @@ from compare_agents import (
     _ca_logger
 )
 # from bart_playground.bandit.rome.rome_scenarios import HomogeneousScenario, NonlinearScenario
+from drinkless import DrinkLessScenario
 
 # %%
 from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
@@ -69,16 +70,20 @@ bart_ini.fit(X_ini, y_ini)
 
 # %%
 # default scenario
-default_arg = 'Mushroom'
+default_arg = ['Wine', 'Heart', 'Iris', 'DrinkLess']
 # include more agent variations
 extensive = True
 
-n_simulations = 3  # Number of simulations per scenario
+n_simulations = 8  # Number of simulations per scenario
 sim_indices = list(range(n_simulations))  # Indices for simulations
-max_draws = 3000      # Number of draws per simulation
+max_draws = 2000      # Number of draws per simulation
 
 profile = False # Profile the simulation (if True, will use a profiler)
 
+# %% [markdown]
+# ### Scenarios and Agents
+
+# %%
 has_gpu = True
 try:
     import torch
@@ -86,9 +91,6 @@ try:
 except:
     has_gpu = False
     _ca_logger.warning("Neural agents not available. Skipping GPU-based agents.")
-
-# %% [markdown]
-# ### Scenarios and Agents
 
 # %% [markdown]
 # #### Scenarios
@@ -111,6 +113,12 @@ scenario_factories = {
     "Mushroom": lambda: OpenMLScenario('mushroom', version=1),
     "Covertype": lambda: OpenMLScenario('covertype', version=3),
     "MNIST": lambda: OpenMLScenario('mnist_784', version=1),
+    "Iris": lambda: OpenMLScenario('iris', version=1),
+    "Wine": lambda: OpenMLScenario('wine-quality-red', version=1),
+    "Heart": lambda: OpenMLScenario('heart-disease', version=1,
+                                    target_column='target'), # Cleveland Heart Disease dataset
+    "DrinkLess": lambda: DrinkLessScenario(),
+    
 }
 
 # Parse command-line arguments
@@ -120,7 +128,7 @@ cli = True
 # Determine which scenarios to run; default if none or invalid
 if len(args) == 0 or not any(arg in scenario_factories for arg in args):
     print(f"No valid scenarios specified, using {default_arg}.")
-    args = [default_arg]
+    args = default_arg
     cli = False
 
 selected_keys = [k for k in scenario_factories if k in args]
@@ -155,14 +163,14 @@ else:
         ("XGBoostTS", TEAgent, {'agent_type': 'xgboost'}),
         ("RFTS", TEAgent, {'agent_type': 'random_forest'}),
         # ("BARTs",       DefaultBARTAgent,       {}),
-        ## ("BARTm",       DefaultBARTAgent,       {}),
-        ## ("BARTo",       DefaultBARTAgent,       {}),
-        ## ("LogisticBARTm", LogisticBARTAgent, {}),
-        ## ("LogisticBARTo", LogisticBARTAgent, {}),
+        ("BARTm",       DefaultBARTAgent,       {}),
+        ("BARTo",       DefaultBARTAgent,       {}),
+        ("LogisticBARTm", LogisticBARTAgent, {}),
+        ("LogisticBARTo", LogisticBARTAgent, {}),
         # ("MCBARTs",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
         # ("MCBARTm",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
         # ("LogisticMCBARTm", MultiChainBARTAgent, { 'bart_class': LogisticBART }),
-        ## ("LinearTS",   LinearTSAgent,   {'v':1}),
+        ("LinearTS",   LinearTSAgent,   {'v':1}),
         # ("LinearTSme",  LinearTSAgent2,  {}),
         # ("RoME",             RoMEAgent,              {'featurize':_featurize, 't_max':n_draws, 'pool_users':False}),
         # ("StandardTS",       StandardTSAgent,        {'featurize':_featurize}),
