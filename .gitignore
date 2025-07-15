@@ -13,5 +13,6 @@ benchmarks/*.csv
 notebooks/deprecated/*
 notebooks/results/*
 notebooks/bandit/results
+notebooks/bandit/*.png
 bart_playground/bandit/NeuralTS
 *.pkl

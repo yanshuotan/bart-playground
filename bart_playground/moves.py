@@ -30,13 +30,16 @@ class Move(ABC):
     def possible_thresholds(self):
         assert self._possible_thresholds, "possible_thresholds must be initialized"
         return self._possible_thresholds
+    @property
+    def _num_possible_proposals(self):
+        return self.tol
 
     def propose(self, generator):
         """
         Propose a new state.
         """
         if self.is_feasible():
-            for _ in range(self.tol):
+            for _ in range(self._num_possible_proposals):
                 proposed = self.current.copy(self.trees_changed)
                 success = self.try_propose(proposed, generator)
                 if success:
@@ -151,43 +154,41 @@ class Swap(Move):
                  possible_thresholds = None, tol : int = 100, **kwargs):
         super().__init__(current, trees_changed, tol = tol, **kwargs)
         assert len(trees_changed) == 1
-
-    def is_feasible(self):
-        tree = self.current.trees[self.trees_changed[0]]
-        self.cur_nonterminal_split_nodes = tree.nonterminal_split_nodes
-        return len(self.cur_nonterminal_split_nodes) > 0
+        self.swappable_pairs = None
+        self.idx = None
+        
+    @property
+    def _num_possible_proposals(self):
+        return min(self.tol, len(self.swappable_pairs))
     
-    def propose(self, generator):
-        """
-        Try all possible parent-child pairs, return True if any swap succeeds.
-        """
-        if not self.is_feasible():
-            return False
+    def _ini_swappable_pairs(self):
         tree = self.current.trees[self.trees_changed[0]]
-        # Collect all possible parent-child pairs
-        pairs = [
+        nonterminal_split_nodes = tree.nonterminal_split_nodes
+
+        # Collect all valid parent-child pairs where the child is also a split node.
+        self.swappable_pairs = [
             (parent_id, 2 * parent_id + lr)
-            for parent_id in self.cur_nonterminal_split_nodes
+            for parent_id in nonterminal_split_nodes
             for lr in [1, 2]
             if tree.vars[2 * parent_id + lr] != -1
         ]
+        self.idx = 0
 
-        generator.shuffle(pairs)
-        tries = 0
-        for parent_id, child_id in pairs:
-            if tries >= self.tol:
-                break
-            proposed = self.current.copy(self.trees_changed)
-            success = self.try_propose(proposed, generator, parent_id, child_id)
-            tries += 1
-            if success:
-                self.proposed = proposed
-                return True
-        return False
-    
-    def try_propose(self, proposed, generator, parent_id, child_id):
-        tree = proposed.trees[self.trees_changed[0]]   
-        success = tree.swap_split(parent_id, child_id) # If no empty leaves are created
+    def is_feasible(self):
+        '''
+        Note that this method has a side effect of initializing the swappable_pairs.
+        '''
+        self._ini_swappable_pairs()
+        return self._num_possible_proposals > 0
+
+    def try_propose(self, proposed, generator):
+        if self.idx == 0: # Shuffle the pairs once at the start
+            generator.shuffle(self.swappable_pairs)
+            
+        parent_id, child_id = self.swappable_pairs[self.idx]
+        tree = proposed.trees[self.trees_changed[0]]
+        success = tree.swap_split(parent_id, child_id)  # If no empty leaves are created
+        self.idx += 1
         return success
     
 class MultiGrow(Grow):
