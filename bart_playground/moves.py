@@ -549,13 +549,11 @@ class MultiSwap(Swap):
         else:
             return 1
 
-    def propose(self, generator):
-        if not self.is_feasible():
-            return False
-        tree = self.current.trees[self.trees_changed[0]]
+    def try_propose(self, proposed, generator):
+        tree = proposed.trees[self.trees_changed[0]]
         all_candidates = [
             (parent_id, 2 * parent_id + lr)
-            for parent_id in self.cur_nonterminal_split_nodes
+            for parent_id in tree.nonterminal_split_nodes
             for lr in [1, 2]
             if tree.vars[2 * parent_id + lr] != -1
         ]
@@ -579,7 +577,7 @@ class MultiSwap(Swap):
 
         candidates = []
         for parent_id, child_id in sampled_candidates:
-            temp = self.current.copy(self.trees_changed)
+            temp = proposed.copy(self.trees_changed)
             temp_tree = temp.trees[self.trees_changed[0]]
             temp_tree.swap_split(parent_id, child_id)
             log_pi = self.likelihood.trees_log_marginal_lkhd(
@@ -597,9 +595,8 @@ class MultiSwap(Swap):
         parent_id, child_id, _ = candidates[idx]
         log_p_bwd = np.log(bwd_weights.mean()) + max_log_bwd
 
-        proposed = self.current.copy(self.trees_changed)
         tree = proposed.trees[self.trees_changed[0]]
-        success = self.try_propose(proposed, generator, parent_id, child_id)
+        success = tree.swap_split(parent_id, child_id)
 
         # Calculate the log transition ratio
         temp_tree = tree
@@ -640,13 +637,6 @@ class MultiSwap(Swap):
         log_p_fwd = np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
-        if success:
-            self.proposed = proposed
-        return success
-
-    def try_propose(self, proposed, generator, parent_id, child_id):
-        tree = proposed.trees[self.trees_changed[0]]
-        success = tree.swap_split(parent_id, child_id)
         return success
 
  

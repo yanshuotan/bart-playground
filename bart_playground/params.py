@@ -209,6 +209,19 @@ class Tree:
         """
         return _traverse_tree_numba(X, self.vars, self.thresholds)
 
+    def get_eligible_split_leaf(self, node_id, p_thresholds: dict):
+        if self.vars[node_id] != -1:
+            raise ValueError("Node is not a leaf and cannot be split.")
+        X = self.dataX[self.node_indicators[:, node_id], :]
+        p_thresholds_all = np.concatenate(list(p_thresholds.values()))
+        vars = np.repeat(list(p_thresholds.keys()), [len(v) for v in p_thresholds.values()])
+        routing = X[:, vars] > p_thresholds_all
+        left_nonempty = np.any(~routing, axis=0)
+        right_nonempty = np.any(routing, axis=0)
+        eligible_split_mask = left_nonempty & right_nonempty
+        eligible_splits = zip(vars[eligible_split_mask], p_thresholds_all[eligible_split_mask])
+        return eligible_splits
+
     def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float32]:
         """
         Evaluate the tree for a given input data matrix.
