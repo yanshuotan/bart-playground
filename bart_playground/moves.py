@@ -144,7 +144,7 @@ class Change(Move):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         node_id = fast_choice(generator, tree.split_nodes)
-        var = generator.integers(tree.dataX.shape[1], p=self.s)
+        var = generator.choice(tree.dataX.shape[1], p=self.s)
         threshold = fast_choice(generator, self.possible_thresholds[var])
         
         success = tree.change_split(node_id, var, threshold)
