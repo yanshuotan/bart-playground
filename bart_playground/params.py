@@ -544,6 +544,13 @@ class Tree:
         self.update_n_append(dataX[update_range])
         self.update_outputs()
 
+    @property
+    def vars_histogram(self):
+        hist = np.zeros(self.dataX.shape[1])
+        for i in range(self.dataX.shape[1]):
+            hist[i] = np.sum(self.vars == i)
+        return hist
+
 
 class Parameters:
     """
@@ -690,3 +697,7 @@ class Parameters:
             tree.update_outputs()
             self.cache = self.cache + tree.evals - tree_evals_old
             leaf_counter += n_leaves
+
+    @property
+    def vars_histogram(self):
+        return np.sum([tree.vars_histogram for tree in self.trees], axis=0)

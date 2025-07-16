@@ -4,12 +4,15 @@ from abc import ABC, abstractmethod
 from typing import Optional
 from .params import Parameters
 from .util import fast_choice
+
+
 class Move(ABC):
     """
     Base class for moves in the BART sampler.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray, 
-                 possible_thresholds : Optional[dict] = None, tol : int = 100):
+                 possible_thresholds : Optional[dict] = None, tol : int = 100,
+                 s: Optional[np.ndarray] = None):
         """
         Initialize the move.
 
@@ -23,6 +26,7 @@ class Move(ABC):
         # self.proposed = None
         self.trees_changed = trees_changed
         self._possible_thresholds = possible_thresholds
+        self.s = s
         self.tol = tol
         self.log_tran_ratio = 0 # The log of remaining transition ratio after cancellations in the MH acceptance probability. 
 
@@ -68,10 +72,10 @@ class Grow(Move):
     Move to grow a new split.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
-                 possible_thresholds : dict, tol : int = 100):
+                 possible_thresholds : dict, tol : int = 100, s: Optional[np.ndarray] = None):
         if not possible_thresholds:
             raise ValueError("Possible thresholds must be provided for grow move.")
-        super().__init__(current, trees_changed, possible_thresholds, tol)
+        super().__init__(current, trees_changed, possible_thresholds, tol, s)
         assert len(trees_changed) == 1
 
     def is_feasible(self):
@@ -83,7 +87,7 @@ class Grow(Move):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         node_id = fast_choice(generator, self.cur_leaves)
-        var = generator.integers(tree.dataX.shape[1])
+        var = generator.choice(tree.dataX.shape[1], p=self.s)
         threshold = fast_choice(generator, self.possible_thresholds[var])
         n_leaves = len(self.cur_leaves)
         
@@ -103,7 +107,7 @@ class Prune(Move):
     Move to prune a terminal split.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
-                 possible_thresholds = None, tol : int = 100):
+                 possible_thresholds = None, tol : int = 100, s: Optional[np.ndarray] = None):
         super().__init__(current, trees_changed, tol = tol)
         assert len(trees_changed) == 1
 
@@ -127,10 +131,10 @@ class Change(Move):
     Move to change the split variable and threshold for an internal node.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
-                 possible_thresholds : dict, tol : int = 100):
+                 possible_thresholds : dict, tol : int = 100, s: Optional[np.ndarray] = None):
         if not possible_thresholds:
             raise ValueError("Possible thresholds must be provided for change move.")
-        super().__init__(current, trees_changed, possible_thresholds, tol)
+        super().__init__(current, trees_changed, possible_thresholds, tol, s)
         assert len(trees_changed) == 1
 
     def is_feasible(self):
@@ -140,7 +144,7 @@ class Change(Move):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         node_id = fast_choice(generator, tree.split_nodes)
-        var = generator.integers(tree.dataX.shape[1])
+        var = generator.integers(tree.dataX.shape[1], p=self.s)
         threshold = fast_choice(generator, self.possible_thresholds[var])
         
         success = tree.change_split(node_id, var, threshold)
@@ -151,7 +155,7 @@ class Swap(Move):
     Move to swap the split variables and thresholds for a pair of parent-child nodes.
     """
     def __init__(self, current : Parameters, trees_changed: np.ndarray,
-                 possible_thresholds = None, tol : int = 100):
+                 possible_thresholds = None, tol : int = 100, s: Optional[np.ndarray] = None):
         super().__init__(current, trees_changed, tol = tol)
         assert len(trees_changed) == 1
         self.swappable_pairs = None

@@ -237,12 +237,14 @@ class GlobalParamPrior:
         specification (str): Method for initial variance estimate
         generator: Random number generator
     """
-    def __init__(self, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng()):
+    def __init__(self, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
+                 dirichlet_prior=False):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda : float
         self.specification = specification
         self.generator = generator
+        self.dirichlet_prior = dirichlet_prior
 
     def fit_hyperparameters(self, data):
         """Fit the prior hyperparameters to the data"""
@@ -266,7 +268,10 @@ class GlobalParamPrior:
         """
         self.fit_hyperparameters(data)
         eps_sigma2 = self._sample_eps_sigma2(data.y)
-        return {"eps_sigma2" : eps_sigma2}
+        global_params = {"eps_sigma2": eps_sigma2}
+        if self.dirichlet_prior:
+            global_params["s"] = np.ones(data.X.shape[1]) / data.X.shape[1]
+        return global_params
     
     def resample_global_params(self, bart_params : Parameters, data_y):
         """
@@ -283,8 +288,26 @@ class GlobalParamPrior:
         Returns:
             dict: A dictionary containing the resampled global parameters.
         """
-        eps_sigma2 = self._sample_eps_sigma2(data_y - bart_params.evaluate())
-        return {"eps_sigma2" : eps_sigma2}
+        global_params = dict({})
+        global_params["eps_sigma2"] = self._sample_eps_sigma2(data_y - bart_params.evaluate())
+        if self.dirichlet_prior:
+            global_params["s"] = self._resample_s(bart_params)
+        return global_params
+    
+    def _resample_s(self, bart_params : Parameters, alpha=2.0):
+        """
+        Resample the split probabilities s.
+
+        Args:
+            bart_params (Parameters): An instance of the Parameters class containing the data and model parameters for BART.
+
+        Returns:
+            numpy.ndarray: Resampled s parameter.
+        """
+        if not self.dirichlet_prior:
+            raise ValueError("Dirichlet prior is not enabled.")
+        s = self.generator.dirichlet(alpha / bart_params.data.X.shape[1] + bart_params.vars_histogram)
+        return s
     
     def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:
         """
