@@ -307,7 +307,11 @@ class GlobalParamPrior:
         if not self.dirichlet_prior:
             raise ValueError("Dirichlet prior is not enabled.")
         vars_histogram = bart_params.vars_histogram
-        s = self.generator.dirichlet(s_alpha / len(vars_histogram) + vars_histogram)
+        p = bart_params.trees[0].dataX.shape[1]
+        vars_histogram_array = np.zeros(p)
+        for var, count in vars_histogram.items():
+            vars_histogram_array[var] = count
+        s = self.generator.dirichlet(s_alpha / p + vars_histogram_array)
         return s
     
     def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:

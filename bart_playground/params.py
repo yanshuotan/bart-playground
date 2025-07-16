@@ -2,6 +2,7 @@ import numpy as np
 from typing import Optional
 from numpy.typing import NDArray
 from numba import njit
+from collections import Counter
 
 @njit
 def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_leaf_id):
@@ -546,9 +547,7 @@ class Tree:
 
     @property
     def vars_histogram(self):
-        hist = np.zeros(self.dataX.shape[1])
-        for i in range(self.dataX.shape[1]):
-            hist[i] = np.sum(self.vars == i)
+        hist = Counter(self.vars)
         return hist
 
 
@@ -700,4 +699,7 @@ class Parameters:
 
     @property
     def vars_histogram(self):
-        return np.sum([tree.vars_histogram for tree in self.trees], axis=0)
+        vars_histogram = sum([tree.vars_histogram for tree in self.trees], Counter())
+        vars_histogram.pop(-2, None)  # Remove the -2 (nonexistent node) from the histogram
+        vars_histogram.pop(-1, None)  # Remove the -1 (leaf node) from the histogram
+        return vars_histogram
