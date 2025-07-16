@@ -294,7 +294,7 @@ class GlobalParamPrior:
             global_params["s"] = self._resample_s(bart_params)
         return global_params
     
-    def _resample_s(self, bart_params : Parameters, alpha=2.0):
+    def _resample_s(self, bart_params : Parameters, s_alpha=2.0):
         """
         Resample the split probabilities s.
 
@@ -306,7 +306,8 @@ class GlobalParamPrior:
         """
         if not self.dirichlet_prior:
             raise ValueError("Dirichlet prior is not enabled.")
-        s = self.generator.dirichlet(alpha / bart_params.data.X.shape[1] + bart_params.vars_histogram)
+        vars_histogram = bart_params.vars_histogram
+        s = self.generator.dirichlet(s_alpha / len(vars_histogram) + vars_histogram)
         return s
     
     def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:
