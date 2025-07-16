@@ -3,6 +3,7 @@ from typing import Optional
 from numpy.typing import NDArray
 from numba import njit
 
+
 @njit
 def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_leaf_id):
     """
@@ -17,21 +18,19 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
     # If appending, we need to take the offset into account when accessing leaf_ids
     offset = prev_leaf_id.shape[0] - dataX.shape[0] if append else 0
     desc = _descendants_numba(starting_node, vars)
-    
+
     subtree_nodes = np.zeros(n_nodes, np.bool_)
     for j in desc:
         subtree_nodes[j] = True
         if not append:
-            n[j] = 0 # starting node is not updated
-    
+            n[j] = 0  # starting node is not updated
+
     for i in range(dataX.shape[0]):
         current_node = leaf_ids[offset + i]
         # Need update
         if append or current_node == starting_node or subtree_nodes[current_node]:
-            leaf_ids[offset + i] = _traverse_tree_single(
-                dataX[i], vars, thresholds, starting_node, n
-            )
-            
+            leaf_ids[offset + i] = _traverse_tree_single(dataX[i], vars, thresholds, starting_node, n)
+
     # success = True if all updated n are > 0 else False
     success = True
     for j in desc:
@@ -40,6 +39,7 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
             break
 
     return success
+
 
 @njit
 def _descendants_numba(node_id: int, vars: NDArray[np.int32]):
@@ -62,8 +62,9 @@ def _descendants_numba(node_id: int, vars: NDArray[np.int32]):
         if right_child < len(vars) and vars[right_child] > -2:
             subtree_nodes[queue_end] = right_child
             queue_end += 1
-    
+
     return subtree_nodes[1:queue_end]
+
 
 @njit
 def _traverse_tree_numba(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
@@ -87,8 +88,9 @@ def _traverse_tree_numba(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray
 
     for i in range(n_samples):
         node_ids[i] = _traverse_tree_single(X[i], vars, thresholds, 0, None)
-    
+
     return node_ids
+
 
 @njit
 def _traverse_tree_single(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray, starting_node, n_to_update):
@@ -104,16 +106,17 @@ def _traverse_tree_single(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarra
         else:
             current_node = 2 * current_node + 2
         if n_to_update is not None:
-            n_to_update[current_node] += 1 # Increment count for the subtree node
+            n_to_update[current_node] += 1  # Increment count for the subtree node
     return current_node
+
 
 class Tree:
     """
     Represents the parameters of a single tree in the BART model, combining both
     the tree structure and leaf values into a single object.
     """
-    def __init__(self, dataX: Optional[np.ndarray], vars : np.ndarray, thresholds : np.ndarray, leaf_vals : np.ndarray,
-                  n, leaf_ids, evals):
+
+    def __init__(self, dataX: Optional[np.ndarray], vars: np.ndarray, thresholds: np.ndarray, leaf_vals: np.ndarray, n, leaf_ids, evals):
         """
         Initialize the tree parameters.
 
@@ -141,7 +144,7 @@ class Tree:
         self.evals: NDArray[np.float32] = evals
 
     default_size: int = 8  # Default size for the tree arrays
-    
+
     def _init_caching_arrays(self):
         """
         Initialize caching arrays for the tree.
@@ -151,28 +154,25 @@ class Tree:
         self.n = np.zeros(Tree.default_size, dtype=np.int32)
         self.n[0] = self.dataX.shape[0]
         self.evals = np.zeros(self.dataX.shape[0], dtype=np.float32)
-        
+
     @property
     def cache_exists(self):
         return self.evals is not None
-    
+
     @classmethod
     def new(cls, dataX=None):
         # Define the basic tree parameters.
         vars = np.full(Tree.default_size, -2, dtype=int)  # -2 represents an inexistent node
-        vars[0] = -1                      # -1 represents a leaf node
+        vars[0] = -1  # -1 represents a leaf node
         thresholds = np.full(Tree.default_size, np.nan, dtype=np.float32)
         leaf_vals = np.full(Tree.default_size, np.nan, dtype=np.float32)
-        leaf_vals[0] = 0                   # Initialize the leaf value
+        leaf_vals[0] = 0  # Initialize the leaf value
 
-        new_tree = cls(
-            dataX.astype(np.float32, copy=False) if dataX is not None else None,
-            vars, thresholds, leaf_vals, n=None, leaf_ids=None, evals=None
-        )
+        new_tree = cls(dataX.astype(np.float32, copy=False) if dataX is not None else None, vars, thresholds, leaf_vals, n=None, leaf_ids=None, evals=None)
         if dataX is not None:
             # If dataX is provided, initialize caching arrays.
             new_tree._init_caching_arrays()
-        
+
         return new_tree
 
     @classmethod
@@ -181,15 +181,15 @@ class Tree:
         Create a new Tree object by copying data from an existing Tree.
         """
         # Copy all arrays
-        
+
         return cls(
             other.dataX,  # dataX is not copied since it's shared across trees
             other.vars.copy(),
-            other.thresholds.copy(), 
+            other.thresholds.copy(),
             other.leaf_vals.copy(),
             other.n.copy() if other.n is not None else None,
             other.leaf_ids.copy() if other.leaf_ids is not None else None,
-            other.evals.copy() if other.evals is not None else None
+            other.evals.copy() if other.evals is not None else None,
         )
 
     def copy(self):
@@ -209,7 +209,7 @@ class Tree:
         """
         return _traverse_tree_numba(X, self.vars, self.thresholds)
 
-    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float32]:
+    def evaluate(self, X: Optional[np.ndarray] = None) -> NDArray[np.float32]:
         """
         Evaluate the tree for a given input data matrix.
 
@@ -263,32 +263,30 @@ class Tree:
             d[old_size:] = 0
             self.n = d
 
-    
     def _truncate_tree_arrays(self):
         """
         Recursively trims the tree arrays to remove unnecessary space.
 
-        This method ensures that if the last occurrence of -1 in `self.vars` 
-        appears too early (less than half of the array length), the arrays 
-        are truncated to half their size. The process continues until the 
-        last -1 index is at least in the second half of the array. 
+        This method ensures that if the last occurrence of -1 in `self.vars`
+        appears too early (less than half of the array length), the arrays
+        are truncated to half their size. The process continues until the
+        last -1 index is at least in the second half of the array.
 
-        A minimum size of Tree.default_size is enforced to prevent excessive truncation 
+        A minimum size of Tree.default_size is enforced to prevent excessive truncation
         that could lead to an invalid tree structure.
         """
         last_active_node = np.where(self.vars == -1)[0].max()
         new_length = len(self.vars)
         while last_active_node < (new_length // 2) and new_length > Tree.default_size:
             new_length //= 2
-            
-        if new_length < len(self.vars):    
+
+        if new_length < len(self.vars):
             self.thresholds = self.thresholds[:new_length]
             self.vars = self.vars[:new_length]
             self.leaf_vals = self.leaf_vals[:new_length]
             self.n = self.n[:new_length]
 
-    def split_leaf(self, node_id: int, var: int, threshold: np.float32, left_val: np.float32=np.float32(np.nan), 
-                   right_val: np.float32 = np.float32(np.nan)):
+    def split_leaf(self, node_id: int, var: int, threshold: np.float32, left_val: np.float32 = np.float32(np.nan), right_val: np.float32 = np.float32(np.nan)):
         """
         Split a leaf node into two child nodes.
 
@@ -329,15 +327,13 @@ class Tree:
         self.leaf_vals[node_id] = np.nan
         self.leaf_vals[left_child] = left_val
         self.leaf_vals[right_child] = right_val
-        
+
         # Assert cache arrays exist
-        is_valid = _update_n_and_leaf_id_numba(
-            node_id, self.dataX, False, self.vars, self.thresholds, self.n, self.leaf_ids
-        )
+        is_valid = _update_n_and_leaf_id_numba(node_id, self.dataX, False, self.vars, self.thresholds, self.n, self.leaf_ids)
 
         return is_valid
 
-    def prune_split(self, node_id: int, recursive = False):
+    def prune_split(self, node_id: int, recursive=False):
         """
         Prune a terminal split node, turning it back into a leaf.
 
@@ -355,7 +351,7 @@ class Tree:
         # Check if the node is a split node
         if not self.is_split_node(node_id):
             raise ValueError("Node is not a split node and cannot be pruned.")
-        
+
         desc = _descendants_numba(node_id, self.vars)
 
         for this_node in desc:
@@ -369,7 +365,7 @@ class Tree:
         # Turn the original node into a leaf
         self.vars[node_id] = -1
         self.thresholds[node_id] = np.nan
-        self.leaf_vals[node_id] = np.nan # Leaf value to be determined later
+        self.leaf_vals[node_id] = np.nan  # Leaf value to be determined later
 
         # Truncate unnecessary space in the tree arrays
         self._truncate_tree_arrays()
@@ -380,14 +376,14 @@ class Tree:
         if update_n:
             return self.update_n(node_id)
         return True
-    
+
     def swap_split(self, parent_id, child_id):
         parent_var, parent_threshold = self.vars[parent_id], self.thresholds[parent_id]
         child_var, child_threshold = self.vars[child_id], self.thresholds[child_id]
         self.change_split(child_id, parent_var, parent_threshold, update_n=False)
         is_valid = self.change_split(parent_id, child_var, child_threshold, update_n=True)
         return is_valid
-    
+
     def update_n(self, node_id=0):
         """
         Updates the counts of samples reaching each node in the decision tree.
@@ -403,11 +399,9 @@ class Tree:
         Returns:
         - bool: True if the counts of samples reaching all nodes are greater than 0, False otherwise.
         """
-        is_valid = _update_n_and_leaf_id_numba(
-            node_id, self.dataX, False, self.vars, self.thresholds, self.n, self.leaf_ids
-        )
+        is_valid = _update_n_and_leaf_id_numba(node_id, self.dataX, False, self.vars, self.thresholds, self.n, self.leaf_ids)
         return is_valid
-    
+
     def update_n_append(self, X_new):
         """
         Update the counts of samples reaching each node in the decision tree when appending new data.
@@ -416,9 +410,7 @@ class Tree:
         - X_new (np.ndarray): The new data to append to the existing dataset.
         Returns:
         """
-        _update_n_and_leaf_id_numba(
-            0, X_new, True, self.vars, self.thresholds, self.n, self.leaf_ids
-        )
+        _update_n_and_leaf_id_numba(0, X_new, True, self.vars, self.thresholds, self.n, self.leaf_ids)
 
     def update_outputs(self):
         self.evals = self.leaf_vals[self.leaf_ids]
@@ -434,11 +426,9 @@ class Tree:
 
     def is_split_node(self, node_id):
         return self.vars[node_id] not in [-1, -2]
-    
+
     def is_terminal_split_node(self, node_id):
-        return self.is_split_node(node_id) \
-            and self.is_leaf(node_id * 2 + 1) \
-            and self.is_leaf(node_id * 2 + 2)
+        return self.is_split_node(node_id) and self.is_leaf(node_id * 2 + 1) and self.is_leaf(node_id * 2 + 2)
 
     @property
     def leaves(self):
@@ -447,27 +437,26 @@ class Tree:
     @property
     def n_leaves(self):
         return np.count_nonzero(self.vars == -1)
-    
+
     @property
     def split_nodes(self):
         return np.where((self.vars != -1) & (self.vars != -2))[0]
-    
+
     @property
     def terminal_split_nodes(self):
         vs = self.vars
         tree_size = len(vs)
         result = []
         for i in range(tree_size):
-            left, right = 2*i + 1, 2*i + 2
+            left, right = 2 * i + 1, 2 * i + 2
             # it suffices to check right child not overflowing
             if right < tree_size and vs[left] == -1 and vs[right] == -1:
                 result.append(i)
         return result
-    
+
     @property
     def nonterminal_split_nodes(self):
-        return [i for i in range(len(self.vars)) if self.is_split_node(i) 
-                and not self.is_terminal_split_node(i)]
+        return [i for i in range(len(self.vars)) if self.is_split_node(i) and not self.is_terminal_split_node(i)]
 
     @property
     def leaf_basis(self) -> NDArray[np.float32]:
@@ -479,7 +468,7 @@ class Tree:
 
     def __str__(self):
         return self._print_tree()
-        
+
     def __repr__(self):
         if self.dataX is None:
             return f"Tree(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals})"
@@ -488,20 +477,13 @@ class Tree:
 
     def _print_tree(self, node_id=0, prefix=""):
         pprefix = prefix + "\t"
-        if self.vars[node_id] == -1: # Leaf node
+        if self.vars[node_id] == -1:  # Leaf node
             return prefix + self._print_node(node_id)
         else:
             left_idx = node_id * 2 + 1
             right_idx = node_id * 2 + 2
-            return (
-                prefix
-                + self._print_node(node_id)
-                + "\n"
-                + self._print_tree(left_idx, pprefix)
-                + "\n"
-                + self._print_tree(right_idx, pprefix)
-            )
-        
+            return prefix + self._print_node(node_id) + "\n" + self._print_tree(left_idx, pprefix) + "\n" + self._print_tree(right_idx, pprefix)
+
     def _print_node(self, node_id):
         if self.cache_exists:
             n_output = self.n[node_id]
@@ -510,8 +492,7 @@ class Tree:
         if self.vars[node_id] == -1:
             return f"Val: {self.leaf_vals[node_id]:0.9f} (leaf, n = {n_output})"
         else:
-            return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.9f}" + \
-                f" (split, n = {n_output})"
+            return f"X_{self.vars[node_id]} <= {self.thresholds[node_id]:0.9f}" + f" (split, n = {n_output})"
 
     def update_data(self, dataX: np.ndarray) -> None:
         """
@@ -532,13 +513,13 @@ class Tree:
         # Update leaf_ids
         if old_n == 0:
             # first time: init
-            self._init_caching_arrays() 
+            self._init_caching_arrays()
         else:
             # extending existing leaf_ids
             new_leaf_ids = np.zeros(n_new, dtype=np.int32)  # all new samples start at root
             self.leaf_ids = np.concatenate([self.leaf_ids, new_leaf_ids])
             self.n[0] += n_new  # Update the count of samples at the root node
-            
+
         # Refresh counts & outputs only for the affected rows
         update_range = np.arange(old_n, new_n)
         self.update_n_append(dataX[update_range])
@@ -549,7 +530,8 @@ class Parameters:
     """
     Represents the parameters of the BART model.
     """
-    def __init__(self, trees: list, global_params, cache : Optional[float]=None):
+
+    def __init__(self, trees: list, global_params, cache: Optional[float] = None):
         """
         Initializes the parameters for the model.
 
@@ -568,32 +550,46 @@ class Parameters:
         self.n_trees = len(self.trees)
         self.global_params = global_params
         self.init_cache(cache)
-            
+        self.update_dirichlet_histograms()
+
+    def update_dirichlet_histograms(self):
+        self._dirichlet_histograms = np.sum([tree.vars_histogram for tree in self.trees], axis=0)
+
+    @property
+    def dirichlet_histograms(self):
+        return self._dirichlet_histograms
+
+    @property
+    def vars_histogram(self):
+        return np.sum([tree.vars_histogram for tree in self.trees], axis=0)
+
     def init_cache(self, cache):
         if cache is None:
             self.cache = np.sum([tree.evaluate() for tree in self.trees], axis=0)
         else:
             self.cache = cache
-    
+
     def clear_cache(self):
         self.cache = None
         for tree in self.trees:
             tree.evals = None
             tree.leaf_ids = None
             tree.n = None
-            
+
     def copy(self, modified_tree_ids=None):
         if modified_tree_ids is None:
             modified_tree_ids = range(self.n_trees)
-        copied_trees = self.trees.copy() # Shallow copy
+        copied_trees = self.trees.copy()  # Shallow copy
         for tree_id in modified_tree_ids:
             copied_trees[tree_id] = self.trees[tree_id].copy()
         # No need to deep copy global_params and cache
         # because they only contain numerical values (which are immutable)
-        return Parameters(trees=copied_trees, 
-                          global_params=self.global_params.copy(), # shallow copy suffices
-                          cache=self.cache.copy() if self.cache is not None else None)
-    
+        return Parameters(
+            trees=copied_trees,
+            global_params=self.global_params.copy(),  # shallow copy suffices
+            cache=self.cache.copy() if self.cache is not None else None,
+        )
+
     def update_data(self, X_new):
         """
         Sets new data points for the model, replacing the existing data in all trees and re-calculating the cache.
@@ -605,17 +601,17 @@ class Parameters:
         for tree in new_trees:
             # Efficiently add new data points
             tree.update_data(X_new)
-        
+
         # Create new parameters object with the updated trees and same global parameters
         new_state = Parameters(
-            trees=new_trees, 
+            trees=new_trees,
             global_params=self.global_params.copy(),
-            cache=None  # Let Parameters initialize the cache, could be improved
+            cache=None,  # Let Parameters initialize the cache, could be improved
         )
-        
+
         return new_state
 
-    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float32]:
+    def evaluate(self, X: Optional[np.ndarray] = None, tree_ids: Optional[list[int]] = None, all_except: Optional[list[int]] = None) -> NDArray[np.float32]:
         """
         Evaluate the model on the given data.
 
@@ -667,7 +663,7 @@ class Parameters:
             return self.trees[tree_ids[0]].leaf_basis
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
-    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float32]):
+    def update_leaf_vals(self, tree_ids: list[int], leaf_vals: NDArray[np.float32]):
         """
         Update the leaf values of specified trees.
 
@@ -684,9 +680,8 @@ class Parameters:
             tree_evals_old = tree.evals
             leaves = tree.leaves
             n_leaves = len(leaves)
-            
-            tree.leaf_vals[leaves] = \
-                leaf_vals[range(leaf_counter, leaf_counter + n_leaves)]
+
+            tree.leaf_vals[leaves] = leaf_vals[range(leaf_counter, leaf_counter + n_leaves)]
             tree.update_outputs()
             self.cache = self.cache + tree.evals - tree_evals_old
             leaf_counter += n_leaves
