@@ -280,7 +280,7 @@ class DefaultSampler(Sampler):
         iter_trace = [(0, iter_current)]
         for k in range(self.tree_prior.n_trees):
             move = self.sample_move()(
-                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
+                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol,
                 s=iter_current.global_params.get('s', None) # Pass s if available
               )
             if move.propose(self.generator): # Check if a valid move was proposed
