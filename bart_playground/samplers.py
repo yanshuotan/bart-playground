@@ -352,7 +352,7 @@ class MultiSampler(Sampler):
     def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
         data_y = self.data.y if data_y is None else data_y
-        return (self.tree_prior.trees_log_prior_ratio(move) + \
+        return 0.5 * (self.tree_prior.trees_log_prior_ratio(move) + \
             self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
             move.log_tran_ratio
 
@@ -380,7 +380,7 @@ class MultiSampler(Sampler):
                             self.multi_ratios[key].append(move.candidate_sampling_ratio)
                             break
                 Z = self.generator.uniform(0, 1)
-                if np.log(Z) < move.log_tran_ratio: # Already consider prior and likelihood in move
+                if np.log(Z) < self.log_mh_ratio(move, temp): # Already consider prior and likelihood in move
                     self.move_accepted_counts[move_key] += 1
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
