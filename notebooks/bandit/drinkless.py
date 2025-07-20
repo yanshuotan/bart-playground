@@ -122,6 +122,7 @@ def get_DrinkLess():
 from bart_playground.bandit.sim_util import Scenario
 import numpy as np
 
+# We define a scenario for the DrinkLess dataset only for the simulation purposes.
 class DrinkLessScenario(Scenario):
     def __init__(self, random_generator=None):
         # Load the DrinkLess data
@@ -180,7 +181,7 @@ class DrinkLessScenario(Scenario):
             ]
             
             if len(filtered_data) > 0:
-                # Probability of having screen views > 0 (matching R logic)
+                # Probability of having screen views > 0 
                 prob = (filtered_data["screen_views_8_to_9pm"] > 0).mean()
                 outcome_means[arm] = prob
                 # Generate binary reward based on probability

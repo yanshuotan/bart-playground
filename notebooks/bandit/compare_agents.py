@@ -1,7 +1,7 @@
 import os, json
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import List, Dict, Tuple, Any, Union, Iterator
+from typing import List, Dict, Tuple, Any, Union, Iterator, Type
 from tqdm import tqdm
 from datetime import datetime
 import ray
@@ -9,6 +9,7 @@ import logging
 import pandas as pd
 
 from bart_playground.bandit.sim_util import simulate, Scenario
+from bart_playground.bandit.ope import instantiate_agents
 
 def setup_logging():
     """
@@ -45,34 +46,7 @@ def add_logging_file(save_dir: str):
     logger.addHandler(f_handler)
 
 _ca_logger = setup_logging()
-AgentSpec = Tuple[str, Any, Dict[str, Any]]
-
-def instantiate_agents(sim: int, scenario_K: int,
-                       scenario_P: int, specs: List[AgentSpec]) -> List[Any]:
-    """
-    Instantiate agents from specs; offset 'random_state' when provided.
-
-    Args:
-        sim: current simulation index (to set random_state)
-        scenario_K: number of arms
-        scenario_P: number of features
-        specs: list of (agent_name, AgentClass, default_kwargs)
-
-    Returns:
-        A list of instantiated BanditAgent objects.
-    """
-    agents = []
-    for name, cls, base_kwargs in specs:
-        kwargs = base_kwargs.copy()
-        kwargs['n_arms'] = scenario_K
-        kwargs['n_features'] = scenario_P
-
-        # offset seed if provided
-        if 'random_state' in base_kwargs:
-            kwargs['random_state'] = sim
-
-        agents.append(cls(**kwargs))
-    return agents
+AgentSpec = Tuple[str, Type, Dict[str, Any]]
 
 @ray.remote
 def _run_single_simulation_remote(sim, scenario, agent_specs, n_draws):
@@ -95,7 +69,7 @@ def _run_single_simulation(sim, scenario, agent_specs, n_draws):
         Tuple: (sim_index, regrets, computation_times)
     """
     # Create agents with different seeds for this simulation
-    sim_agents = instantiate_agents(sim, scenario.K, scenario.P, agent_specs)
+    sim_agents = instantiate_agents(agent_specs, scenario.K, scenario.P, sim)
 
     _ca_logger.debug(f"Shuffling scenario for simulation {sim} with random state {sim}...")
     scenario.shuffle(random_state=sim)
@@ -125,7 +99,7 @@ def generate_simulation_data_for_agents(scenario_name: str, scenario: Scenario, 
     """
     internal_name = scenario.__class__.__name__
     # LogisticBART is not suitable for continuous scenarios (i.e. non-OpenMLScenario)
-    if internal_name != "OpenMLScenario":
+    if internal_name != "OpenMLScenario" and internal_name != "DrinkLessScenario":
         agent_specs = [spec for spec in agent_specs if not spec[0].startswith("Logistic")]
         
     agent_names = [name for name, _, _ in agent_specs]

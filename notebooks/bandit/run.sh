@@ -25,10 +25,10 @@ exec 2> >(tee -ia "$LOGFILE" >&2)
 # python compare.py "MNIST"
 
 # New datasets
+python compare.py "DrinkLess"
 python compare.py "Wine"
 python compare.py "Heart"
 python compare.py "Iris"
-python compare.py "DrinkLess"
 
 # At the end of run_all.sh
 echo "All tasks complete. Shutting down in 2 minutes…" 
