@@ -48,8 +48,11 @@ class MockContextualArm:
         else:
             self.context = context
         # use one-hot encoding for arm now
-        arm_arr = np.zeros((n_arms, 1))
-        arm_arr[arm, 0] = 1  # One-hot encoding for the arm
+        # arm_arr = np.zeros((n_arms, 1))
+        # arm_arr[arm, 0] = 1  # One-hot encoding for the arm
+        # self.context = np.vstack((arm_arr, self.context))  # Append arm identifier to context
+        # use number encoding for arm
+        arm_arr = np.array([arm]).reshape(-1, 1)  # Number encoding for the arm
         self.context = np.vstack((arm_arr, self.context))  # Append arm identifier to context
         
 class TEAgent(BanditAgent):
@@ -74,13 +77,13 @@ class TEAgent(BanditAgent):
             self.model = BernoulliXGBoostTSAgent(
                 env_constructor=env_constructor,
                 # use one-hot encoding for arm now
-                context_size=n_arms+n_features,
+                context_size=1+n_features,
                 **kwargs
             )
         elif agent_type == 'random_forest':
             self.model = BernoulliRandomForestTSAgent(
                 env_constructor=env_constructor,
-                context_size=n_arms+n_features,
+                context_size=1+n_features,
                 **kwargs
             )
         else:

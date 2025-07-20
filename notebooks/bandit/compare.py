@@ -70,7 +70,7 @@ bart_ini.fit(X_ini, y_ini)
 
 # %%
 # default scenario
-default_arg = ['Wine', 'Heart', 'Iris', 'DrinkLess']
+default_arg = ['DrinkLess', 'Wine', 'Heart', 'Iris']
 # include more agent variations
 extensive = True
 
