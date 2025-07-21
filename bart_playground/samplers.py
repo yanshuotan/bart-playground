@@ -281,7 +281,7 @@ class DefaultSampler(Sampler):
         for k in range(self.tree_prior.n_trees):
             move = self.sample_move()(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
-                )
+              )
             if move.propose(self.generator): # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
                 if np.log(Z) < self.log_mh_ratio(move, temp):
