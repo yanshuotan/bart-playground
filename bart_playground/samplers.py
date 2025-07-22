@@ -7,7 +7,7 @@ from scipy.stats import truncnorm
 
 from .params import Tree, Parameters
 from .moves import all_moves, Move
-from .util import Dataset, fast_choice_weight
+from .util import Dataset
 from .priors import  ComprehensivePrior, ProbitPrior, LogisticPrior
 
 class TemperatureSchedule:
@@ -135,8 +135,7 @@ class Sampler(ABC):
         if self.moves_cache is None or self.moves_cache_iterator is None:
             moves = list(self.proposals.keys())
             move_probs = list(self.proposals.values())
-            idxs = fast_choice_weight(self.generator, weights=move_probs, size=100)
-            self.moves_cache = [all_moves[moves[i]] for i in idxs]
+            self.moves_cache = [all_moves[move] for move in self.generator.choice(moves, size=100, p=move_probs)]
             self.moves_cache_iterator = 0
         move = self.moves_cache[self.moves_cache_iterator]
         self.moves_cache_iterator += 1

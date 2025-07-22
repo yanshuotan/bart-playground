@@ -261,7 +261,7 @@ class MultiGrow(Grow):
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         weights = bwd_weights / bwd_weights.sum()
-        idx = fast_choice_weight(generator, weights)[0] # Select y
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights) # Select y
         node_id, var, threshold, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
 
@@ -358,7 +358,7 @@ class MultiPrune(Prune):
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         weights = bwd_weights / bwd_weights.sum()
-        idx = fast_choice_weight(generator, weights)[0]
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights)
         node_id, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
 
@@ -475,7 +475,7 @@ class MultiChange(Change):
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         weights = bwd_weights / bwd_weights.sum()
-        idx = fast_choice_weight(generator, weights)[0]
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights)
         node_id, var, threshold, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
         log_p_bwd = log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
@@ -583,7 +583,7 @@ class MultiSwap(Swap):
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         weights = bwd_weights / bwd_weights.sum()
-        idx = fast_choice_weight(generator, weights)[0]
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights)
         parent_id, child_id, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
         log_p_bwd = log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
