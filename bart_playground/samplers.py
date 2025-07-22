@@ -291,7 +291,7 @@ class DefaultSampler(Sampler):
             self.move_selected_counts[move_key] += 1
             move = move_cls(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
-            )
+              )
             if move.propose(self.generator): # Check if a valid move was proposed
                 self.move_success_counts[move_key] += 1
                 Z = self.generator.uniform(0, 1)

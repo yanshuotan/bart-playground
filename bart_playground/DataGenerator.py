@@ -61,6 +61,15 @@ class DataGenerator:
         y = X @ weights
         y = self._add_noise(y)
         return X, y
+    
+    def sparse_linear(self):
+        X = self.rng.uniform(0, 1, (self.n_samples, self.n_features))
+        weights = np.zeros(self.n_features)
+        weights[0] = 1
+        weights[1] = 1
+        y = X @ weights
+        y = self._add_noise(y)
+        return X, y
 
     def piecewise_flat(self):
         X = self.rng.uniform(0, 1, (self.n_samples, self.n_features))

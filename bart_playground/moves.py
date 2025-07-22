@@ -5,7 +5,9 @@ from typing import Optional
 
 from torch import log_
 from .params import Parameters
-from .util import fast_choice, fast_choice_weight
+from .util import fast_choice, fast_choice_with_weights
+
+
 class Move(ABC):
     """
     Base class for moves in the BART sampler.
@@ -25,6 +27,7 @@ class Move(ABC):
         # self.proposed = None
         self.trees_changed = trees_changed
         self._possible_thresholds = possible_thresholds
+        self.s = current.global_params.get("s", None)
         self.tol = tol
         self.log_tran_ratio = 0 # The log of remaining transition ratio after cancellations in the MH acceptance probability. 
 
@@ -85,7 +88,7 @@ class Grow(Move):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         node_id = fast_choice(generator, self.cur_leaves)
-        var = generator.integers(tree.dataX.shape[1])
+        var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
         threshold = fast_choice(generator, self.possible_thresholds[var])
         n_leaves = len(self.cur_leaves)
         
@@ -142,7 +145,7 @@ class Change(Move):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         node_id = fast_choice(generator, tree.split_nodes)
-        var = generator.integers(tree.dataX.shape[1])
+        var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
         threshold = fast_choice(generator, self.possible_thresholds[var])
         
         success = tree.change_split(node_id, var, threshold)
