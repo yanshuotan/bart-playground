@@ -13,6 +13,13 @@ def fast_choice(generator, array):
         return array[0]
     return array[generator.integers(0, len_arr)]
 
+def fast_choice_weight(generator, weights, size=1):
+    """Using the inverse CDF method for weighted sampling"""
+    cdf = np.cumsum(weights)
+    rand = generator.random(size)
+    idxs = np.searchsorted(cdf, rand)
+    return idxs
+
 class Dataset:
 
     def __init__(self, X, y):

@@ -2,8 +2,10 @@ import numpy as np
 import math
 from abc import ABC, abstractmethod
 from typing import Optional
+
+from torch import log_
 from .params import Parameters
-from .util import fast_choice
+from .util import fast_choice, fast_choice_weight
 class Move(ABC):
     """
     Base class for moves in the BART sampler.
@@ -250,21 +252,21 @@ class MultiGrow(Grow):
             log_pi = self.likelihood.trees_log_marginal_lkhd(
                 temp, self.data_y, self.trees_changed
             ) + self.tree_prior.trees_log_prior(temp, self.trees_changed) # log pi(y_i)
-            candidates.append((node_id, var, threshold, float(log_pi)))
+            candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
 
-        log_bwd_weights = np.array([0.5*w for _, _, _, w in candidates])
+        log_bwd_weights = np.array([w for _, _, _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
-        norm_log_bwd_weights = log_bwd_weights - max_log_bwd
-        bwd_weights = np.exp(norm_log_bwd_weights)
+        bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         weights = bwd_weights / bwd_weights.sum()
-        idx = generator.choice(len(candidates), p=weights) # Select y
+        idx = fast_choice_weight(generator, weights)[0] # Select y
         node_id, var, threshold, _ = candidates[idx]
+        log_weight_yj = log_bwd_weights[[idx]]
 
         log_tran_fwd = -np.log(tree.n_leaves)
         success = tree.split_leaf(node_id, var, threshold)
 
         log_tran_bwd = -np.log(len(tree.terminal_split_nodes)) # log T(y_i,x): prune back
-        log_p_bwd = log_tran_bwd + np.log(bwd_weights.mean()) + max_log_bwd
+        log_p_bwd = log_weight_yj + log_tran_bwd + np.log(bwd_weights.mean()) + max_log_bwd
 
         # Calculate the log transition ratio
         all_prune_candidates = list(tree.terminal_split_nodes)
@@ -283,17 +285,15 @@ class MultiGrow(Grow):
             temp2 = proposed.copy(self.trees_changed)
             temp2_tree = temp2.trees[self.trees_changed[0]]
             temp2_tree.prune_split(prune_node_id)
-            #
             log_pi = self.likelihood.trees_log_marginal_lkhd(
                 temp2, self.data_y, self.trees_changed
             ) + self.tree_prior.trees_log_prior(temp2, self.trees_changed) # log pi(x_i*)
-            #log_weight = float(log_pi + log_tran_kernel)
             log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_weights = np.array(log_fwd_weights)
+        log_weight_x = log_fwd_weights[[0]]
         max_log_fwd = np.max(log_fwd_weights)
-        norm_log_fwd_weights = log_fwd_weights - max_log_fwd
-        fwd_weights = np.exp(norm_log_fwd_weights)
-        log_p_fwd = log_tran_fwd + np.log(fwd_weights.mean()) + max_log_fwd
+        fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
+        log_p_fwd = log_weight_x + log_tran_fwd + np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
         return success
@@ -349,21 +349,21 @@ class MultiPrune(Prune):
             log_pi = self.likelihood.trees_log_marginal_lkhd(
                 temp, self.data_y, self.trees_changed
             ) + self.tree_prior.trees_log_prior(temp, self.trees_changed)
-            candidates.append((node_id, float(log_pi)))
+            candidates.append((node_id, 0.5*float(log_pi)))
 
-        log_bwd_weights = np.array([0.5*w for _, w in candidates])
+        log_bwd_weights = np.array([w for _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
-        norm_log_bwd_weights = log_bwd_weights - max_log_bwd
-        bwd_weights = np.exp(norm_log_bwd_weights)
+        bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         weights = bwd_weights / bwd_weights.sum()
-        idx = generator.choice(len(candidates), p=weights)
+        idx = fast_choice_weight(generator, weights)[0]
         node_id, _ = candidates[idx]
+        log_weight_yj = log_bwd_weights[[idx]]
 
         log_tran_fwd = -np.log(len(tree.terminal_split_nodes))
         grow_candidate = (node_id, tree.vars[node_id], tree.thresholds[node_id]) # Record
         tree.prune_split(node_id)
         log_tran_bwd = -np.log(tree.n_leaves)  # log T(y_i, x): grow back
-        log_p_bwd = log_tran_bwd + np.log(bwd_weights.mean()) + max_log_bwd
+        log_p_bwd = log_weight_yj + log_tran_bwd + np.log(bwd_weights.mean()) + max_log_bwd
 
         # Calculate the log transition ratio
         n_samples = self._get_n_samples(tree)
@@ -397,10 +397,10 @@ class MultiPrune(Prune):
             ) + self.tree_prior.trees_log_prior(temp2, self.trees_changed)
             log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_weights = np.array(log_fwd_weights)
+        log_weight_x = log_fwd_weights[[0]]
         max_log_fwd = np.max(log_fwd_weights)
-        norm_log_fwd_weights = log_fwd_weights - max_log_fwd
-        fwd_weights = np.exp(norm_log_fwd_weights)
-        log_p_fwd = log_tran_fwd + np.log(fwd_weights.mean()) + max_log_fwd
+        fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
+        log_p_fwd = log_weight_x + log_tran_fwd + np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
         return True
@@ -466,16 +466,16 @@ class MultiChange(Change):
             log_pi = self.likelihood.trees_log_marginal_lkhd(
                 temp, self.data_y, self.trees_changed
             ) + self.tree_prior.trees_log_prior(temp, self.trees_changed) # log pi(y_i)
-            candidates.append((node_id, var, threshold, float(log_pi)))
+            candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
 
-        log_bwd_weights = np.array([0.5*w for _, _, _, w in candidates])
+        log_bwd_weights = np.array([w for _, _, _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
-        norm_log_bwd_weights = log_bwd_weights - max_log_bwd
-        bwd_weights = np.exp(norm_log_bwd_weights)
+        bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         weights = bwd_weights / bwd_weights.sum()
-        idx = generator.choice(len(candidates), p=weights)
+        idx = fast_choice_weight(generator, weights)[0]
         node_id, var, threshold, _ = candidates[idx]
-        log_p_bwd = np.log(bwd_weights.mean()) + max_log_bwd
+        log_weight_yj = log_bwd_weights[[idx]]
+        log_p_bwd = log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
 
         old_var = tree.vars[node_id]
         old_threshold = tree.thresholds[node_id]
@@ -506,10 +506,10 @@ class MultiChange(Change):
             ) + self.tree_prior.trees_log_prior(temp2, self.trees_changed)
             log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_weights = np.array(log_fwd_weights)
+        log_weight_x = log_fwd_weights[[0]]
         max_log_fwd = np.max(log_fwd_weights)
-        norm_log_fwd_weights = log_fwd_weights - max_log_fwd
-        fwd_weights = np.exp(norm_log_fwd_weights)
-        log_p_fwd = np.log(fwd_weights.mean()) + max_log_fwd
+        fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
+        log_p_fwd = log_weight_x + np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
         return success
@@ -574,16 +574,16 @@ class MultiSwap(Swap):
             log_pi = self.likelihood.trees_log_marginal_lkhd(
                 temp, self.data_y, self.trees_changed
             ) + self.tree_prior.trees_log_prior(temp, self.trees_changed)
-            candidates.append((parent_id, child_id, float(log_pi)))
+            candidates.append((parent_id, child_id, 0.5*float(log_pi)))
 
-        log_bwd_weights = np.array([0.5*w for _, _, w in candidates])
+        log_bwd_weights = np.array([w for _, _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
-        norm_log_bwd_weights = log_bwd_weights - max_log_bwd
-        bwd_weights = np.exp(norm_log_bwd_weights)
+        bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         weights = bwd_weights / bwd_weights.sum()
-        idx = generator.choice(len(candidates), p=weights)
+        idx = fast_choice_weight(generator, weights)[0]
         parent_id, child_id, _ = candidates[idx]
-        log_p_bwd = np.log(bwd_weights.mean()) + max_log_bwd
+        log_weight_yj = log_bwd_weights[[idx]]
+        log_p_bwd = log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
 
         success = tree.swap_split(parent_id, child_id)
 
@@ -618,10 +618,10 @@ class MultiSwap(Swap):
             ) + self.tree_prior.trees_log_prior(temp2, self.trees_changed)
             log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_weights = np.array(log_fwd_weights)
+        log_weight_x = log_fwd_weights[[0]]
         max_log_fwd = np.max(log_fwd_weights)
-        norm_log_fwd_weights = log_fwd_weights - max_log_fwd
-        fwd_weights = np.exp(norm_log_fwd_weights)
-        log_p_fwd = np.log(fwd_weights.mean()) + max_log_fwd
+        fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
+        log_p_fwd = log_weight_x + np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
         return success

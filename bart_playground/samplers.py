@@ -7,7 +7,7 @@ from scipy.stats import truncnorm
 
 from .params import Tree, Parameters
 from .moves import all_moves, Move
-from .util import Dataset
+from .util import Dataset, fast_choice_weight
 from .priors import  ComprehensivePrior, ProbitPrior, LogisticPrior
 
 class TemperatureSchedule:
@@ -135,7 +135,8 @@ class Sampler(ABC):
         if self.moves_cache is None or self.moves_cache_iterator is None:
             moves = list(self.proposals.keys())
             move_probs = list(self.proposals.values())
-            self.moves_cache = [all_moves[move] for move in self.generator.choice(moves, size=100, p=move_probs)]
+            idxs = fast_choice_weight(self.generator, weights=move_probs, size=100)
+            self.moves_cache = [all_moves[moves[i]] for i in idxs]
             self.moves_cache_iterator = 0
         move = self.moves_cache[self.moves_cache_iterator]
         self.moves_cache_iterator += 1
@@ -352,9 +353,7 @@ class MultiSampler(Sampler):
     def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
         data_y = self.data.y if data_y is None else data_y
-        return 0.5 * (self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
-            move.log_tran_ratio
+        return move.log_tran_ratio # Already considers prior and likelihood in move.py
 
     def one_iter(self, current, temp, return_trace=False):
         """
