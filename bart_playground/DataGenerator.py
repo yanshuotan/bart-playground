@@ -354,6 +354,8 @@ class DataGenerator:
         x_0, x_1 = X[:, 0], X[:, 1]
         def g(x):
             return 2 / (1 + np.exp(-12 * (x - 0.5)))
+        if self.noise > 0.0:
+            self.noise1 = 1.0
         y = g(x_0) * g(x_1) + self.rng.normal(0, self.noise, size=self.n_samples)
         return X, y
     
@@ -408,6 +410,9 @@ class DataGenerator:
         y[idx_1] = X[idx_1] @ coefs1
         y[idx_2] = X[idx_2] @ coefs2
         y[idx_3] = X[idx_3] @ coefs3
+        if self.noise > 0.0:
+            # Noise is set to give a SNR of 1
+            self.noise = np.sqrt(np.var(y))
         y += self.rng.normal(0, self.noise, size=self.n_samples)
         return X, y
     
