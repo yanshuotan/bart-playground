@@ -372,10 +372,11 @@ class MultiPrune(Prune):
             for threshold in self.possible_thresholds[var]
         ]
 
-        atol = 1e-6 # Can be improved
+        rtol = 1e-5  # Relative tolerance
         grow_candidate = next(
             (cand for cand in all_grow_candidates
-            if cand[0] == grow_candidate[0] and cand[1] == grow_candidate[1] and abs(cand[2] - grow_candidate[2]) < atol),
+            if cand[0] == grow_candidate[0] and cand[1] == grow_candidate[1] and 
+            math.isclose(cand[2], grow_candidate[2], rel_tol=rtol)),
             None
         )
         assert grow_candidate is not None, f"grow_candidate not found: {grow_candidate}"
@@ -476,10 +477,11 @@ class MultiChange(Change):
 
         # Calculate the log transition ratio
         rev_candidate = (node_id, old_var, old_threshold)
-        atol = 1e-6
+        rtol = 1e-5  # Relative tolerance
         rev_candidate = next(
             (cand for cand in all_candidates
-            if cand[0] == node_id and cand[1] == old_var and abs(cand[2] - old_threshold) < atol),
+            if cand[0] == node_id and cand[1] == old_var and 
+            math.isclose(cand[2], old_threshold, rel_tol=rtol)),
             None
         )
         assert rev_candidate is not None, f"rev_candidate not found for node_id={node_id}, var={old_var}, threshold={old_threshold}"
