@@ -9,7 +9,7 @@
 #       format_version: '1.3'
 #       jupytext_version: 1.17.2
 #   kernelspec:
-#     display_name: bartpg
+#     display_name: Python 3
 #     language: python
 #     name: python3
 # ---
@@ -70,13 +70,13 @@ bart_ini.fit(X_ini, y_ini)
 
 # %%
 # default scenario
-default_arg = ['DrinkLess', 'Wine', 'Heart', 'Iris']
+default_arg = ['Mushroom'] # ['DrinkLess', 'Wine', 'Heart', 'Iris']
 # include more agent variations
 extensive = True
 
 n_simulations = 8  # Number of simulations per scenario
 sim_indices = list(range(n_simulations))  # Indices for simulations
-max_draws = 2000      # Number of draws per simulation
+max_draws = 10000      # Number of draws per simulation
 
 profile = False # Profile the simulation (if True, will use a profiler)
 
@@ -191,7 +191,7 @@ else:
             agent_kwargs['nskip'] = 30
             agent_kwargs['ndpost'] = 30
             agent_kwargs['n_trees'] = 50 # default number of trees
-            agent_kwargs['nadd'] = 2 # default number of additional iterations
+            agent_kwargs['nadd'] = 1 # default number of additional iterations
 
             if 'BARTm' in agent_name:
                 agent_kwargs['encoding'] = 'multi'
@@ -202,15 +202,16 @@ else:
 
             if not 'MCBART' in agent_name:
                 agent_kwargs_new = agent_kwargs.copy()
-                agent_kwargs_new['n_trees'] = 25
-                more_agent_specs.append((f"{agent_name}_tree0.5x", agent_class, agent_kwargs_new.copy()))
+                # agent_kwargs_new['n_trees'] = 25
+                # more_agent_specs.append((f"{agent_name}_tree0.5x", agent_class, agent_kwargs_new.copy()))
                 agent_kwargs_new['n_trees'] = 100
                 more_agent_specs.append((f"{agent_name}_tree2x", agent_class, agent_kwargs_new.copy()))
-                agent_kwargs_new = agent_kwargs.copy()
-                agent_kwargs_new['nadd'] = 1
-                more_agent_specs.append((f"{agent_name}_iter0.5x", agent_class, agent_kwargs_new.copy()))
-                agent_kwargs_new['nadd'] = 4
-                more_agent_specs.append((f"{agent_name}_iter2x", agent_class, agent_kwargs_new.copy()))
+                
+                # agent_kwargs_new = agent_kwargs.copy()
+                # agent_kwargs_new['nadd'] = 1
+                # more_agent_specs.append((f"{agent_name}_iter0.5x", agent_class, agent_kwargs_new.copy()))
+                # agent_kwargs_new['nadd'] = 4
+                # more_agent_specs.append((f"{agent_name}_iter2x", agent_class, agent_kwargs_new.copy()))
             else:
                 agent_kwargs['nadd'] = 1 # MultiChainBART only needs to use one additional iteration
                 agent_kwargs['n_ensembles'] = 4 # default number of ensembles          

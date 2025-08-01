@@ -221,7 +221,7 @@ class OpenMLScenario(Scenario):
         #     # dummy_na=True
         # )
         
-        X_arr = normalize(X)
+        X_arr = X.to_numpy() # normalize(X)
         y_arr = y.to_numpy().reshape(-1, 1)
         # Encode categorical labels as integers
         y_encoded = OrdinalEncoder(dtype=int).fit_transform(y_arr)

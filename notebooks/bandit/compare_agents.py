@@ -32,7 +32,7 @@ def setup_logging():
     return logger
 
 def add_logging_file(save_dir: str):
-    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    now = datetime.now().strftime("%y%m%d_%H%M%S_%f")
     log_dir = os.path.join(save_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     
@@ -390,7 +390,7 @@ def _iter_relative_regrets(results: Dict[str, Dict], target: str
                            ) -> Iterator[Tuple[str, str, np.ndarray, float]]:
     for scenario, data in results.items():
         regrets = data[target]
-        rnd = regrets.get("Random")
+        rnd = regrets.get("LinearTS")
         if rnd is None:
             continue
         rnd_mean = rnd[:, -1].mean()
@@ -399,7 +399,8 @@ def _iter_relative_regrets(results: Dict[str, Dict], target: str
                 rel_arr = np.cumsum(arr, axis=1)  # cumulative times
             else:
                 rel_arr  = arr / rnd_mean        # full path-wise regrets
-            rel_mean = rel_arr[:, -1].mean() # mean of final draw
+            final_arr = rel_arr[:, -1]
+            rel_mean = final_arr.mean() # / final_arr.std() # mean of final draw
             yield scenario, agent, rel_arr, rel_mean
 
 
@@ -410,13 +411,14 @@ def print_relative_performance(results: Dict[str, Dict], target: str = "regrets"
     ]
 
     df = pd.DataFrame(records)
-
+    
+    from scipy.stats import hmean
     # now aggregate across scenarios
     summary = (
         df
         .groupby('Agent')['RelMean']
         .agg(
-            MeanRelMean = 'mean',   # average RelMean
+            MeanRelMean = hmean,   # average RelMean
             StdRelMean  = 'std',    # std dev of those RelMean’s
             N           = 'count'   # number of scenarios
         )
@@ -429,7 +431,7 @@ def print_relative_performance(results: Dict[str, Dict], target: str = "regrets"
     # pretty‐print
     header = f"{'Agent':<25s} {'Mean':>8s} {'SE':>8s} {'Std (stability)':>8s}"
     sep    = "-" * len(header)
-    print("\nAgent performance (relative to Random):")
+    print("\nAgent performance (relative to LinearTS):")
     print(header)
     print(sep)
     for _, row in summary.iterrows():
@@ -540,50 +542,63 @@ def print_topn_agents_per_scenario(results: Dict[str, Dict], top_n: int = 5):
     print(df_top.to_string())
 
 
+from typing import Dict
+import pandas as pd
+from scipy.stats import ttest_ind
+from itertools import combinations
+
 def print_pairwise_win_tie_lose(results: Dict[str, Dict], alpha: float = 0.05):
-    from scipy.stats import ttest_ind
-    
     normed = add_average_scenario(results)
-    agents = sorted(next(iter(normed.values()))['regrets'].keys())
     
-    # accumulator for totals
-    totals = {a: {'win':0, 'tie':0, 'lose':0} for a in agents}
+    # Collect all unique agents across all scenarios
+    all_agents = set()
+    for data in normed.values():
+        all_agents.update(data['regrets'].keys())
+    agents = sorted(all_agents)
+    
+    # Accumulator for totals
+    totals = {a: {'win': 0, 'tie': 0, 'lose': 0} for a in agents}
     
     for scenario, data in normed.items():
-        # initialize per‐scenario counters
-        counts = {a: {'win':0, 'tie':0, 'lose':0} for a in agents}
-        # cache final‐draw arrays
+        # Initialize per-scenario counters
+        counts = {a: {'win': 0, 'tie': 0, 'lose': 0} for a in agents}
+        # Cache final-draw arrays for agents present in this scenario
         final_vals = {a: arr[:, -1] for a, arr in data['regrets'].items()}
         
-        # all‐pairs
-        for i, a1 in enumerate(agents):
-            for a2 in agents[i+1:]:
+        # All pairs
+        for a1, a2 in combinations(agents, 2):
+            if a1 in final_vals and a2 in final_vals:
                 v1, v2 = final_vals[a1], final_vals[a2]
                 stat, p = ttest_ind(v1, v2, equal_var=False)
                 if p < alpha:
-                    # significant difference
+                    # Significant difference (lower mean regret is better)
                     if v1.mean() < v2.mean():
-                        counts[a1]['win']  += 1
+                        counts[a1]['win'] += 1
                         counts[a2]['lose'] += 1
                     else:
-                        counts[a2]['win']  += 1
+                        counts[a2]['win'] += 1
                         counts[a1]['lose'] += 1
                 else:
-                    # no significant difference
+                    # No significant difference
                     counts[a1]['tie'] += 1
                     counts[a2]['tie'] += 1
+            else:
+                # Not both present: consider as tie
+                counts[a1]['tie'] += 1
+                counts[a2]['tie'] += 1
         
-        # accumulate totals
+        # Accumulate totals
         for a in agents:
-            for key in ('win','tie','lose'):
+            for key in ('win', 'tie', 'lose'):
                 totals[a][key] += counts[a][key]
     
-    # print grand‐total
+    # Prepare and print grand-total
     df_tot = pd.DataFrame.from_dict(totals, orient='index')
     df_tot = (
         df_tot
-        .assign(score=df_tot['win']*3 + df_tot['tie'])
+        .assign(score=df_tot['win'] * 3 + df_tot['tie'])
         .sort_values(by='score', ascending=False)
     )
     print("\nTotals across all scenarios (sorted by win*3+tie):")
-    print(df_tot[['win','tie','lose']].to_string())
+    print(df_tot[['win', 'tie', 'lose']].to_string())
+    
