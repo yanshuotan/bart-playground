@@ -1,35 +1,18 @@
 #!/usr/bin/env bash
 
-cd ./notebooks/bandit/
+# Define datasets as an array (index 0-based)
+DATASETS=("Magic" "Adult" "Mushroom" "Shuttle" "Wine" "Heart" "Iris")  # Add more as needed
 
-# Create or append to a log file in your working directory
-LOGFILE="sh_log/run_$(date +%Y%m%dT%H%M%S).log"
+# Get the current array index
+INDEX=$PBS_ARRAY_INDEX
 
-# Redirect stdout and stderr to both console and $LOGFILE
+# Logging
+LOGFILE="sh_log/run_${INDEX}_$(date +%Y%m%dT%H%M%S).log"
 exec > >(tee -ia "$LOGFILE")
 exec 2> >(tee -ia "$LOGFILE" >&2)
 
-# Continous datasets
-# python compare.py "Linear"
-# python compare.py "Friedman"
-# python compare.py "LinFriedman"
-# python compare.py "Friedman2"
-# python compare.py "Friedman3"
-
-# Classification datasets
-# python compare.py "Magic"
-# python compare.py "Adult"
-# python compare.py "Mushroom"
-# python compare.py "Covertype"
-# python compare.py "Shuttle"
-# python compare.py "MNIST"
-
-# New datasets
-python compare.py "DrinkLess"
-python compare.py "Wine"
-python compare.py "Heart"
-python compare.py "Iris"
-
-# At the end of run_all.sh
-echo "All tasks complete. Shutting down in 2 minutes…" 
-sudo shutdown -h +2  # Shutdown after 2 minutes
+source ~/.bashrc
+conda activate ~/bartpg
+# Run for this dataset
+python compare.py "${DATASETS[$INDEX]}"
+conda deactivate
