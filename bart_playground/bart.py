@@ -235,6 +235,101 @@ class MultiBART(BART):
             temp_schedule=temp_schedule, multi_tries=multi_tries)
         super().__init__(preprocessor, sampler, ndpost, nskip)
         
+
+class PipelineBART(BART):
+    """
+    A BART model that first uses MultiSampler and then DefaultSampler.
+    """
+    def __init__(self, ndpost=1000, nskip=0, n_trees=200, tree_alpha: float=0.95, 
+                 tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, eps_nu: float=3, 
+                 specification="linear", multi_proposal_probs=default_proposal_probs, 
+                 proposal_probs=default_proposal_probs, tol=100, 
+                 max_bins=100, random_state=42, temperature=1.0, multi_tries=[10, 5]):
+        """
+        Initialize the PipelineBART model.
+
+        Parameters:
+            ndpost (int): Number of posterior samples to draw.
+            nskip (int): Number of burn-in iterations to skip.
+            n_trees (int): Number of trees in the model.
+            tree_alpha, tree_beta, f_k, eps_q, eps_nu: Prior parameters.
+            specification (str): Model specification.
+            proposal_probs (dict): Proposal probabilities for moves.
+            tol (int): Tolerance for samplers.
+            max_bins (int): Maximum number of bins for preprocessing.
+            random_state (int): Random seed.
+            temperature (float): Temperature for the sampler.
+            multi_tries (list[int]): Multi-try MCMC parameters for MultiSampler.
+        """
+        # Initialize preprocessor
+        preprocessor = DefaultPreprocessor(max_bins=max_bins)
+
+        # Initialize random generator
+        rng = np.random.default_rng(random_state)
+
+        # Initialize prior
+        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, eps_nu, specification, rng)
+
+        # Initialize temperature schedule
+        temp_schedule = self._check_temperature(temperature)
+
+        # Initialize MultiSampler
+        self.multi_sampler = MultiSampler(
+            prior=prior,
+            proposal_probs=multi_proposal_probs,
+            generator=rng,
+            temp_schedule=temp_schedule,
+            tol=1,
+            multi_tries=multi_tries
+        )
+
+        # Initialize DefaultSampler
+        self.default_sampler = DefaultSampler(
+            prior=prior,
+            proposal_probs=proposal_probs,
+            generator=rng,
+            temp_schedule=temp_schedule,
+            tol=tol
+        )
+
+        # Call the parent constructor with DefaultSampler
+        super().__init__(preprocessor, self.default_sampler, ndpost, nskip)
+
+    def fit(self, X, y, multi_iter=1000, quietly=False):
+        """
+        Fit the PipelineBART model.
+
+        Parameters:
+            X: Feature matrix.
+            y: Target vector.
+            multi_iter (int): Number of iterations for MultiSampler.
+            quietly (bool): Whether to suppress output.
+        """
+        # Step 1: Preprocess the data
+        self.data = self.preprocessor.fit_transform(X, y)
+        self.multi_sampler.add_data(self.data)
+        self.multi_sampler.add_thresholds(self.preprocessor.thresholds)
+
+        # Step 2: Run MultiSampler
+        if not quietly:
+            print(f"Running MultiSampler for {multi_iter + self.nskip} iterations...")
+        self.multi_sampler.run(multi_iter + self.nskip, quietly=quietly, n_skip=self.nskip)
+
+        # Step 3: Get the final state from MultiSampler
+        final_state = self.multi_sampler.trace[-1]
+
+        # Step 4: Initialize DefaultSampler with the final state
+        self.sampler.add_data(self.data)
+        self.sampler.add_thresholds(self.preprocessor.thresholds)
+        self.sampler.trace = [final_state]
+
+        # Step 5: Run DefaultSampler
+        if not quietly:
+            print(f"Running DefaultSampler for {self.ndpost} iterations...")
+        self.trace = self.multi_sampler.trace[:-1] + self.sampler.run(self.ndpost, quietly=quietly)
+        self.is_fitted = True
+
+
 class ProbitBART(BART):
     """
     Binary BART implementation using Albert-Chib data augmentation and probit link.

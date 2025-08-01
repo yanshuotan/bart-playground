@@ -1,4 +1,4 @@
-from .bart import BART, DefaultBART, ProbitBART, LogisticBART, MultiBART
+from .bart import BART, DefaultBART, ProbitBART, LogisticBART, MultiBART, PipelineBART
 from .DataGenerator import DataGenerator
 from .moves import all_moves, Change, Grow, Prune, Swap, MultiGrow, MultiPrune, MultiChange, MultiSwap
 from .params import Tree, Parameters
@@ -10,7 +10,7 @@ from .xgb_init import fit_and_init_trees, _xgb_json_to_tree
 
 
 
-__all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART", "MultiBART", 
+__all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART", "MultiBART", "PipelineBART",
            "Change", "Grow", "Prune", "Swap", 
            "MultiGrow", "MultiPrune", "MultiChange", "MultiSwap",
            "TreesPrior", "GlobalParamPrior", "BARTLikelihood", "ComprehensivePrior",

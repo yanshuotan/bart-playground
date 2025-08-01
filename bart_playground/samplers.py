@@ -95,7 +95,7 @@ class Sampler(ABC):
         if current is not None:
             current = current
         elif self.trace:  # If self.trace is already populated (e.g., by init_from_xgboost)
-            current = self.trace[0]  # Use the pre-loaded state
+            current = self.trace[-1]  # Use the pre-loaded state
         else:
             current = self.get_init_state() # Otherwise, generate a new initial state
         
