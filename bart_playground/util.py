@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from re import U
 
 import numpy as np
 from numba import njit, objmode, f8
@@ -12,6 +13,20 @@ def fast_choice(generator, array):
     if len_arr == 1:
         return array[0]
     return array[generator.integers(0, len_arr)]
+
+def fast_choice_with_weights(generator, array, weights):
+    """Fast random selection from an array with given weights."""
+    if weights is None:
+        return fast_choice(generator, array)
+    assert len(array) == len(weights), "Array and weights must have the same length"
+    len_arr = len(array)
+    if len_arr == 1:
+        return array[0]
+    cum_weights = np.cumsum(weights)
+    weight_sum = cum_weights[-1]
+    U = generator.uniform(0, weight_sum)
+    idx = np.searchsorted(cum_weights, U)
+    return array[idx]
 
 class Dataset:
 
