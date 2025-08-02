@@ -78,9 +78,31 @@ class RefreshBARTAgent(BanditAgent):
             return False
         return np.ceil(8 * np.log(self.t)) > np.ceil(8 * np.log(self.t - 1))
     
+    def _enough_data(self, outcomes, min_obs=4):
+        """Check if we have enough data for initial fit."""
+        return outcomes.size >= min_obs and np.unique(outcomes).size > 1
+    
+    def _has_sufficient_data(self) -> bool:
+        """Check if we have sufficient data to fit the model."""
+        if len(self.all_rewards) == 0:
+            return False
+            
+        rewards = np.array(self.all_rewards)
+        
+        if self.separate_models:
+            # Check that each arm has sufficient data
+            arms = np.array(self.all_arms)
+            return all(
+                self._enough_data(rewards[arms == arm])
+                for arm in range(self.n_arms)
+            )
+        else:
+            # Check overall data sufficiency
+            return self._enough_data(rewards)
+    
     def _refresh_model(self) -> None:
         """Re-fit the model from scratch using all historical data."""
-        if len(self.all_rewards) == 0:
+        if not self._has_sufficient_data():
             return
             
         logging.info(f't = {self.t} - re-training BART model from scratch')
@@ -96,9 +118,11 @@ class RefreshBARTAgent(BanditAgent):
                     X_arm = X[arm_mask]
                     y_arm = y[arm_mask]
                     
-                    # Create new model instance
-                    self.models[arm] = self.model_factory()
-                    self.models[arm].fit(X_arm, y_arm, quietly=True)
+                    # Check if this arm has sufficient data
+                    if self._enough_data(y_arm):
+                        # Create new model instance
+                        self.models[arm] = self.model_factory()
+                        self.models[arm].fit(X_arm, y_arm, quietly=True)
         else:
             # Train single model for all arms
             self.model = self.model_factory()
