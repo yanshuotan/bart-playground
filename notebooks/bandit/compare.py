@@ -46,6 +46,7 @@ from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.ensemble_agent import EnsembleAgent
 from bart_playground.bandit.me_agents import HierTSAgent, LinearTSAgent2, LinearUCBAgent, METSAgent
 from bart_playground.bandit.bart_agent import BARTAgent, LogisticBARTAgent, DefaultBARTAgent, MultiChainBARTAgent
+from bart_playground.bandit.refresh_agent import RefreshDefaultBARTAgent, RefreshLogisticBARTAgent
 from bart_playground.bart import DefaultBART, LogisticBART
 
 from bart_playground.bandit.TEagents import TEAgent
@@ -165,8 +166,10 @@ else:
         # ("BARTs",       DefaultBARTAgent,       {}),
         ("BARTm",       DefaultBARTAgent,       {}),
         ("BARTo",       DefaultBARTAgent,       {}),
-        ("LogisticBARTm", LogisticBARTAgent, {}),
-        ("LogisticBARTo", LogisticBARTAgent, {}),
+        ("RefreshBARTm", RefreshDefaultBARTAgent, {}),
+        ("RefreshBARTo", RefreshDefaultBARTAgent, {}),
+        # ("LogisticBARTm", LogisticBARTAgent, {}),
+        # ("LogisticBARTo", LogisticBARTAgent, {}),
         # ("MCBARTs",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
         # ("MCBARTm",     MultiChainBARTAgent, { 'bart_class': DefaultBART }),
         # ("LogisticMCBARTm", MultiChainBARTAgent, { 'bart_class': LogisticBART }),
@@ -192,6 +195,11 @@ else:
             agent_kwargs['ndpost'] = 30
             agent_kwargs['n_trees'] = 50 # default number of trees
             agent_kwargs['nadd'] = 1 # default number of additional iterations
+            
+            if 'Refresh' in agent_name:
+                agent_kwargs['nskip'] *= 20
+                agent_kwargs['ndpost'] *= 20
+                agent_kwargs.pop('nadd')  # Remove 'nadd'
 
             if 'BARTm' in agent_name:
                 agent_kwargs['encoding'] = 'multi'
@@ -212,6 +220,10 @@ else:
                 # more_agent_specs.append((f"{agent_name}_iter0.5x", agent_class, agent_kwargs_new.copy()))
                 # agent_kwargs_new['nadd'] = 4
                 # more_agent_specs.append((f"{agent_name}_iter2x", agent_class, agent_kwargs_new.copy()))
+                
+                agent_kwargs_new = agent_kwargs.copy()
+                agent_kwargs_new['dirichlet_prior'] = True
+                more_agent_specs.append((f"{agent_name}_dirichlet", agent_class, agent_kwargs_new.copy()))
             else:
                 agent_kwargs['nadd'] = 1 # MultiChainBART only needs to use one additional iteration
                 agent_kwargs['n_ensembles'] = 4 # default number of ensembles          

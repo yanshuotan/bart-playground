@@ -298,6 +298,7 @@ class DefaultBARTAgent(BARTAgent):
     def __init__(self, n_arms: int, n_features: int, 
                  ndpost: int = 1000, nskip: int = 100, nadd: int = 3,
                  n_trees: int = 200, 
+                 dirichlet_prior: bool = False,
                  random_state: int = 42,
                  encoding: str = 'multi') -> None:
         model_factory = lambda: DefaultBART(
@@ -305,7 +306,8 @@ class DefaultBARTAgent(BARTAgent):
             ndpost=ndpost,
             nskip=nskip,
             random_state=random_state,
-            proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1}
+            proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
+            dirichlet_prior=dirichlet_prior
         )
         super().__init__(n_arms, n_features, model_factory, nadd, random_state, encoding)
         
