@@ -240,7 +240,7 @@ class BARTAgent(BanditAgent):
             # we need more than one unique outcome
             # and at least some (say, 4) observations per arm (or overall if not separate models)
             def _enough_data(outcomes, min_obs=4):
-                return outcomes.size >= min_obs and np.unique(outcomes).size > 1
+                return outcomes.size >= min_obs # and np.unique(outcomes).size > 1
 
             if self.separate_models:
                 criteria = all(
