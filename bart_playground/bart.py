@@ -19,8 +19,8 @@ class BART:
         """
         self.preprocessor = preprocessor
         self.sampler = sampler
-        self.ndpost = ndpost
-        self.nskip = nskip
+        self.ndpost = int(ndpost)
+        self.nskip = int(nskip)
         self.trace = []
         self.is_fitted = False
         self.data = None

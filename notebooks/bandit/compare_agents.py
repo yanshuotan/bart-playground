@@ -8,28 +8,8 @@ import ray
 import logging
 import pandas as pd
 
-from bart_playground.bandit.sim_util import simulate, Scenario
+from bart_playground.bandit.sim_util import simulate, Scenario, _sim_logger
 from bart_playground.bandit.ope import instantiate_agents
-
-def setup_logging():
-    """
-    Set up logging configuration for simulation.
-    """
-    # Logging information
-    logger = logging.getLogger("bandit_simulator")
-    logger.handlers.clear()
-    logger.propagate = False
-    logger.setLevel(logging.DEBUG)
-
-    c_handler = logging.StreamHandler()       # console
-    c_handler.setLevel(logging.INFO)
-    
-    c_fmt = "%(levelname)s %(name)s — %(message)s"
-    c_formatter = logging.Formatter(c_fmt)
-    c_handler.setFormatter(c_formatter)
-
-    logger.addHandler(c_handler)
-    return logger
 
 def add_logging_file(save_dir: str):
     now = datetime.now().strftime("%y%m%d_%H%M%S_%f")
@@ -45,7 +25,6 @@ def add_logging_file(save_dir: str):
     f_handler.setFormatter(f_formatter)
     logger.addHandler(f_handler)
 
-_ca_logger = setup_logging()
 AgentSpec = Tuple[str, Type, Dict[str, Any]]
 
 @ray.remote
@@ -71,10 +50,10 @@ def _run_single_simulation(sim, scenario, agent_specs, n_draws):
     # Create agents with different seeds for this simulation
     sim_agents = instantiate_agents(agent_specs, scenario.K, scenario.P, sim)
 
-    _ca_logger.debug(f"Shuffling scenario for simulation {sim} with random state {sim}...")
+    _sim_logger.debug(f"Shuffling scenario for simulation {sim} with random state {sim}...")
     scenario.shuffle(random_state=sim)
 
-    _ca_logger.debug(f"Scenario random generator state: {scenario.rng_state}")
+    _sim_logger.debug(f"Scenario random generator state: {scenario.rng_state}")
     # Run simulation
     cum_regrets, time_agents = simulate(scenario, sim_agents, n_draws=n_draws, agent_names=[name for name, _, _ in agent_specs])
     
@@ -107,20 +86,20 @@ def generate_simulation_data_for_agents(scenario_name: str, scenario: Scenario, 
     all_regrets = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
     all_times = {name: np.zeros((n_simulations, n_draws)) for name in agent_names}
     
-    _ca_logger.debug("Scenario information:")
-    _ca_logger.debug(f"  Name: {scenario_name}. Internal name: {internal_name}")
+    _sim_logger.debug("Scenario information:")
+    _sim_logger.debug(f"  Name: {scenario_name}. Internal name: {internal_name}")
     if hasattr(scenario, 'dataset_name'):
-        _ca_logger.debug(f"    Dataset: {scenario.dataset_name}")
-    _ca_logger.debug(f"  K (arms): {scenario.K}")
-    _ca_logger.debug(f"  P (features): {scenario.P}")
-    _ca_logger.debug(f"  Max draws: {scenario.max_draws}")
-    _ca_logger.debug("Agent names and specs:")
+        _sim_logger.debug(f"    Dataset: {scenario.dataset_name}")
+    _sim_logger.debug(f"  K (arms): {scenario.K}")
+    _sim_logger.debug(f"  P (features): {scenario.P}")
+    _sim_logger.debug(f"  Max draws: {scenario.max_draws}")
+    _sim_logger.debug("Agent names and specs:")
     for name, cls, kwargs in agent_specs:
-        _ca_logger.debug(f"  {name}: {cls.__name__}, kwargs: {kwargs}")
+        _sim_logger.debug(f"  {name}: {cls.__name__}, kwargs: {kwargs}")
 
     if parallel:
         # Run simulations in parallel
-        _ca_logger.info(f"Running {n_simulations} simulations in parallel using Ray...")
+        _sim_logger.info(f"Running {n_simulations} simulations in parallel using Ray...")
         results_futures = [
             _run_single_simulation_remote.remote(sim, scenario, agent_specs, n_draws)
             for sim in sim_indices
@@ -130,10 +109,10 @@ def generate_simulation_data_for_agents(scenario_name: str, scenario: Scenario, 
     else:
         # Run simulations sequentially
         results = []
-        _ca_logger.info(f"Sequentially running simulation.")
+        _sim_logger.info(f"Sequentially running simulation.")
         for i, sim in enumerate(sim_indices):
-            _ca_logger.info(f"Progress: {i}/{n_simulations}. Current sim index: {sim}. ")
-            _ca_logger.debug(f"Set np.random state: {sim}")
+            _sim_logger.info(f"Progress: {i}/{n_simulations}. Current sim index: {sim}. ")
+            _sim_logger.debug(f"Set np.random state: {sim}")
             np.random.seed(sim)  # Set random seed for reproducibility
             result : Tuple[int, np.ndarray, np.ndarray] = _run_single_simulation(sim, scenario, agent_specs, n_draws)
                 
@@ -149,7 +128,7 @@ def generate_simulation_data_for_agents(scenario_name: str, scenario: Scenario, 
                 file_path = os.path.join(save_dir, f"{scenario_name}_sim{sim}_{datetime.now().strftime('%m%d_%H%M')}.json")
                 with open(file_path, "w") as f:
                     json.dump(serializable_result, f, indent=4) 
-                _ca_logger.info(f"Saved results for simulation {sim} of {scenario_name} in {file_path}.")
+                _sim_logger.info(f"Saved results for simulation {sim} of {scenario_name} in {file_path}.")
 
             results.append(result)
     
@@ -159,7 +138,7 @@ def generate_simulation_data_for_agents(scenario_name: str, scenario: Scenario, 
             all_regrets[name][result_idx, :] = cum_regrets[:, i]
             all_times[name][result_idx, :] = time_agents[:, i]
 
-    _ca_logger.debug("Simulation data generation completed successfully.")
+    _sim_logger.debug("Simulation data generation completed successfully.")
 
     return {
         "scenario_name": scenario_name,
@@ -190,6 +169,7 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario],
     if isinstance(sim_indices, int):
         sim_indices = list(range(sim_indices))
     
+    from bart_playground.bandit.sim_util import setup_logging
     _ca_logger = setup_logging()
     if log_to_file:
         add_logging_file(save_dir)

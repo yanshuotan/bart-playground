@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Define datasets as an array (index 0-based)
-DATASETS=("Magic" "Adult" "Mushroom" "Shuttle" "Wine" "Heart" "Iris")  # Add more as needed
+DATASETS=("Magic" "Adult" "Mushroom" "Shuttle") # "Wine" "Heart" "Iris")  # Add more as needed
 
 # Get the current array index
 INDEX=$PBS_ARRAY_INDEX

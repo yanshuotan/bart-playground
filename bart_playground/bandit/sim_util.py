@@ -353,3 +353,25 @@ def simulate(scenario, agents, n_draws, agent_names: list[str]=[]):
         
     return cum_regrets, time_agents
 
+def setup_logging():
+    """
+    Set up logging configuration for simulation.
+    """
+    # Logging information
+    logger = logging.getLogger("bandit_simulator")
+    logger.handlers.clear()
+    logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+
+    c_handler = logging.StreamHandler()       # console
+    c_handler.setLevel(logging.INFO)
+    
+    c_fmt = "%(levelname)s %(name)s — %(message)s"
+    c_formatter = logging.Formatter(c_fmt)
+    c_handler.setFormatter(c_formatter)
+
+    logger.addHandler(c_handler)
+    return logger
+
+_sim_logger = setup_logging()
+
