@@ -76,7 +76,7 @@ default_arg = ['Shuttle'] # ['DrinkLess', 'Wine', 'Heart', 'Iris']
 # include more agent variations
 extensive = True
 
-n_simulations = 4  # Number of simulations per scenario
+n_simulations = 8  # Number of simulations per scenario
 sim_indices = list(range(n_simulations))  # Indices for simulations
 max_draws = 10000      # Number of draws per simulation
 
@@ -164,10 +164,10 @@ else:
         ("Random",      SillyAgent,      {'random_state':0}),
         ("XGBoostTS", TEAgent, {'agent_type': 'xgboost'}),
         ("RFTS", TEAgent, {'agent_type': 'random_forest'}),
-        # ("BARTs",       DefaultBARTAgent,       {}),
+        ("BARTs",       DefaultBARTAgent,       {}),
         ("BARTm",       DefaultBARTAgent,       {}),
         ("BARTo",       DefaultBARTAgent,       {}),
-        # ("RefreshBARTs", RefreshDefaultBARTAgent, {}),
+        ("RefreshBARTs", RefreshDefaultBARTAgent, {}),
         ("RefreshBARTm", RefreshDefaultBARTAgent, {}),
         ("RefreshBARTo", RefreshDefaultBARTAgent, {}),
         # ("LogisticBARTm", LogisticBARTAgent, {}),
@@ -224,8 +224,8 @@ else:
                 # more_agent_specs.append((f"{agent_name}_tree0.5x", agent_class, agent_kwargs_new.copy()))
                 agent_kwargs_new['n_trees'] = 100
                 more_agent_specs.append((f"{agent_name}_tree2x", agent_class, agent_kwargs_new.copy()))
-                agent_kwargs_new['n_trees'] = 150
-                more_agent_specs.append((f"{agent_name}_tree3x", agent_class, agent_kwargs_new.copy()))
+                # agent_kwargs_new['n_trees'] = 150
+                # more_agent_specs.append((f"{agent_name}_tree3x", agent_class, agent_kwargs_new.copy()))
                 
                 # agent_kwargs_new = agent_kwargs.copy()
                 # agent_kwargs_new['nadd'] = 1

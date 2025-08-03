@@ -333,6 +333,11 @@ class GlobalParamPrior:
         else:
             raise ValueError("Invalid specification for the noise variance prior.")
         
+        if sigma_hat <= 1e-5:
+            _sim_logger.warning("Estimated sigma_hat is too small, returning a small positive value (1e-5) to avoid numerical issues.")
+            _sim_logger.info(f"Estimated sigma_hat: {sigma_hat}, specification: {specification}")
+            sigma_hat = float(1e-5)
+        
         # chi2.ppf suffices
         c = chi2.ppf(1 - self.eps_q, df=self.eps_nu).item()
         eps_lambda_val = (sigma_hat**2 * c) / self.eps_nu
@@ -355,6 +360,10 @@ class GlobalParamPrior:
         post_alpha = prior_alpha + n / 2
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)
+        # if eps_sigma2[0] <= 1e-8:
+        #     _sim_logger.warning("Sampled eps_sigma2 is non-positive, returning a small positive value to avoid numerical issues.")
+        #     _sim_logger.info(f"Sampled eps_sigma2: {eps_sigma2}, prior_alpha: {prior_alpha}, prior_beta: {prior_beta}, post_alpha: {post_alpha}, post_beta: {post_beta}")
+        #     eps_sigma2[0] = 1e-8
         return eps_sigma2
 
 class BARTLikelihood:
@@ -413,6 +422,7 @@ class BARTLikelihood:
                 )     
             except Exception as e:
                 _sim_logger.error(f"Error calculating likelihood for tree {tree_ids[0]}: {e}")
+                _sim_logger.error(f"Data: {data_y}")
                 _sim_logger.error(f"Related information: leaf_ids: {tree.leaf_ids}; sample_n_in_node: {tree.n}; residuals: {resids}; eps_sigma2: {bart_params.global_params['eps_sigma2'][0]}; f_sigma2: {self.f_sigma2}", exc_info=True)
                 raise ValueError("Error calculating likelihood for single tree. Check the tree structure and residuals.")
         else:

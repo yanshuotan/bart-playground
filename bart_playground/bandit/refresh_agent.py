@@ -81,7 +81,7 @@ class RefreshBARTAgent(BanditAgent):
     
     def _enough_data(self, outcomes, min_obs=4):
         """Check if we have enough data for initial fit."""
-        return outcomes.size >= min_obs and np.unique(outcomes).size > 1
+        return outcomes.size >= min_obs # and np.unique(outcomes).size > 1
     
     def _has_sufficient_data(self) -> bool:
         """Check if we have sufficient data to fit the model."""
