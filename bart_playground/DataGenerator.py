@@ -415,18 +415,15 @@ class DataGenerator:
 
     def piecewise_linear_kunzel(self):
         # piecese wise linear function from Kunzel et al 2019
-        # the covariates are 20 dimentional with the same mean and variance as in low_lei_candes
-        # the is linear with the three pieces x_19 > 4 x_19 < -4 and 4 <= x_19 <= -4
+        # the covariates are n_features dimentional with the same mean and variance as in low_lei_candes
+        # the is linear with the three pieces based on the last feature
         # the coeffcients anre sampled uniformly from [-15, 15]
-        if not self.n_features == 20:
-            LOGGER.debug("n_features is not 20, using 20 for piecewise_linear_kunzel")
-            self.n_features = 20
         X = self.rng.multivariate_normal(mean=np.zeros(self.n_features), cov=np.eye(self.n_features) + 0.01 - 0.01 * np.eye(self.n_features), size=self.n_samples)
-        x_19 = X[:, 19]
+        x_last = X[:, -1]
         y_noiseless = np.zeros(self.n_samples)
-        idx_1 = x_19 > 4
-        idx_2 = x_19 < -4
-        idx_3 = (x_19 >= -4) & (x_19 <= 4)
+        idx_1 = x_last > 4
+        idx_2 = x_last < -4
+        idx_3 = (x_last >= -4) & (x_last <= 4)
         # Use local RNGs to avoid polluting the global state while keeping coefficients deterministic
         rng1 = np.random.default_rng(1)
         coefs1 = rng1.uniform(-15, 15, size=self.n_features)
