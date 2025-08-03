@@ -28,17 +28,10 @@ warnings.filterwarnings('ignore')
 
 import os, sys
 from typing import List
+import numpy as np
 import multiprocessing
 
 cores =  multiprocessing.cpu_count() - 1
-
-from bart_playground.bandit.sim_util import *
-from compare_agents import (
-    AgentSpec, compare_agents_across_scenarios, print_summary_results, plot_comparison_results,
-    _ca_logger
-)
-# from bart_playground.bandit.rome.rome_scenarios import HomogeneousScenario, NonlinearScenario
-from drinkless import DrinkLessScenario
 
 # %%
 from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
@@ -50,6 +43,14 @@ from bart_playground.bandit.refresh_agent import RefreshDefaultBARTAgent, Refres
 from bart_playground.bart import DefaultBART, LogisticBART
 
 from bart_playground.bandit.TEagents import TEAgent
+
+
+from compare_agents import (
+    AgentSpec, compare_agents_across_scenarios, print_summary_results, plot_comparison_results
+)
+from bart_playground.bandit.sim_util import _sim_logger, OpenMLScenario, FriedmanDScenario, FriedmanScenario, LinearScenario, GLMScenario, LinearFriedmanScenario
+# from bart_playground.bandit.rome.rome_scenarios import HomogeneousScenario, NonlinearScenario
+from drinkless import DrinkLessScenario
 
 # %% [markdown]
 # ### Initialization
@@ -71,11 +72,11 @@ bart_ini.fit(X_ini, y_ini)
 
 # %%
 # default scenario
-default_arg = ['Mushroom'] # ['DrinkLess', 'Wine', 'Heart', 'Iris']
+default_arg = ['Shuttle'] # ['DrinkLess', 'Wine', 'Heart', 'Iris']
 # include more agent variations
 extensive = True
 
-n_simulations = 8  # Number of simulations per scenario
+n_simulations = 4  # Number of simulations per scenario
 sim_indices = list(range(n_simulations))  # Indices for simulations
 max_draws = 10000      # Number of draws per simulation
 
@@ -91,7 +92,7 @@ try:
     from bart_playground.bandit.neural_paper_agents import NeuralTSDiagAgent, LinearTSDiagAgent, KernelTSDiagAgent, NeuralTSAgent, NLinearTSAgent, NKernelTSAgent
 except:
     has_gpu = False
-    _ca_logger.warning("Neural agents not available. Skipping GPU-based agents.")
+    _sim_logger.warning("Neural agents not available. Skipping GPU-based agents.")
 
 # %% [markdown]
 # #### Scenarios
@@ -166,6 +167,7 @@ else:
         # ("BARTs",       DefaultBARTAgent,       {}),
         ("BARTm",       DefaultBARTAgent,       {}),
         ("BARTo",       DefaultBARTAgent,       {}),
+        # ("RefreshBARTs", RefreshDefaultBARTAgent, {}),
         ("RefreshBARTm", RefreshDefaultBARTAgent, {}),
         ("RefreshBARTo", RefreshDefaultBARTAgent, {}),
         # ("LogisticBARTm", LogisticBARTAgent, {}),
@@ -195,11 +197,6 @@ else:
             agent_kwargs['ndpost'] = 30
             agent_kwargs['n_trees'] = 50 # default number of trees
             agent_kwargs['nadd'] = 1 # default number of additional iterations
-            
-            if 'Refresh' in agent_name:
-                agent_kwargs['nskip'] *= 20
-                agent_kwargs['ndpost'] *= 20
-                agent_kwargs.pop('nadd')  # Remove 'nadd'
 
             if 'BARTm' in agent_name:
                 agent_kwargs['encoding'] = 'multi'
@@ -207,6 +204,19 @@ else:
                 agent_kwargs['encoding'] = 'one-hot'
             elif 'BARTs' in agent_name:
                 agent_kwargs['encoding'] = 'separate'
+            
+            if 'Refresh' in agent_name:
+                agent_kwargs['nskip'] *= 20
+                agent_kwargs['ndpost'] *= 20
+                agent_kwargs.pop('nadd')  # Remove 'nadd'
+                if 'BARTs' in agent_name:
+                    agent_kwargs['nskip'] /= 2
+                    agent_kwargs['ndpost'] /= 2
+                    
+                agent_kwargs_new = agent_kwargs.copy()
+                agent_kwargs_new['nskip'] /= 2
+                agent_kwargs_new['ndpost'] /= 2
+                more_agent_specs.append((f"{agent_name}_iter0.5x", agent_class, agent_kwargs_new.copy()))
 
             if not 'MCBART' in agent_name:
                 agent_kwargs_new = agent_kwargs.copy()
@@ -214,6 +224,8 @@ else:
                 # more_agent_specs.append((f"{agent_name}_tree0.5x", agent_class, agent_kwargs_new.copy()))
                 agent_kwargs_new['n_trees'] = 100
                 more_agent_specs.append((f"{agent_name}_tree2x", agent_class, agent_kwargs_new.copy()))
+                agent_kwargs_new['n_trees'] = 150
+                more_agent_specs.append((f"{agent_name}_tree3x", agent_class, agent_kwargs_new.copy()))
                 
                 # agent_kwargs_new = agent_kwargs.copy()
                 # agent_kwargs_new['nadd'] = 1
@@ -221,9 +233,9 @@ else:
                 # agent_kwargs_new['nadd'] = 4
                 # more_agent_specs.append((f"{agent_name}_iter2x", agent_class, agent_kwargs_new.copy()))
                 
-                agent_kwargs_new = agent_kwargs.copy()
-                agent_kwargs_new['dirichlet_prior'] = True
-                more_agent_specs.append((f"{agent_name}_dirichlet", agent_class, agent_kwargs_new.copy()))
+                # agent_kwargs_new = agent_kwargs.copy()
+                # agent_kwargs_new['dirichlet_prior'] = True
+                # more_agent_specs.append((f"{agent_name}_dirichlet", agent_class, agent_kwargs_new.copy()))
             else:
                 agent_kwargs['nadd'] = 1 # MultiChainBART only needs to use one additional iteration
                 agent_kwargs['n_ensembles'] = 4 # default number of ensembles          
@@ -298,7 +310,7 @@ import pickle
 appendix_name = list(scenarios.keys())[0]  # Use the first scenario name as appendix
 result_filename = os.path.join(results_dir, f"result_{appendix_name}.pkl")
 pickle.dump(results, open(result_filename, "wb"))
-_ca_logger.info(f"Results saved to {result_filename}")
+_sim_logger.info(f"Results saved to {result_filename}")
 
 # %%
 results = pickle.load(file=open(result_filename, "rb"))
@@ -308,4 +320,4 @@ plot_comparison_results(
     results=results,
     save_loc=f"{results_dir}/agent_comparison_results_{appendix_name}.png"
 )
-_ca_logger.info(f"Plot saved to {results_dir}/agent_comparison_results_{appendix_name}.png")
+_sim_logger.info(f"Plot saved to {results_dir}/agent_comparison_results_{appendix_name}.png")

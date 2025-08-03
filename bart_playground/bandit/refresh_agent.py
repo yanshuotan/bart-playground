@@ -5,6 +5,7 @@ import logging
 from ..bart import DefaultBART, LogisticBART
 from .agent import BanditAgent
 from .bart_agent import BanditEncoder
+from .sim_util import _sim_logger
 
 class RefreshBARTAgent(BanditAgent):
     """
@@ -104,31 +105,40 @@ class RefreshBARTAgent(BanditAgent):
         """Re-fit the model from scratch using all historical data."""
         if not self._has_sufficient_data():
             return
-            
-        logging.info(f't = {self.t} - re-training BART model from scratch')
-        
+
+        _sim_logger.info(f't = {self.t} - re-training BART model from scratch')
+        # _sim_logger.info(f'Current model: {self.model.n_trees} trees, {self.model.ndpost} posterior samples, {self.model.nskip} burn-in samples, encoding = {self.encoding}')
+
         X = np.array(self.all_encoded_features)
         y = np.array(self.all_rewards)
-        
-        if self.separate_models:
-            # Train separate models for each arm
-            for arm in range(self.n_arms):
-                arm_mask = np.array(self.all_arms) == arm
-                if np.sum(arm_mask) > 0:  # Only train if we have data for this arm
+
+        try:
+            if self.separate_models:
+                # Train separate models for each arm
+                new_models = {}
+                for arm in range(self.n_arms):
+                    arm_mask = np.array(self.all_arms) == arm
                     X_arm = X[arm_mask]
                     y_arm = y[arm_mask]
-                    
-                    # Check if this arm has sufficient data
-                    if self._enough_data(y_arm):
-                        # Create new model instance
-                        self.models[arm] = self.model_factory()
-                        self.models[arm].fit(X_arm, y_arm, quietly=True)
-        else:
-            # Train single model for all arms
-            self.model = self.model_factory()
-            self.model.fit(X, y, quietly=True)
-        
-        self.is_model_fitted = True
+                    model = self.model_factory()
+                    model.fit(X_arm, y_arm, quietly=True)
+                    new_models[arm] = model
+
+                # Only replace if all fits succeeded
+                self.models = new_models
+
+            else:
+                new_model = self.model_factory()
+                new_model.fit(X, y, quietly=True)
+
+            # Only replace on success
+                self.model = new_model
+
+            self.is_model_fitted = True
+
+        except Exception:
+            _sim_logger.exception('Failed to refresh model; keeping previous model(s) in place')
+            # self.models or self.model and is_model_fitted remain as they were
     
     def _default_schedule(self, total_k) -> Callable[[int], float]:
     # weight 0 for the very first draw (burn-in), 

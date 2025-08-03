@@ -8,6 +8,8 @@ from .params import Parameters
 from .moves import Move
 from .util import Dataset, GIG
 
+from bart_playground.bandit.sim_util import _sim_logger
+    
 # Standalone Numba-optimized functions
 
 @njit(cache=True) 
@@ -146,7 +148,7 @@ class TreesPrior:
         self.f_k = f_k
         self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.generator = generator
-
+                
     def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """
         Resample the values of the leaf nodes for the specified trees.
@@ -401,13 +403,18 @@ class BARTLikelihood:
         if len(tree_ids) == 1:
             # For single tree, we can use the optimized function with leaf_ids
             tree = bart_params.trees[tree_ids[0]]
-            return _single_tree_log_marginal_lkhd_numba(
-                tree.leaf_ids, 
-                tree.n,
-                resids, 
-                bart_params.global_params["eps_sigma2"][0], 
-                self.f_sigma2
-            )
+            try:
+                return _single_tree_log_marginal_lkhd_numba(
+                    tree.leaf_ids, 
+                    tree.n,
+                    resids, 
+                    bart_params.global_params["eps_sigma2"][0], 
+                    self.f_sigma2
+                )     
+            except Exception as e:
+                _sim_logger.error(f"Error calculating likelihood for tree {tree_ids[0]}: {e}")
+                _sim_logger.error(f"Related information: leaf_ids: {tree.leaf_ids}; sample_n_in_node: {tree.n}; residuals: {resids}; eps_sigma2: {bart_params.global_params['eps_sigma2'][0]}; f_sigma2: {self.f_sigma2}", exc_info=True)
+                raise ValueError("Error calculating likelihood for single tree. Check the tree structure and residuals.")
         else:
             leaf_basis = bart_params.leaf_basis(tree_ids)
             return _trees_log_marginal_lkhd_numba(
@@ -445,7 +452,7 @@ class ComprehensivePrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, 
                  specification="linear", generator=np.random.default_rng(),
                  dirichlet_prior=False):
-        self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
+        self.tree_prior = TreesPrior(int(n_trees), tree_alpha, tree_beta, f_k, generator)
         self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 

@@ -2,7 +2,7 @@
 from logging import getLogger
 import pandas as pd
 import os
-from compare_agents import _ca_logger
+from compare_agents import _sim_logger
 
 def get_DrinkLess_all_day():
     # 1. Define Feather file paths relative to this script
@@ -192,7 +192,7 @@ class DrinkLessScenario(Scenario):
                 outcome_means[arm] = prob
                 rewards[arm] = self.rng.binomial(1, prob)
 
-                _ca_logger.warning(
+                _sim_logger.warning(
                     f"No data for context {x} and treatment arm {arm + 1}. "
                     "Ensure the context matches the dataset."
                 )
