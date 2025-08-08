@@ -317,7 +317,7 @@ def _parse_one(name: str) -> dict:
     m = _rgx.match(name)
     if not m:          # invalid → all None
         return {
-            'Agent': name, 'Model': None, 'MC': None,
+            'Agent': name, 'Model': None, 'MC': None, 'Refresh': None,
             'Iter': None, 'Tree': None
         }
 
@@ -325,6 +325,7 @@ def _parse_one(name: str) -> dict:
         'Agent': name,
         'Model': f"{'Logistic ' if m.group('log') else ''}{m.group('cat')}",
         'MC':    'yes' if m.group('mc') else 'no',
+        'Refresh': 'yes' if m.group('refresh') else 'no',
         'Iter':  m.group('iter') or '1x',
         'Tree':  m.group('tree') or '1x',
     }
@@ -338,6 +339,7 @@ def _parse_agents(names):
         _rgx = re.compile(
             r'^(?P<log>Logistic)?'          # optional “Logistic”
             r'(?P<mc>MC)?'                  # optional “MC”
+            r'(?P<refresh>Refresh)?'      # optional "Refresh"
             r'BART(?P<cat>[mos])'           # required “BARTm|o|s”
             r'(?:_iter(?P<iter>0\.5x|2x))?' # optional “_iter0.5x|2x”
             r'(?:_tree(?P<tree>0\.5x|2x))?' # optional “_tree0.5x|2x”
@@ -346,7 +348,7 @@ def _parse_agents(names):
 
     rows       = [_parse_one(n) for n in names]
     originals  = [r.copy() for r in rows]              # freeze originals
-    props      = ('Model', 'MC', 'Iter', 'Tree')
+    props      = ('Model', 'MC', 'Iter', 'Tree', 'Refresh')
 
     for p in props:
         # group by the OTHER three properties
@@ -449,7 +451,7 @@ def plot_print_total_regret_factors(results: Dict[str, Dict]) -> None:
     draw_index = -1  # Use the last draw (all cumulative regrets) for boxplots
     results = add_average_scenario(results)
     
-    factor_cols = ['Model', 'Tree', 'Iter', 'MC']
+    factor_cols = ['Model', 'Tree', 'Iter', 'MC', 'Refresh']
     from collections import defaultdict
     cat_means = {c: defaultdict(dict) for c in factor_cols}
 
