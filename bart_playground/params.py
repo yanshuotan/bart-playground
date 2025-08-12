@@ -1,3 +1,4 @@
+from calendar import c
 import numpy as np
 from typing import Optional
 from numpy.typing import NDArray
@@ -139,8 +140,8 @@ def _traverse_tree_single(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarra
             n_to_update[current_node] += 1 # Increment count for the subtree node
     return current_node
 
-@njit
-def _simulate_split_leaf(dataX, vars, thresholds, node_id, var, threshold, original_leaf_ids):
+@njit(cache=True)
+def _simulate_split_leaf(dataX, vars, thresholds, node_id, var, threshold, original_leaf_ids, original_n):
     """
     Simulate the data needed for likelihood and prior calculation after a hypothetical split,
     without actually modifying the tree structure.
@@ -178,6 +179,7 @@ def _simulate_split_leaf(dataX, vars, thresholds, node_id, var, threshold, origi
     
     # Initialize new counts
     new_n = np.zeros(max_needed_size, dtype=np.int32)
+    new_n[:n_nodes] = original_n
     new_leaf_ids = np.zeros(len(original_leaf_ids), dtype=np.int16)
     
     # Update leaf assignments and counts for samples that were in the split node
@@ -193,7 +195,6 @@ def _simulate_split_leaf(dataX, vars, thresholds, node_id, var, threshold, origi
         else:
             # This sample was not in the split node, keep original assignment
             new_leaf_ids[i] = original_leaf_ids[i]
-            new_n[original_leaf_ids[i]] += 1
     
     return new_leaf_ids, new_n, new_vars
 
@@ -454,7 +455,7 @@ class Tree:
             raise ValueError("Node is not a leaf and cannot be split.")
         
         return _simulate_split_leaf(
-            self.dataX, self.vars, self.thresholds, node_id, var, threshold, self.leaf_ids
+            self.dataX, self.vars, self.thresholds, node_id, var, threshold, self.leaf_ids, self.n
         )
 
     def prune_split(self, node_id: int, recursive = False):

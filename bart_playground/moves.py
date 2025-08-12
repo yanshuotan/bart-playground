@@ -235,6 +235,7 @@ class MultiGrow(Grow):
     
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
+        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         n_samples = self.get_n_samples(tree)
         all_candidates = [
             (node_id, var, threshold)
@@ -256,9 +257,6 @@ class MultiGrow(Grow):
             left_child = node_id * 2 + 1
             right_child = node_id * 2 + 2
             if new_n[left_child] > 0 and new_n[right_child] > 0:
-                # Calculate residuals for this tree only
-                residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
-                
                 # Calculate likelihood using simulated data
                 log_likelihood = self._calculate_simulated_likelihood(
                     new_leaf_ids, new_n, residuals
@@ -280,8 +278,7 @@ class MultiGrow(Grow):
         log_bwd_weights = np.array([w for _, _, _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
-        weights = bwd_weights / bwd_weights.sum()
-        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights) # Select y
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights) # Select y
         node_id, var, threshold, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
 
@@ -307,9 +304,6 @@ class MultiGrow(Grow):
         for prune_node_id in prune_candidates:
             # Use simulation function instead of copy + prune_split
             new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(prune_node_id)
-            
-            # Calculate residuals for this tree only
-            residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
             
             # Calculate likelihood using simulated data
             log_likelihood = self._calculate_simulated_likelihood(
@@ -343,6 +337,7 @@ class MultiPrune(Prune):
         
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
+        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         n_samples = self.get_n_samples(tree)
         all_candidates = list(tree.terminal_split_nodes)
         self.candidate_sampling_ratio = 1 # Just a placeholder, not used in MultiPrune because prune always succeeds
@@ -361,9 +356,6 @@ class MultiPrune(Prune):
             # Use simulation function instead of copy + prune_split for candidate evaluation
             new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(node_id)
             
-            # Calculate residuals for this tree only
-            residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
-            
             # Calculate likelihood using simulated data
             log_likelihood = self._calculate_simulated_likelihood(
                 new_leaf_ids, new_n, residuals
@@ -378,8 +370,7 @@ class MultiPrune(Prune):
         log_bwd_weights = np.array([w for _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
-        weights = bwd_weights / bwd_weights.sum()
-        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights)
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
         node_id, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
 
@@ -421,9 +412,6 @@ class MultiPrune(Prune):
             left_child = leaf_id * 2 + 1
             right_child = leaf_id * 2 + 2
             if new_n[left_child] > 0 and new_n[right_child] > 0:
-                # Calculate residuals for this tree only
-                residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
-                
                 # Calculate likelihood using simulated data
                 log_likelihood = self._calculate_simulated_likelihood(
                     new_leaf_ids, new_n, residuals
@@ -455,6 +443,7 @@ class MultiChange(Change):
 
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
+        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         n_samples = self.get_n_samples(tree)
         all_candidates = [
             (node_id, var, threshold)
@@ -473,15 +462,12 @@ class MultiChange(Change):
             
             # Check if change is valid - all leaf nodes should have samples
             valid = True
-            for i in range(len(new_vars)):
+            for i in range(node_id, len(new_vars)):
                 if new_vars[i] != -2 and new_n[i] == 0:
                     valid = False
                     break
             
             if valid:
-                # Calculate residuals for this tree only
-                residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
-                
                 # Calculate likelihood using simulated data
                 log_likelihood = self._calculate_simulated_likelihood(
                     new_leaf_ids, new_n, residuals
@@ -502,8 +488,7 @@ class MultiChange(Change):
         log_bwd_weights = np.array([w for _, _, _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
-        weights = bwd_weights / bwd_weights.sum()
-        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights)
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
         node_id, var, threshold, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
         log_p_bwd = log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
@@ -536,15 +521,12 @@ class MultiChange(Change):
             
             # Check if change is valid - all leaf nodes should have samples
             valid = True
-            for i in range(len(new_vars)):
+            for i in range(nid, len(new_vars)):
                 if new_vars[i] != -2 and new_n[i] == 0:
                     valid = False
                     break
             
-            if valid:
-                # Calculate residuals for this tree only
-                residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
-                
+            if valid:                
                 # Calculate likelihood using simulated data
                 log_likelihood = self._calculate_simulated_likelihood(
                     new_leaf_ids, new_n, residuals
@@ -572,6 +554,7 @@ class MultiSwap(Swap):
 
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
+        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         all_candidates = [
             (parent_id, 2 * parent_id + lr)
             for parent_id in tree.nonterminal_split_nodes
@@ -589,15 +572,12 @@ class MultiSwap(Swap):
             
             # Check if swap is valid - all leaf nodes should have samples
             valid = True
-            for i in range(len(new_vars)):
+            for i in range(parent_id, len(new_vars)):
                 if new_vars[i] != -2 and new_n[i] == 0:
                     valid = False
                     break
 
             if valid:
-                # Calculate residuals for this tree only
-                residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
-                
                 # Calculate likelihood using simulated data
                 log_likelihood = self._calculate_simulated_likelihood(
                     new_leaf_ids, new_n, residuals
@@ -618,8 +598,7 @@ class MultiSwap(Swap):
         log_bwd_weights = np.array([w for _, _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
-        weights = bwd_weights / bwd_weights.sum()
-        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights)
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
         parent_id, child_id, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
         log_p_bwd = log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
@@ -647,15 +626,12 @@ class MultiSwap(Swap):
             
             # Check if swap is valid - all leaf nodes should have samples
             valid = True
-            for i in range(len(new_vars)):
+            for i in range(p_id, len(new_vars)):
                 if new_vars[i] != -2 and new_n[i] == 0:
                     valid = False
                     break
 
             if valid:
-                # Calculate residuals for this tree only
-                residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
-                
                 # Calculate likelihood using simulated data
                 log_likelihood = self._calculate_simulated_likelihood(
                     new_leaf_ids, new_n, residuals
