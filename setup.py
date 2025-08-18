@@ -11,7 +11,7 @@ def parse_requirements(file_path):
 
 setup(
     name="bart_playground",          
-    version="0.1.0",        
+    version="0.1.1",
     packages=["bart_playground"],          
     install_requires=parse_requirements("requirements.txt"),              
     python_requires=">=3.7",            
