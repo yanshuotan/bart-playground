@@ -221,6 +221,18 @@ class TreesPrior:
         log_prior_proposed = self.trees_log_prior(move.proposed, move.trees_changed)
         return log_prior_proposed - log_prior_current
 
+    def calculate_simulated_prior(self, new_vars):
+        """
+        Calculate tree prior using simulated vars array.
+        
+        Parameters:
+        - new_vars: Simulated vars array after hypothetical split
+        
+        Returns:
+        - float: Log prior probability
+        """
+        return _trees_log_prior_numba(new_vars, self.alpha, self.beta)
+
 class GlobalParamPrior:
     """
     Prior for global parameters (noise variance).

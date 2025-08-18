@@ -1,3 +1,4 @@
+from calendar import c
 import numpy as np
 from typing import Optional
 from numpy.typing import NDArray
@@ -41,6 +42,37 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
             break
 
     return success
+
+@njit
+def _update_n_and_leaf_id_numba_copy(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_leaf_id):
+    """
+    Numba-optimized function to update all node counts and leaf_ids.
+    If append is True, dataX should be appended to the existing data.
+    """
+    n_nodes = len(vars)
+
+    # Modify in place to avoid copying
+    n = prev_n.copy()
+    leaf_ids = prev_leaf_id.copy()
+    # If appending, we need to take the offset into account when accessing leaf_ids
+    offset = prev_leaf_id.shape[0] - dataX.shape[0] if append else 0
+    desc = _descendants_numba(starting_node, vars)
+    
+    subtree_nodes = np.zeros(n_nodes, np.bool_)
+    for j in desc:
+        subtree_nodes[j] = True
+        if not append:
+            n[j] = 0 # starting node is not updated
+    
+    for i in range(dataX.shape[0]):
+        current_node = leaf_ids[offset + i]
+        # Need update
+        if append or current_node == starting_node or subtree_nodes[current_node]:
+            leaf_ids[offset + i] = _traverse_tree_single(
+                dataX[i], vars, thresholds, starting_node, n
+            )
+            
+    return leaf_ids, n
 
 @njit
 def _descendants_numba(node_id: int, vars: NDArray[np.int32]):
@@ -107,6 +139,64 @@ def _traverse_tree_single(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarra
         if n_to_update is not None:
             n_to_update[current_node] += 1 # Increment count for the subtree node
     return current_node
+
+@njit(cache=True)
+def _simulate_split_leaf(dataX, vars, thresholds, node_id, var, threshold, original_leaf_ids, original_n):
+    """
+    Simulate the data needed for likelihood and prior calculation after a hypothetical split,
+    without actually modifying the tree structure.
+    
+    Parameters:
+    - dataX: Input data matrix
+    - vars: Current tree variables array
+    - thresholds: Current tree thresholds array  
+    - node_id: Node to split
+    - var: Variable to split on
+    - threshold: Threshold to split at
+    - original_leaf_ids: Current leaf assignments
+    
+    Returns:
+    - new_leaf_ids: Updated leaf assignments after hypothetical split
+    - new_n: Updated node counts after hypothetical split
+    - new_vars: Updated vars array after hypothetical split
+    """
+    n_nodes = len(vars)
+    left_child = node_id * 2 + 1
+    right_child = node_id * 2 + 2
+    
+    # Create new arrays for the hypothetical tree state
+    max_needed_size = 2 * n_nodes if right_child >= n_nodes else n_nodes
+    new_vars = np.full(max_needed_size, -2, dtype=np.int32)
+    new_vars[:n_nodes] = vars
+    new_thresholds = np.full(max_needed_size, np.nan, dtype=np.float32)
+    new_thresholds[:n_nodes] = thresholds
+    
+    # Apply the hypothetical split
+    new_vars[node_id] = var
+    new_thresholds[node_id] = threshold
+    new_vars[left_child] = -1
+    new_vars[right_child] = -1
+    
+    # Initialize new counts
+    new_n = np.zeros(max_needed_size, dtype=np.int32)
+    new_n[:n_nodes] = original_n
+    new_leaf_ids = np.zeros(len(original_leaf_ids), dtype=np.int16)
+    
+    # Update leaf assignments and counts for samples that were in the split node
+    for i in range(len(original_leaf_ids)):
+        if original_leaf_ids[i] == node_id:
+            # This sample was in the node being split, need to reassign
+            if dataX[i, var] <= threshold:
+                new_leaf_ids[i] = left_child
+                new_n[left_child] += 1
+            else:
+                new_leaf_ids[i] = right_child
+                new_n[right_child] += 1
+        else:
+            # This sample was not in the split node, keep original assignment
+            new_leaf_ids[i] = original_leaf_ids[i]
+    
+    return new_leaf_ids, new_n, new_vars
 
 class Tree:
     """
@@ -350,6 +440,23 @@ class Tree:
         )
 
         return is_valid
+    
+    def simulate_split_leaf(self, node_id: int, var: int, threshold: np.float32):
+        """
+        Simulate the data needed for likelihood and prior calculation after a hypothetical split,
+        without actually modifying the tree.
+        
+        Returns:
+        - new_leaf_ids: Updated leaf assignments after hypothetical split
+        - new_n: Updated node counts after hypothetical split
+        - new_vars: Updated vars array after hypothetical split
+        """
+        if self.vars[node_id] != -1:
+            raise ValueError("Node is not a leaf and cannot be split.")
+        
+        return _simulate_split_leaf(
+            self.dataX, self.vars, self.thresholds, node_id, var, threshold, self.leaf_ids, self.n
+        )
 
     def prune_split(self, node_id: int, recursive = False):
         """
@@ -388,6 +495,39 @@ class Tree:
         # Truncate unnecessary space in the tree arrays
         self._truncate_tree_arrays()
 
+    def simulate_prune_split(self, node_id: int):
+        """
+        Simulate the data needed for likelihood and prior calculation after a hypothetical prune,
+        without actually modifying the tree.
+        
+        Returns:
+        - new_leaf_ids: Updated leaf assignments after hypothetical prune
+        - new_n: Updated node counts after hypothetical prune
+        - new_vars: Updated vars array after hypothetical prune
+        """
+        # Check similar to original prune_split
+        if not self.is_terminal_split_node(node_id):
+            raise ValueError("Node is not a terminal split node and cannot be pruned.")
+        
+        # Create copies instead of modifying self
+        new_vars = self.vars.copy()
+        new_leaf_ids = self.leaf_ids.copy()
+        new_n = self.n.copy()
+        
+        # Same logic as original prune_split
+        desc = _descendants_numba(node_id, self.vars)
+        
+        for this_node in desc:
+            new_vars[this_node] = -2  # Mark all descendant nodes as pruned
+            if self.cache_exists:
+                new_n[this_node] = 0
+                new_leaf_ids[new_leaf_ids == this_node] = node_id  # Update leaf_ids for pruned nodes
+        
+        # Turn the original node into a leaf
+        new_vars[node_id] = -1
+        
+        return new_leaf_ids, new_n, new_vars
+
     def change_split(self, node_id, var, threshold, update_n=True):
         self.vars[node_id] = var
         self.thresholds[node_id] = threshold
@@ -395,12 +535,70 @@ class Tree:
             return self.update_n(node_id)
         return True
     
+    def simulate_change_split(self, node_id: int, var: int, threshold: np.float32):
+        """
+        Simulate the data needed for likelihood and prior calculation after a hypothetical change split,
+        without actually modifying the tree.
+        
+        Returns:
+        - new_leaf_ids: Updated leaf assignments after hypothetical change split
+        - new_n: Updated node counts after hypothetical change split
+        - new_vars: Updated vars array after hypothetical change split
+        """
+
+        # Create copies of vars and thresholds for the hypothetical tree state
+        new_vars = self.vars.copy()
+        new_thresholds = self.thresholds.copy()
+        
+        # Apply the hypothetical change
+        new_vars[node_id] = var
+        new_thresholds[node_id] = threshold
+        
+        # Use the existing numba function to update n and leaf_ids
+        new_leaf_ids, new_n = _update_n_and_leaf_id_numba_copy(
+            node_id, self.dataX, False, new_vars, new_thresholds, self.n, self.leaf_ids
+        )
+        
+        return new_leaf_ids, new_n, new_vars
+    
     def swap_split(self, parent_id, child_id):
         parent_var, parent_threshold = self.vars[parent_id], self.thresholds[parent_id]
         child_var, child_threshold = self.vars[child_id], self.thresholds[child_id]
         self.change_split(child_id, parent_var, parent_threshold, update_n=False)
         is_valid = self.change_split(parent_id, child_var, child_threshold, update_n=True)
         return is_valid
+    
+    def simulate_swap_split(self, parent_id: int, child_id: int):
+        """
+        Simulate the data needed for likelihood and prior calculation after a hypothetical swap split,
+        without actually modifying the tree.
+        
+        Returns:
+        - new_leaf_ids: Updated leaf assignments after hypothetical swap
+        - new_n: Updated node counts after hypothetical swap
+        - new_vars: Updated vars array after hypothetical swap
+        """
+        # Get the original split parameters
+        parent_var, parent_threshold = self.vars[parent_id], self.thresholds[parent_id]
+        child_var, child_threshold = self.vars[child_id], self.thresholds[child_id]
+        
+        # Create copies of vars and thresholds for the hypothetical tree state
+        new_vars = self.vars.copy()
+        new_thresholds = self.thresholds.copy()
+        
+        # Apply the hypothetical swap (similar to swap_split logic)
+        new_vars[child_id] = parent_var
+        new_vars[parent_id] = child_var
+        new_thresholds[child_id] = parent_threshold
+        new_thresholds[parent_id] = child_threshold
+        
+        # Use the existing numba function to update n and leaf_ids
+        # We start from the parent node since it's higher in the tree hierarchy
+        new_leaf_ids, new_n = _update_n_and_leaf_id_numba_copy(
+            parent_id, self.dataX, False, new_vars, new_thresholds, self.n, self.leaf_ids
+        )
+        
+        return new_leaf_ids, new_n, new_vars
     
     def update_n(self, node_id=0):
         """
