@@ -453,6 +453,18 @@ class BARTLikelihood:
             log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, np.arange(move.current.n_trees))
         return log_lkhd_proposed - log_lkhd_current
 
+    def calculate_simulated_likelihood(self, new_leaf_ids, new_n, residuals, eps_sigma2):
+        """
+        Calculate likelihood using simulated split data without modifying the tree.
+        """
+        return _single_tree_log_marginal_lkhd_numba(
+            new_leaf_ids,
+            new_n, 
+            residuals,
+            eps_sigma2=eps_sigma2,
+            f_sigma2=self.f_sigma2
+        )
+
 class ComprehensivePrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, 
                  specification="linear", generator=np.random.default_rng(),

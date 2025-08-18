@@ -236,6 +236,7 @@ class MultiGrow(Grow):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
+        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
         n_samples = self.get_n_samples(tree)
         all_candidates = [
             (node_id, var, threshold)
@@ -258,8 +259,8 @@ class MultiGrow(Grow):
             right_child = node_id * 2 + 2
             if new_n[left_child] > 0 and new_n[right_child] > 0:
                 # Calculate likelihood using simulated data
-                log_likelihood = self._calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals
+                log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
                 
                 # Calculate prior using simulated data
@@ -306,8 +307,8 @@ class MultiGrow(Grow):
             new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(prune_node_id)
             
             # Calculate likelihood using simulated data
-            log_likelihood = self._calculate_simulated_likelihood(
-                new_leaf_ids, new_n, residuals
+            log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
             )
             
             # Calculate prior using simulated data
@@ -338,6 +339,7 @@ class MultiPrune(Prune):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
+        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
         n_samples = self.get_n_samples(tree)
         all_candidates = list(tree.terminal_split_nodes)
         self.candidate_sampling_ratio = 1 # Just a placeholder, not used in MultiPrune because prune always succeeds
@@ -357,8 +359,8 @@ class MultiPrune(Prune):
             new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(node_id)
             
             # Calculate likelihood using simulated data
-            log_likelihood = self._calculate_simulated_likelihood(
-                new_leaf_ids, new_n, residuals
+            log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
             )
             
             # Calculate prior using simulated data
@@ -413,8 +415,8 @@ class MultiPrune(Prune):
             right_child = leaf_id * 2 + 2
             if new_n[left_child] > 0 and new_n[right_child] > 0:
                 # Calculate likelihood using simulated data
-                log_likelihood = self._calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals
+                log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
                 
                 # Calculate prior using simulated data
@@ -444,6 +446,7 @@ class MultiChange(Change):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
+        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
         n_samples = self.get_n_samples(tree)
         all_candidates = [
             (node_id, var, threshold)
@@ -469,8 +472,8 @@ class MultiChange(Change):
             
             if valid:
                 # Calculate likelihood using simulated data
-                log_likelihood = self._calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals
+                log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
                 
                 # Note: No prior calculation needed for change operations 
@@ -528,8 +531,8 @@ class MultiChange(Change):
             
             if valid:                
                 # Calculate likelihood using simulated data
-                log_likelihood = self._calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals
+                log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
                 
                 log_pi = log_likelihood
@@ -555,6 +558,7 @@ class MultiSwap(Swap):
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
+        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
         all_candidates = [
             (parent_id, 2 * parent_id + lr)
             for parent_id in tree.nonterminal_split_nodes
@@ -579,8 +583,8 @@ class MultiSwap(Swap):
 
             if valid:
                 # Calculate likelihood using simulated data
-                log_likelihood = self._calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals
+                log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
                 
                 # Note: No prior calculation needed for swap operations 
@@ -633,8 +637,8 @@ class MultiSwap(Swap):
 
             if valid:
                 # Calculate likelihood using simulated data
-                log_likelihood = self._calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals
+                log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
                 
                 log_pi = log_likelihood

@@ -1,6 +1,4 @@
 from abc import ABC, abstractmethod
-from re import U
-
 import numpy as np
 from numba import njit, objmode, f8
 from scipy.special import kv
