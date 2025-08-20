@@ -110,6 +110,44 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
 @njit(cache=True)
+def _leaf_log_marginal_lkhd(sample_n, resid_sum, eps_sigma2, f_sigma2):
+    noise_ratio = eps_sigma2 / f_sigma2
+    logdet = math.log(sample_n / noise_ratio + 1.0)
+    ls_resids = - (resid_sum ** 2) / sample_n
+    ridge_bias = (resid_sum ** 2) / (sample_n * (sample_n / noise_ratio + 1.0))
+    return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
+
+@njit(cache=True)
+def fast_grow_likelihood_delta_numba(old_leaf_idx, tree_leaf_ids, tree_n, sim_leaf_ids, sim_n, residuals, eps_sigma2, f_sigma2):
+    left_child = 2 * old_leaf_idx + 1
+    right_child = 2 * old_leaf_idx + 2
+
+    # Old leaf stats
+    resid_sum_old = 0.0
+
+    # New leaves stats
+    resid_sum_left = 0.0
+    resid_sum_right = 0.0
+
+    # Loop
+    for i in range(len(tree_leaf_ids)):
+        if tree_leaf_ids[i] == old_leaf_idx:
+            resid_sum_old += residuals[i]
+            if sim_leaf_ids[i] == left_child:
+                resid_sum_left += residuals[i]
+            elif sim_leaf_ids[i] == right_child:
+                resid_sum_right += residuals[i]
+
+    sample_n_old = tree_n[old_leaf_idx]
+    L_old = _leaf_log_marginal_lkhd(sample_n_old, resid_sum_old, eps_sigma2, f_sigma2)
+    sample_n_left = sim_n[left_child]
+    sample_n_right = sim_n[right_child]
+    L_new_left = _leaf_log_marginal_lkhd(sample_n_left, resid_sum_left, eps_sigma2, f_sigma2)
+    L_new_right = _leaf_log_marginal_lkhd(sample_n_right, resid_sum_right, eps_sigma2, f_sigma2)
+
+    return (L_new_left + L_new_right) - L_old
+
+@njit(cache=True)
 def _trees_log_prior_numba(tree_vars, alpha, beta):
     # Calculate depth for each node
     d = np.ceil(np.log2(np.arange(len(tree_vars)) + 2)) - 1
@@ -461,6 +499,21 @@ class BARTLikelihood:
             new_leaf_ids,
             new_n, 
             residuals,
+            eps_sigma2=eps_sigma2,
+            f_sigma2=self.f_sigma2
+        )
+
+    def calculate_lkhd_delta(self, old_leaf_idx, tree_leaf_ids, tree_n, new_leaf_ids, new_n, residuals, eps_sigma2):
+        """
+        Calculate the change in likelihood due to a split.
+        """
+        return fast_grow_likelihood_delta_numba(
+            old_leaf_idx=old_leaf_idx,
+            tree_leaf_ids=tree_leaf_ids,
+            tree_n=tree_n,
+            sim_leaf_ids=new_leaf_ids,
+            sim_n=new_n,
+            residuals=residuals,
             eps_sigma2=eps_sigma2,
             f_sigma2=self.f_sigma2
         )

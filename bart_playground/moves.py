@@ -1,7 +1,10 @@
+from matplotlib.pylab import f
 import numpy as np
 import math
 from abc import ABC, abstractmethod
 from typing import Optional
+
+from torch import log_
 from .params import Parameters
 from .util import fast_choice, fast_choice_with_weights
 
@@ -249,8 +252,12 @@ class MultiGrow(Grow):
 
         candidates = []
         n_candidate_trials = 0
+        log_lkhd_old = self.likelihood.calculate_simulated_likelihood(
+            tree.leaf_ids, tree.n, residuals, eps_sigma2=eps_sigma2
+        )
         for node_id, var, threshold in all_candidates:
             n_candidate_trials += 1
+            threshold = np.float32(threshold)
             # Use the combined simulation function instead of copy + split_leaf
             new_leaf_ids, new_n, new_vars = tree.simulate_split_leaf(node_id, var, threshold)
 
@@ -259,14 +266,19 @@ class MultiGrow(Grow):
             right_child = node_id * 2 + 2
             if new_n[left_child] > 0 and new_n[right_child] > 0:
                 # Calculate likelihood using simulated data
-                log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                log_lkhd_change = self.likelihood.calculate_lkhd_delta(
+                    old_leaf_idx=node_id,
+                    tree_leaf_ids=tree.leaf_ids,
+                    tree_n=tree.n,
+                    new_leaf_ids=new_leaf_ids,
+                    new_n=new_n,
+                    residuals=residuals,
+                    eps_sigma2=eps_sigma2
                 )
-                
                 # Calculate prior using simulated data
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                
-                log_pi = log_likelihood + log_prior
+
+                log_pi = log_lkhd_old + log_lkhd_change + log_prior
                 candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
                 if len(candidates) >= n_samples:
                     break
@@ -302,19 +314,28 @@ class MultiGrow(Grow):
         prune_candidates = [node_id] + sampled_others
 
         log_fwd_weights = []
+        log_lkhd_old = self.likelihood.calculate_simulated_likelihood(
+            tree.leaf_ids, tree.n, residuals, eps_sigma2=eps_sigma2
+        )
         for prune_node_id in prune_candidates:
             # Use simulation function instead of copy + prune_split
             new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(prune_node_id)
             
             # Calculate likelihood using simulated data
-            log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+            log_lkhd_change = self.likelihood.calculate_lkhd_delta(
+                old_leaf_idx=prune_node_id,
+                tree_leaf_ids=new_leaf_ids,
+                tree_n=new_n,
+                new_leaf_ids=tree.leaf_ids,
+                new_n=tree.n,
+                residuals=residuals,
+                eps_sigma2=eps_sigma2
             )
-            
+
             # Calculate prior using simulated data
             log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-            
-            log_pi = log_likelihood + log_prior
+
+            log_pi = log_lkhd_old - log_lkhd_change + log_prior
             log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_weights = np.array(log_fwd_weights)
         log_weight_x = log_fwd_weights[[0]]
@@ -354,19 +375,28 @@ class MultiPrune(Prune):
             sampled_candidates = all_candidates
 
         candidates = []
+        log_lkhd_old = self.likelihood.calculate_simulated_likelihood(
+            tree.leaf_ids, tree.n, residuals, eps_sigma2=eps_sigma2
+        )
         for node_id in sampled_candidates:
             # Use simulation function instead of copy + prune_split for candidate evaluation
             new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(node_id)
             
             # Calculate likelihood using simulated data
-            log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
-            )
+            log_lkhd_change = self.likelihood.calculate_lkhd_delta(
+                    old_leaf_idx=node_id,
+                    tree_leaf_ids=new_leaf_ids,
+                    tree_n=new_n,
+                    new_leaf_ids=tree.leaf_ids,
+                    new_n=tree.n,
+                    residuals=residuals,
+                    eps_sigma2=eps_sigma2
+                )
             
             # Calculate prior using simulated data
             log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
             
-            log_pi = log_likelihood + log_prior
+            log_pi = log_lkhd_old - log_lkhd_change + log_prior
             candidates.append((node_id, 0.5*float(log_pi)))
 
         log_bwd_weights = np.array([w for _, w in candidates])
@@ -404,7 +434,11 @@ class MultiPrune(Prune):
         grow_candidates = [grow_candidate] + all_grow_candidates
 
         log_fwd_weights = []
+        log_lkhd_old = self.likelihood.calculate_simulated_likelihood(
+            tree.leaf_ids, tree.n, residuals, eps_sigma2=eps_sigma2
+        )
         for leaf_id, var, threshold in grow_candidates:
+            threshold = np.float32(threshold)
             if len(log_fwd_weights) >= n_samples:
                 break
             # Use simulation functions instead of copy + split_leaf
@@ -415,14 +449,20 @@ class MultiPrune(Prune):
             right_child = leaf_id * 2 + 2
             if new_n[left_child] > 0 and new_n[right_child] > 0:
                 # Calculate likelihood using simulated data
-                log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                log_lkhd_change = self.likelihood.calculate_lkhd_delta(
+                    old_leaf_idx=leaf_id,
+                    tree_leaf_ids=tree.leaf_ids,
+                    tree_n=tree.n,
+                    new_leaf_ids=new_leaf_ids,
+                    new_n=new_n,
+                    residuals=residuals,
+                    eps_sigma2=eps_sigma2
                 )
-                
+
                 # Calculate prior using simulated data
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                
-                log_pi = log_likelihood + log_prior
+
+                log_pi = log_lkhd_old + log_lkhd_change + log_prior
                 log_fwd_weights.append(0.5*float(log_pi))
 
         log_fwd_weights = np.array(log_fwd_weights)
@@ -461,6 +501,7 @@ class MultiChange(Change):
         n_candidate_trials = 0
         for node_id, var, threshold in all_candidates:
             n_candidate_trials += 1
+            threshold = np.float32(threshold)
             new_leaf_ids, new_n, new_vars = tree.simulate_change_split(node_id, var, threshold)
             
             # Check if change is valid - all leaf nodes should have samples
@@ -516,6 +557,7 @@ class MultiChange(Change):
 
         log_fwd_weights = []
         for nid, v, t in all_rev_candidates:
+            t = np.float32(t)
             if len(log_fwd_weights) >= n_samples:
                 break
             
