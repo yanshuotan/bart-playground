@@ -1,3 +1,4 @@
+from matplotlib.pylab import f
 import numpy as np
 import math
 from abc import ABC, abstractmethod
@@ -5,6 +6,17 @@ from typing import Optional
 from .params import Parameters
 from .util import fast_choice, fast_choice_with_weights
 
+from numba import njit
+
+@njit
+def calculate_sse_numba(leaf_ids, node_id, data_y):
+    """
+    Calculate the squared sum of errors for a single node using numba.
+    """
+    node_mask = leaf_ids == node_id
+    filtered_y = data_y[node_mask]
+    sse = np.sum((filtered_y - filtered_y.mean()) ** 2)
+    return sse
 
 class Move(ABC):
     """
@@ -83,18 +95,14 @@ class Move(ABC):
         """
         pass
 
-    def _calculate_simulated_likelihood(self, new_leaf_ids, new_n, residuals):
+    def calculate_sse(self, leaf_ids, node_ids, data_y):
         """
-        Calculate likelihood using simulated split data without modifying the tree.
+        Calculate the squared sum of errors for a single node.
         """
-        from .priors import _single_tree_log_marginal_lkhd_numba
-        return _single_tree_log_marginal_lkhd_numba(
-            new_leaf_ids,
-            new_n, 
-            residuals,
-            eps_sigma2=self.current.global_params["eps_sigma2"][0],
-            f_sigma2=self.tree_prior.f_sigma2
-        )
+        sse = 0.0
+        for node_id in node_ids:
+            sse += calculate_sse_numba(leaf_ids, node_id, data_y)
+        return sse
 
 class Grow(Move):
     """
@@ -235,8 +243,6 @@ class MultiGrow(Grow):
     
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
-        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
-        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
         n_samples = self.get_n_samples(tree)
         all_candidates = [
             (node_id, var, threshold)
@@ -251,22 +257,13 @@ class MultiGrow(Grow):
         n_candidate_trials = 0
         for node_id, var, threshold in all_candidates:
             n_candidate_trials += 1
-            # Use the combined simulation function instead of copy + split_leaf
-            new_leaf_ids, new_n, new_vars = tree.simulate_split_leaf(node_id, var, threshold)
+            temp = proposed.copy(self.trees_changed)
+            temp_tree = temp.trees[self.trees_changed[0]]
+            old_sse = self.calculate_sse(temp_tree.leaf_ids, [node_id], self.data_y)
+            if temp_tree.split_leaf(node_id, var, threshold):
+                children_sse = self.calculate_sse(temp_tree.leaf_ids, [2 * node_id + 1, 2 * node_id + 2], self.data_y)
+                log_pi = -0.5*(children_sse-old_sse) + self.tree_prior.trees_log_prior(temp, self.trees_changed) # log pi(y_i)
 
-            # Check if split is valid (both children have samples)
-            left_child = node_id * 2 + 1
-            right_child = node_id * 2 + 2
-            if new_n[left_child] > 0 and new_n[right_child] > 0:
-                # Calculate likelihood using simulated data
-                log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
-                )
-                
-                # Calculate prior using simulated data
-                log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                
-                log_pi = log_likelihood + log_prior
                 candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
                 if len(candidates) >= n_samples:
                     break
@@ -279,7 +276,8 @@ class MultiGrow(Grow):
         log_bwd_weights = np.array([w for _, _, _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
-        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights) # Select y
+        weights = bwd_weights / bwd_weights.sum()
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights) # Select y
         node_id, var, threshold, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
 
@@ -287,7 +285,7 @@ class MultiGrow(Grow):
         success = tree.split_leaf(node_id, var, threshold)
 
         log_tran_bwd = -np.log(len(tree.terminal_split_nodes)) # log T(y_i,x): prune back
-        log_p_bwd = log_weight_yj + log_tran_bwd + np.log(bwd_weights.mean()) + max_log_bwd
+        log_p_bwd = -log_weight_yj + log_tran_bwd + np.log(bwd_weights.mean()) + max_log_bwd
 
         # Calculate the log transition ratio
         all_prune_candidates = list(tree.terminal_split_nodes)
@@ -303,24 +301,18 @@ class MultiGrow(Grow):
 
         log_fwd_weights = []
         for prune_node_id in prune_candidates:
-            # Use simulation function instead of copy + prune_split
-            new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(prune_node_id)
-            
-            # Calculate likelihood using simulated data
-            log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
-            )
-            
-            # Calculate prior using simulated data
-            log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-            
-            log_pi = log_likelihood + log_prior
+            temp2 = proposed.copy(self.trees_changed)
+            temp2_tree = temp2.trees[self.trees_changed[0]]
+            old_sse = self.calculate_sse(temp2_tree.leaf_ids, [2*prune_node_id+1, 2*prune_node_id+2], self.data_y)
+            temp2_tree.prune_split(prune_node_id)
+            pruned_sse = self.calculate_sse(temp2_tree.leaf_ids, [prune_node_id], self.data_y)
+            log_pi = -0.5*(pruned_sse-old_sse) + self.tree_prior.trees_log_prior(temp2, self.trees_changed) # log pi(x_i*)
             log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_weights = np.array(log_fwd_weights)
         log_weight_x = log_fwd_weights[[0]]
         max_log_fwd = np.max(log_fwd_weights)
         fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
-        log_p_fwd = log_weight_x + log_tran_fwd + np.log(fwd_weights.mean()) + max_log_fwd
+        log_p_fwd = -log_weight_x + log_tran_fwd + np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
         return success
@@ -338,8 +330,6 @@ class MultiPrune(Prune):
         
     def try_propose(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
-        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
-        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
         n_samples = self.get_n_samples(tree)
         all_candidates = list(tree.terminal_split_nodes)
         self.candidate_sampling_ratio = 1 # Just a placeholder, not used in MultiPrune because prune always succeeds
@@ -355,24 +345,19 @@ class MultiPrune(Prune):
 
         candidates = []
         for node_id in sampled_candidates:
-            # Use simulation function instead of copy + prune_split for candidate evaluation
-            new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(node_id)
-            
-            # Calculate likelihood using simulated data
-            log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
-            )
-            
-            # Calculate prior using simulated data
-            log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-            
-            log_pi = log_likelihood + log_prior
+            temp = proposed.copy(self.trees_changed)
+            temp_tree = temp.trees[self.trees_changed[0]]
+            old_sse = self.calculate_sse(temp_tree.leaf_ids, [2*node_id+1, 2*node_id+2], self.data_y)
+            temp_tree.prune_split(node_id)
+            pruned_sse = self.calculate_sse(temp_tree.leaf_ids, [node_id], self.data_y)
+            log_pi = -0.5*(pruned_sse-old_sse) + self.tree_prior.trees_log_prior(temp, self.trees_changed)
             candidates.append((node_id, 0.5*float(log_pi)))
 
         log_bwd_weights = np.array([w for _, w in candidates])
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
-        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
+        weights = bwd_weights / bwd_weights.sum()
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), weights)
         node_id, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
 
@@ -380,13 +365,13 @@ class MultiPrune(Prune):
         grow_candidate = (node_id, tree.vars[node_id], tree.thresholds[node_id]) # Record
         tree.prune_split(node_id)
         log_tran_bwd = -np.log(tree.n_leaves)  # log T(y_i, x): grow back
-        log_p_bwd = log_weight_yj + log_tran_bwd + np.log(bwd_weights.mean()) + max_log_bwd
+        log_p_bwd = -log_weight_yj + log_tran_bwd + np.log(bwd_weights.mean()) + max_log_bwd
 
         # Calculate the log transition ratio
         n_samples = self.get_n_samples(tree)
         all_grow_candidates = [
-            (leaf_id, var, threshold)
-            for leaf_id in tree.leaves
+            (node_id, var, threshold)
+            for node_id in tree.leaves
             for var in range(tree.dataX.shape[1])
             for threshold in self.possible_thresholds[var]
         ]
@@ -404,32 +389,22 @@ class MultiPrune(Prune):
         grow_candidates = [grow_candidate] + all_grow_candidates
 
         log_fwd_weights = []
-        for leaf_id, var, threshold in grow_candidates:
+        for node_id, var, threshold in grow_candidates:
             if len(log_fwd_weights) >= n_samples:
                 break
-            # Use simulation functions instead of copy + split_leaf
-            new_leaf_ids, new_n, new_vars = tree.simulate_split_leaf(leaf_id, var, threshold)
-            
-            # Check if split is valid (both children have samples)
-            left_child = leaf_id * 2 + 1
-            right_child = leaf_id * 2 + 2
-            if new_n[left_child] > 0 and new_n[right_child] > 0:
-                # Calculate likelihood using simulated data
-                log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
-                )
-                
-                # Calculate prior using simulated data
-                log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                
-                log_pi = log_likelihood + log_prior
+            temp2 = proposed.copy(self.trees_changed)
+            temp2_tree = temp2.trees[self.trees_changed[0]]
+            old_sse = self.calculate_sse(temp2_tree.leaf_ids, [node_id], self.data_y)
+            if temp2_tree.split_leaf(node_id, var, threshold):
+                children_sse = self.calculate_sse(temp2_tree.leaf_ids, [2 * node_id + 1, 2 * node_id + 2], self.data_y)
+                log_pi = -0.5*(children_sse-old_sse) + self.tree_prior.trees_log_prior(temp2, self.trees_changed)
                 log_fwd_weights.append(0.5*float(log_pi))
 
         log_fwd_weights = np.array(log_fwd_weights)
         log_weight_x = log_fwd_weights[[0]]
         max_log_fwd = np.max(log_fwd_weights)
         fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
-        log_p_fwd = log_weight_x + log_tran_fwd + np.log(fwd_weights.mean()) + max_log_fwd
+        log_p_fwd = -log_weight_x + log_tran_fwd + np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
         return True
@@ -494,7 +469,7 @@ class MultiChange(Change):
         idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
         node_id, var, threshold, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
-        log_p_bwd = log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
+        log_p_bwd = -log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
 
         old_var = tree.vars[node_id]
         old_threshold = tree.thresholds[node_id]
@@ -541,7 +516,7 @@ class MultiChange(Change):
         log_weight_x = log_fwd_weights[[0]]
         max_log_fwd = np.max(log_fwd_weights)
         fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
-        log_p_fwd = log_weight_x + np.log(fwd_weights.mean()) + max_log_fwd
+        log_p_fwd = -log_weight_x + np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
         return success
@@ -605,7 +580,7 @@ class MultiSwap(Swap):
         idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
         parent_id, child_id, _ = candidates[idx]
         log_weight_yj = log_bwd_weights[[idx]]
-        log_p_bwd = log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
+        log_p_bwd = -log_weight_yj + np.log(bwd_weights.mean()) + max_log_bwd
 
         success = tree.swap_split(parent_id, child_id)
 
@@ -647,7 +622,7 @@ class MultiSwap(Swap):
         log_weight_x = log_fwd_weights[[0]]
         max_log_fwd = np.max(log_fwd_weights)
         fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
-        log_p_fwd = log_weight_x + np.log(fwd_weights.mean()) + max_log_fwd
+        log_p_fwd = -log_weight_x + np.log(fwd_weights.mean()) + max_log_fwd
 
         self.log_tran_ratio = log_p_bwd - log_p_fwd
         return success

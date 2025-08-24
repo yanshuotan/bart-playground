@@ -1,3 +1,4 @@
+
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
@@ -351,7 +352,9 @@ class MultiSampler(Sampler):
     def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
         data_y = self.data.y if data_y is None else data_y
-        return move.log_tran_ratio # Already considers prior and likelihood in move.py
+        return (self.tree_prior.trees_log_prior_ratio(move) + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
+            move.log_tran_ratio
 
     def one_iter(self, current, temp, return_trace=False):
         """
