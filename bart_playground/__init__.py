@@ -10,7 +10,7 @@ from .xgb_init import fit_and_init_trees, _xgb_json_to_tree
 
 
 
-__all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART",
+__all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART", "OWLBART", "ProbitOWLBART",
            "Change", "Grow", "Prune", "Swap", 
            "TreesPrior", "GlobalParamPrior", "BARTLikelihood", "ComprehensivePrior",
            "DataGenerator", "all_moves", "Tree", "Parameters", "Sampler", "DefaultSampler", "ProbitSampler", "LogisticSampler",
