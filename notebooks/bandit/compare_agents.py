@@ -215,7 +215,7 @@ def plot_comparison_results(results: Dict[str, Dict], save_loc: str = None, show
     n_scenarios = len(results)
     n_rows = (n_scenarios + 1) // 2  # Ceiling division for number of rows
     
-    fig, axes = plt.subplots(n_rows, 2, figsize=(16, 12 * n_rows))
+    fig, axes = plt.subplots(n_rows, 2, figsize=(12, 6 * n_rows))
     
     # Flatten axes if needed
     if n_rows == 1:
@@ -229,7 +229,7 @@ def plot_comparison_results(results: Dict[str, Dict], save_loc: str = None, show
         
         ax = axes[row][col]
         
-        colors = plt.get_cmap('nipy_spectral')(np.linspace(0, 0.9, len(scenario_results[target].keys())))
+        colors = plt.get_cmap('nipy_spectral')(np.linspace(0, 0.9, len(scenario_results[target].keys()) - (0 if show_random else 1), endpoint=True))
         ax.set_prop_cycle(color=colors)
         
         targeted_perf = scenario_results[target]
@@ -257,6 +257,7 @@ def plot_comparison_results(results: Dict[str, Dict], save_loc: str = None, show
         ax.set_title(f"{scenario_name} Scenario", fontsize=14)
         ax.set_xlabel("Draw", fontsize=12)
         ax.set_ylabel(f"Cumulative {target}", fontsize=12)
+        ax.set_ylim(bottom=0)  # Set y-axis minimum to 0
         ax.grid(True, alpha=0.3)
         ax.legend()
         
@@ -275,41 +276,44 @@ def plot_comparison_results(results: Dict[str, Dict], save_loc: str = None, show
 
 def print_summary_results(results: Dict[str, Dict]) -> None:
     """
-    Display summary tables of final cumulative regrets and total computation times
-    (mean ± std) for each scenario and agent.
+    Display wide-format summary tables where rows are Agents and columns are Scenarios.
+    Each cell shows "Mean ± Std" for (i) final cumulative regret and (ii) total
+    computation time (seconds).
     """
+    # Collect full sets for layout
+    scenarios = list(results.keys())
+    agents = sorted({agent for data in results.values() for agent in data['regrets'].keys()})
+
+    def _fmt(mean_val: float, std_val: float, decimals: int) -> str:
+        return f"{mean_val:.{decimals}f} ± {std_val:.{decimals}f}"
+
+    # Regret table: final draw
+    df_reg = pd.DataFrame(index=agents, columns=scenarios, dtype=object)
     for scenario, data in results.items():
-        print(f"\n=== {scenario} Scenario ===")
-        regrets = data['regrets']
-        times = data['times']
+        for agent in agents:
+            arr = data['regrets'].get(agent)
+            if arr is None or arr.size == 0:
+                df_reg.loc[agent, scenario] = ""
+            else:
+                final = arr[:, -1]
+                df_reg.loc[agent, scenario] = _fmt(np.mean(final), np.std(final), decimals=2)
 
-        # Final regrets table
-        rows = []
-        for agent, arr in regrets.items():
-            final = arr[:, -1]
-            rows.append({
-                'Agent': agent,
-                'Mean Regret': np.mean(final),
-                'Std Regret': np.std(final),
-            })
-        df_reg = pd.DataFrame(rows)
-        print("\nFinal cumulative regrets (mean ± std):")
-        print(df_reg.to_string(index=False, float_format="{:.2f}".format))
+    print("\nFinal cumulative regrets (mean ± std) by Agent (rows) and Scenario (columns):")
+    print(df_reg.to_string())
 
-        # Computation times table
-        rows = []
-        for agent, arr in times.items():
-            total = arr.sum(axis=1)
-            rows.append({
-                'Agent': agent,
-                'Mean Time (s)': np.mean(total),
-                'Std Time (s)': np.std(total),
-            })
-        df_time = pd.DataFrame(rows)
-        print("\nAverage computation times (seconds):")
-        print(df_time.to_string(index=False, float_format="{:.4f}".format))
+    # Time table: sum over draws → total time per run
+    df_time = pd.DataFrame(index=agents, columns=scenarios, dtype=object)
+    for scenario, data in results.items():
+        for agent in agents:
+            arr = data['times'].get(agent)
+            if arr is None or arr.size == 0:
+                df_time.loc[agent, scenario] = ""
+            else:
+                total = arr.sum(axis=1)
+                df_time.loc[agent, scenario] = _fmt(np.mean(total), np.std(total), decimals=4)
 
-        print("\n" + "=" * 40)
+    print("\nAverage computation times (seconds; mean ± std) by Agent (rows) and Scenario (columns):")
+    print(df_time.to_string())
 
 _rgx = None
 
@@ -532,18 +536,17 @@ from itertools import combinations
 def print_pairwise_win_tie_lose(results: Dict[str, Dict], alpha: float = 0.05):
     normed = add_average_scenario(results)
     
-    # Collect all unique agents across all scenarios
+    # Collect all unique agents across all scenarios, excluding Random
     all_agents = set()
     for data in normed.values():
         all_agents.update(data['regrets'].keys())
-    agents = sorted(all_agents)
+    agents = sorted([agent for agent in all_agents if not agent.startswith("Random")])
     
-    # Accumulator for totals
-    totals = {a: {'win': 0, 'tie': 0, 'lose': 0} for a in agents}
+    # Initialize matrix to store pairwise results
+    # matrix[a1][a2] = {'win': x, 'tie': y, 'lose': z} for a1 vs a2
+    matrix = {a1: {a2: {'win': 0, 'tie': 0, 'lose': 0} for a2 in agents} for a1 in agents}
     
     for scenario, data in normed.items():
-        # Initialize per-scenario counters
-        counts = {a: {'win': 0, 'tie': 0, 'lose': 0} for a in agents}
         # Cache final-draw arrays for agents present in this scenario
         final_vals = {a: arr[:, -1] for a, arr in data['regrets'].items()}
         
@@ -555,32 +558,45 @@ def print_pairwise_win_tie_lose(results: Dict[str, Dict], alpha: float = 0.05):
                 if p < alpha:
                     # Significant difference (lower mean regret is better)
                     if v1.mean() < v2.mean():
-                        counts[a1]['win'] += 1
-                        counts[a2]['lose'] += 1
+                        matrix[a1][a2]['win'] += 1
+                        matrix[a2][a1]['lose'] += 1
                     else:
-                        counts[a2]['win'] += 1
-                        counts[a1]['lose'] += 1
+                        matrix[a2][a1]['win'] += 1
+                        matrix[a1][a2]['lose'] += 1
                 else:
                     # No significant difference
-                    counts[a1]['tie'] += 1
-                    counts[a2]['tie'] += 1
+                    matrix[a1][a2]['tie'] += 1
+                    matrix[a2][a1]['tie'] += 1
             else:
                 # Not both present: consider as tie
-                counts[a1]['tie'] += 1
-                counts[a2]['tie'] += 1
-        
-        # Accumulate totals
-        for a in agents:
-            for key in ('win', 'tie', 'lose'):
-                totals[a][key] += counts[a][key]
+                matrix[a1][a2]['tie'] += 1
+                matrix[a2][a1]['tie'] += 1
     
-    # Prepare and print grand-total
-    df_tot = pd.DataFrame.from_dict(totals, orient='index')
-    df_tot = (
-        df_tot
-        .assign(score=df_tot['win'] * 3 + df_tot['tie'])
-        .sort_values(by='score', ascending=False)
-    )
-    print("\nTotals across all scenarios (sorted by win*3+tie):")
-    print(df_tot[['win', 'tie', 'lose']].to_string())
+    # Create DataFrame for display
+    def format_cell(a1, a2):
+        if a1 == a2:
+            return "---"
+        counts = matrix[a1][a2]
+        return f"{counts['win']}-{counts['tie']}-{counts['lose']}"
+    
+    # Build the matrix DataFrame
+    df_matrix = pd.DataFrame(index=agents, columns=agents, dtype=object)
+    for a1 in agents:
+        for a2 in agents:
+            df_matrix.loc[a1, a2] = format_cell(a1, a2)
+    
+    # Compute totals for each agent
+    totals = {a: {'win': 0, 'tie': 0, 'lose': 0} for a in agents}
+    for a1 in agents:
+        for a2 in agents:
+            if a1 != a2:
+                for key in ('win', 'tie', 'lose'):
+                    totals[a1][key] += matrix[a1][a2][key]
+    
+    # Add totals column to the matrix
+    df_matrix['Total'] = [f"{totals[a]['win']}-{totals[a]['tie']}-{totals[a]['lose']}" for a in agents]
+    
+    print("\nPairwise win-tie-lose matrix with totals (row vs column):")
+    print("Format: win-tie-lose (lower regret wins)")
+    print(df_matrix.to_string())
     
