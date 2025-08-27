@@ -410,3 +410,21 @@ class OWLBART(LogisticBART):
                                generator=rng, tol=tol, temp_schedule=temp_schedule)
         self.sampler : LogisticSampler
         super(LogisticBART, self).__init__(preprocessor, sampler, ndpost, nskip)
+
+class ProbitOWLBART(ProbitBART):
+    """
+    Weighted Probit BART implementation.
+    """
+    def __init__(self, ndpost=1000, nskip=100, n_trees=25, tree_alpha: float=0.95,
+                 tree_beta: float=2.0, 
+                 c: float = 0.0, d: float = 0.0,
+                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
+                 random_state=42, temperature=1.0, treatment=None, reward=None):
+        preprocessor = ClassificationPreprocessor(max_bins=max_bins)
+        rng = np.random.default_rng(random_state)
+        prior = ProbitOWLPrior(n_trees, tree_alpha, tree_beta, c, d, treatment, reward, rng)
+        temp_schedule = self._check_temperature(temperature)
+        sampler = ProbitSampler(prior=prior, proposal_probs=proposal_probs, 
+                               generator=rng, tol=tol, temp_schedule=temp_schedule)
+        self.sampler : ProbitSampler
+        super(ProbitBART, self).__init__(preprocessor, sampler, ndpost, nskip)
