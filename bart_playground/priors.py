@@ -620,3 +620,26 @@ class OWLPrior:
     def set_latents(self, latents):
         self.tree_prior.set_latents(latents)
         self.likelihood.set_latents(latents)
+
+class ProbitOWLPrior:
+    """
+    BART Prior for weighted probit classification tasks.
+    """
+    def __init__(self, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, treatment=None, reward=None, generator=np.random.default_rng()):
+        if c == 0.0 or d == 0.0:
+            a0 = 3.5 / math.sqrt(2)
+            c = n_trees/(a0 ** 2) + 0.5
+            d = n_trees/(a0 ** 2)
+        
+        self.tree_prior = ProbitPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self)
+        self.likelihood = OWLLikelihood(c, d, parent=self, treatment=None, reward=None)
+        
+        # Placeholders for values reused in resampling
+        self.rh = None  
+        self.sh = None
+        self.pi_h = None
+        self.param = None
+    
+    def set_latents(self, latents):
+        self.tree_prior.set_latents(latents)
+        self.likelihood.set_latents(latents)
