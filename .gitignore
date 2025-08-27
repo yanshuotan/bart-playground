@@ -1,4 +1,4 @@
-*__pycache__
+**/__pycache__/
 *.egg-info/
 .venv
 venv/
@@ -15,6 +15,7 @@ notebooks/bandit/results
 notebooks/bandit/*.png
 notebooks/bandit/data
 bart_playground/bandit/baselines
-.idea/*
+.idea/
+.vscode/
 benchmarks/*.csv
 notebooks/bandit/submit.pbs
