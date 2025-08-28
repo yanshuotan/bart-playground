@@ -1,5 +1,3 @@
-
-from logging import getLogger
 import pandas as pd
 import os
 from compare_agents import _sim_logger
@@ -119,7 +117,7 @@ def get_DrinkLess():
         }
     return result
 
-from bart_playground.bandit.sim_util import Scenario
+from bart_playground.bandit.experiment_utils.sim_util import Scenario
 import numpy as np
 
 # We define a scenario for the DrinkLess dataset only for the simulation purposes.

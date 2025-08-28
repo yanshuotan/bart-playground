@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from bart_playground.bandit.sim_util import simulate, Scenario
+from bart_playground.bandit.experiment_utils.sim_util import simulate, Scenario
 from bart_playground.bandit.bcf_agent import BCFAgent
 from tqdm import tqdm
-from typing import List, Dict, Tuple, Any
+from typing import Dict
 from scipy import stats
 from scipy.ndimage import gaussian_filter1d
 import warnings

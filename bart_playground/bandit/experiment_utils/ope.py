@@ -9,7 +9,7 @@ from tqdm import tqdm
 import warnings
 import logging
 
-from .agent import BanditAgent
+from bart_playground.bandit.agents.agent import BanditAgent
 # from ...notebooks.bandit.compare_agents import _ca_logger
 
 def estimate_propensity_scores(context_matrix: np.ndarray, actions: np.ndarray, n_arms: int) -> np.ndarray:
