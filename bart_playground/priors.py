@@ -8,8 +8,10 @@ from .params import Parameters
 from .moves import Move
 from .util import Dataset, GIG
 
-from bart_playground.bandit.experiment_utils.sim_util import _sim_logger
-    
+import logging
+
+logger = logging.getLogger(__name__)
+
 # Standalone Numba-optimized functions
 
 @njit(cache=True) 
@@ -334,8 +336,8 @@ class GlobalParamPrior:
             raise ValueError("Invalid specification for the noise variance prior.")
         
         if sigma_hat <= 1e-5:
-            _sim_logger.warning("Estimated sigma_hat is too small, returning a small positive value (1e-5) to avoid numerical issues.")
-            _sim_logger.info(f"Estimated sigma_hat: {sigma_hat}, specification: {specification}")
+            logger.warning("Estimated sigma_hat is too small, returning a small positive value (1e-5) to avoid numerical issues.")
+            logger.info(f"Estimated sigma_hat: {sigma_hat}, specification: {specification}")
             sigma_hat = float(1e-5)
         
         # chi2.ppf suffices
@@ -421,9 +423,9 @@ class BARTLikelihood:
                     self.f_sigma2
                 )     
             except Exception as e:
-                _sim_logger.error(f"Error calculating likelihood for tree {tree_ids[0]}: {e}")
-                _sim_logger.error(f"Data: {data_y}")
-                _sim_logger.error(f"Related information: leaf_ids: {tree.leaf_ids}; sample_n_in_node: {tree.n}; residuals: {resids}; eps_sigma2: {bart_params.global_params['eps_sigma2'][0]}; f_sigma2: {self.f_sigma2}", exc_info=True)
+                logger.error(f"Error calculating likelihood for tree {tree_ids[0]}: {e}")
+                logger.error(f"Data: {data_y}")
+                logger.error(f"Related information: leaf_ids: {tree.leaf_ids}; sample_n_in_node: {tree.n}; residuals: {resids}; eps_sigma2: {bart_params.global_params['eps_sigma2'][0]}; f_sigma2: {self.f_sigma2}", exc_info=True)
                 raise ValueError("Error calculating likelihood for single tree. Check the tree structure and residuals.")
         else:
             leaf_basis = bart_params.leaf_basis(tree_ids)

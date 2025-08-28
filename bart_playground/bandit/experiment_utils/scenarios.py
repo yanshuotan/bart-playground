@@ -1,12 +1,12 @@
-from typing import Optional, Union
-import numpy as np
-from tqdm import tqdm
-import time, logging
-import pandas as pd
 import math
-from sklearn.datasets import fetch_openml, make_friedman1
+from typing import Union, List
+
+import numpy as np
+import pandas as pd
+from sklearn.datasets import fetch_openml
 from sklearn.preprocessing import normalize, OrdinalEncoder
 from sklearn.utils import shuffle
+
 
 class Scenario:
     def __init__(self, P, K, sigma2, random_generator=None):
@@ -24,7 +24,7 @@ class Scenario:
         self.init_params()
 
     def init_params(self):
-        pass 
+        pass
 
     def set_seed(self, seed):
         """
@@ -52,14 +52,15 @@ class Scenario:
         Must be implemented in subclasses.
         """
         raise NotImplementedError("This method should be implemented in subclasses.")
-    
+
     @property
     def max_draws(self):
         return math.inf # Maximum number of draws for the scenario, default is infinity.
-    
+
     @property
     def rng_state(self):
         return self.rng.bit_generator.state
+
 
 class LinearScenario(Scenario):
     def __init__(self, P, K, sigma2, d=None, random_generator=None):
@@ -78,6 +79,7 @@ class LinearScenario(Scenario):
         outcome_mean = self.mu_a.dot(x)
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
+
 class GLMScenario(Scenario):
     def __init__(self, P, K, sigma2, random_generator=None):
         super().__init__(P, K, sigma2, random_generator)
@@ -85,27 +87,29 @@ class GLMScenario(Scenario):
     def init_params(self):
         self.mu_a = self.rng.normal(0, 1, size=(self.K, self.P))
         self.mu_a = normalize(self.mu_a, axis=1)
-    
+
     def reward_function(self, x):
         # Compute noise for each arm.
         epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
         outcome_mean = self.mu_a.dot(x)
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
+
 class LinearOffsetScenario(Scenario):
     def __init__(self, P, K, sigma2, random_generator=None):
         super().__init__(P, K, sigma2, random_generator)
-        
+
     def init_params(self):
         # Uniformly distributed covariates in unit cube
         self.mu = self.rng.uniform(-1, 1, size=(1, self.P))
         # Generate a K x 1 matrix of arm-specific offsets uniformly between -5 and 5.
         self.arm_offsets = self.rng.uniform(-5, 5, size=self.K)
-    
+
     def reward_function(self, x):
         epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
         outcome_mean = 10 * self.mu.dot(x) + self.arm_offsets
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
+
 
 class OffsetScenario(Scenario):
     def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
@@ -117,17 +121,19 @@ class OffsetScenario(Scenario):
         self.mu = self.rng.uniform(-1, 1, size=(1, self.P))
         # Generate a K x 1 matrix of arm-specific offsets uniformly between -5 and 5.
         self.arm_offsets = self.rng.uniform(-5, 5, size=self.K)
-    
+
     def reward_function(self, x):
         epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
         outcome_mean = 10 * np.sin(self.mu.dot(x)) + self.lambda_val * self.arm_offsets
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
+
 
 def _friedman1(x):
     _f1 = 10 * np.sin(np.pi * x[0] * x[1]) + \
             20 * (x[2] - 0.5) ** 2 + \
             10 * x[3] + 5 * x[4]
     return _f1
+
 
 def _friedman_helper(x):
     # x_1 = self.rng.uniform(0, 100)
@@ -141,16 +147,19 @@ def _friedman_helper(x):
     res[3] = res[3] * 10 + 1
     return res
 
+
 def _friedman2(x):
     x = _friedman_helper(x)
     _f2 = np.sqrt(x[0]**2 +
                    (x[1]*x[2] - 1/(x[1]*x[3]))**2)
     return _f2 / 125 # equivalent to standard deviation of 125 by mlbench
-    
+
+
 def _friedman3(x):
     x = _friedman_helper(x)
     _f3 = np.arctan((x[1]*x[2] - 1/(x[1]*x[3])) / x[0])
     return _f3 / 0.1
+
 
 class FriedmanScenario(Scenario):
     def __init__(self, P, K, sigma2, random_generator=None, f_type='friedman1'):
@@ -169,14 +178,14 @@ class FriedmanScenario(Scenario):
                 self._friedman = _friedman2
             else:
                 self._friedman = _friedman3
-        
+
         super().__init__(P, K, sigma2, random_generator)
-        
+
     def generate_covariates(self):
         # Uniform [0, 1]
         x = self.rng.uniform(0, 1, size=self.P).astype(np.float32)
         return x
-    
+
     def init_params(self):
         pass
 
@@ -185,7 +194,8 @@ class FriedmanScenario(Scenario):
         x_reverse = x[::-1]
         outcome_mean = np.hstack([self._friedman(x), self._friedman(x_reverse)], dtype=np.float32)
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
-    
+
+
 class LinearFriedmanScenario(Scenario):
     def __init__(self, P, K, sigma2, random_generator=None):
         assert P >= 5 and K == 2, "LinearFriedmanScenario is for P>=5, K=2"
@@ -199,7 +209,8 @@ class LinearFriedmanScenario(Scenario):
         outcome_mean0 = self.mu_a.dot(x)
         outcome_mean = np.hstack([outcome_mean0, outcome_mean0 + _friedman1(x)], dtype=np.float32)
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
-    
+
+
 class OpenMLScenario(Scenario):
     def __init__(self, dataset='mushroom', version=1, random_generator:Union[np.random.Generator, int, None]=None, **kwargs):
         X, y = fetch_openml(dataset, version=version, return_X_y=True, **kwargs)
@@ -209,9 +220,9 @@ class OpenMLScenario(Scenario):
         for col in X.select_dtypes('category'):
             # -1 in codes indicates NaN by pandas convention
             X[col] = X[col].cat.codes
-        
+
         # cat_cols = X.select_dtypes('category').columns
-# 
+#
         # # one-hot encode them
         # X = pd.get_dummies(
         #     X,
@@ -220,12 +231,12 @@ class OpenMLScenario(Scenario):
         #     # drop_first=True,    # drops the first real level
         #     # dummy_na=True
         # )
-        
+
         X_arr = X.to_numpy() # normalize(X)
         y_arr = y.to_numpy().reshape(-1, 1)
         # Encode categorical labels as integers
         y_encoded = OrdinalEncoder(dtype=int).fit_transform(y_arr)
-        
+
         self.original_X = X_arr.copy()
         self.original_y = y_encoded.copy()
 
@@ -247,12 +258,12 @@ class OpenMLScenario(Scenario):
         random_state = self.rng.integers(0, 2**31 - 1)
         self.X, self.y = shuffle(self.original_X, self.original_y, random_state=random_state)
         self._cursor = 0
-        
+
     def generate_covariates(self):
         cov = self.X[self._cursor, :].reshape(1, -1)
         self._cursor += 1
         return cov
-    
+
     def reward_function(self, x):
         # Check if the input x matches the current data point
         x_cursor = self._cursor - 1
@@ -262,10 +273,11 @@ class OpenMLScenario(Scenario):
         reward = np.zeros(self.K)
         reward[self.y[x_cursor, 0]] = 1
         return {"outcome_mean": reward, "reward": reward}
-    
+
     @property
     def max_draws(self):
         return self.X.shape[0]
+
 
 class FriedmanDScenario(Scenario):
     def __init__(self, P, K, sigma2, lambda_val=3, random_generator=None):
@@ -273,11 +285,11 @@ class FriedmanDScenario(Scenario):
             raise ValueError("Friedman is for P>=5")
         self.lambda_val = lambda_val
         super().__init__(P, K, sigma2, random_generator)
-    
+
     def init_params(self):
         self.arm_offsets = self.rng.uniform(-5, 5, size=self.K)
         self.indices = self.rng.choice(self.P, size=5, replace=False)
-    
+
     def reward_function(self, x):
         epsilon_t = self.rng.normal(0, np.sqrt(self.sigma2), size=self.K)
         outcome_mean = 10 * np.sin(np.pi * x[0] * x[1]) + \
@@ -290,88 +302,64 @@ class FriedmanDScenario(Scenario):
                       )
         return {"outcome_mean": outcome_mean, "reward": outcome_mean + epsilon_t}
 
-sim_logger = logging.getLogger("bandit_simulator")
 
-def simulate(scenario, agents, n_draws, agent_names: list[str]=[]):
+class BanditEncoder:
     """
-    Simulate a bandit problem using the provided scenario and agents. The `simulate` function takes a scenario, a list of agents, and the number of draws. For each draw:
-
-    1. Generate covariates.
-    2. Compute the outcome means and rewards.
-    3. For each agent, choose an arm based on the current covariates.
-    4. Update cumulative regret for the agent.
-    5. Update the agent's state with the observed reward.
-    
-    Parameters:
-        scenario: An instance of a Scenario subclass.
-        agents (list): List of agent instances (e.g. BARTTSAgent).
-        n_draws (int): Number of simulation rounds.
-    
-    Returns:
-        cum_regrets (np.ndarray): Cumulative regrets for each agent over draws.
-        time_agent (np.ndarray): Total computation time (in seconds) for each agent.
+    A utility class for encoding features for multi-armed bandit problems.
+    This class handles different encoding strategies for the arms and features.
     """
-    n_agents = len(agents)
-    cum_regrets = np.zeros((n_draws, n_agents))
-    time_agents = np.zeros((n_draws, n_agents))
-    
-    for draw in tqdm(range(n_draws), desc="Simulating", miniters=1):
-        x = scenario.generate_covariates()
-        u = scenario.reward_function(x)
-        outcome_mean = u["outcome_mean"]
-        for i, agent in enumerate(agents):
-            t0 = time.time()
-            arm = agent.choose_arm(x)
-            # Calculate instantaneous regret: difference between best expected reward and the reward of the chosen arm.
-            inst_regret = max(outcome_mean) - outcome_mean[arm]
-            # Accumulate regret over draws.
-            if draw == 0:
-                cum_regrets[draw, i] = inst_regret
-            else:
-                cum_regrets[draw, i] = cum_regrets[draw - 1, i] + inst_regret
-            # Update agent's state with the chosen arm's data.
-            agent.update_state(arm, x, u["reward"][arm])
-            time_agents[draw, i] = time.time() - t0
-        
-        # Log current status every sqrt(n_draws) draws.
-        logging_frequency = int(math.sqrt(n_draws))
-        if (draw + 1) % logging_frequency == 0 or draw == n_draws - 1:   
-                df = pd.DataFrame({
-                    "AgentName":       agent_names,
-                    "CumRegret":   cum_regrets[draw, :],
-                    "CumTime":     np.sum(time_agents[:draw, :], axis=0)
-                })
-                # log it with fixed‐width columns and 6 decimal places
-                sim_logger.debug(f"Draw {draw+1}/{n_draws}: \n" + df.to_string(
-                    index=False,
-                    float_format="%.6f"
-                ))
-            
-    for agent in agents:
-        if hasattr(agent, 'clean_up'):
-            agent.clean_up()
-        
-    return cum_regrets, time_agents
+    def __init__(self, n_arms: int, n_features: int, encoding: str) -> None:
+        self.n_arms = n_arms
+        self.n_features = n_features
+        self.encoding = encoding
 
-def setup_logging():
-    """
-    Set up logging configuration for simulation.
-    """
-    # Logging information
-    logger = logging.getLogger("bandit_simulator")
-    logger.handlers.clear()
-    logger.propagate = False
-    logger.setLevel(logging.DEBUG)
+        if encoding == 'one-hot':
+            self.combined_dim = n_features + n_arms
+        elif encoding == 'multi':
+            self.combined_dim = n_features * n_arms
+        elif encoding == 'separate' or encoding == 'native':
+            self.combined_dim = n_features
+            # "native" encoding is just the feature vector itself
+            # This is useful for models that can handle categorical features directly
+            # "separate" encoding means that we will use different models with the feature vector as is
+        else:
+            raise ValueError(f"Unknown encoding: {encoding}")
 
-    c_handler = logging.StreamHandler()       # console
-    c_handler.setLevel(logging.INFO)
-    
-    c_fmt = "%(levelname)s %(name)s — %(message)s"
-    c_formatter = logging.Formatter(c_fmt)
-    c_handler.setFormatter(c_formatter)
+    def encode(self, x: Union[np.ndarray, List[float]], arm: int) -> np.ndarray:
+        """
+        Encode the feature vector x for a specific arm using the specified encoding strategy.
 
-    logger.addHandler(c_handler)
-    return logger
+        Parameters:
+            x (array-like): Feature vector
+            arm (int): Index of the arm to encode for; if arm == -1, then encode all arms
 
-_sim_logger = setup_logging()
+        Returns:
+            np.ndarray: Encoded feature vector
+        """
+        x = np.array(x).reshape(1, -1)
 
+        if arm == -1:
+            # Encode all arms
+            range_arms = range(self.n_arms)
+        else:
+            range_arms = [arm]
+
+        total_arms = len(range_arms)
+        x_combined = np.zeros((total_arms, self.combined_dim))
+
+        if self.encoding == 'one-hot':
+            # One-hot encoded treatment options
+            for row_idx, arm in enumerate(range_arms):
+                x_combined[row_idx, :self.n_features] = x
+                x_combined[row_idx, self.n_features + arm] = 1
+        elif self.encoding == 'multi':
+            # Block structure approach (data_multi style)
+            for row_idx, arm in enumerate(range_arms):
+                start_idx = arm * self.n_features
+                end_idx = start_idx + self.n_features
+                x_combined[row_idx, start_idx:end_idx] = x
+        elif self.encoding == 'separate' or self.encoding == 'native':
+            x_combined = x
+        else:
+            raise ValueError(f"Unknown encoding: {self.encoding}")
+        return x_combined

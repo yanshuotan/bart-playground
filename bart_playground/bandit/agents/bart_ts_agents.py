@@ -1,11 +1,13 @@
 import numpy as np
 from typing import Callable, List, Union
+import logging
 from bart_playground.bart import DefaultBART, LogisticBART
 from bart_playground.bandit.agents.agent import BanditAgent
-from bart_playground.bandit.agents.bart_agent import BanditEncoder
-from bart_playground.bandit.experiment_utils.sim_util import _sim_logger
+from bart_playground.bandit.experiment_utils.scenarios import BanditEncoder
 
-class RefreshBARTAgent(BanditAgent):
+logger = logging.getLogger(__name__)
+
+class BARTTSAgent(BanditAgent):
     """
     A BART agent that periodically re-fits the entire model from scratch,
     similar to the refresh strategy used in XGBoostTS and RandomForestTS agents.
@@ -77,8 +79,9 @@ class RefreshBARTAgent(BanditAgent):
             return False
         return np.ceil(8 * np.log(self.t)) > np.ceil(8 * np.log(self.t - 1))
     
-    def _enough_data(self, outcomes, min_obs=4):
-        """Check if we have enough data for initial fit."""
+    @staticmethod
+    def _enough_data(outcomes, min_obs=4):
+        """Check if we have enough data for the initial fit."""
         return outcomes.size >= min_obs # and np.unique(outcomes).size > 1
     
     def _has_sufficient_data(self) -> bool:
@@ -104,8 +107,8 @@ class RefreshBARTAgent(BanditAgent):
         if not self._has_sufficient_data():
             return
 
-        _sim_logger.info(f't = {self.t} - re-training BART model from scratch')
-        # _sim_logger.info(f'Current model: {self.model.n_trees} trees, {self.model.ndpost} posterior samples, {self.model.nskip} burn-in samples, encoding = {self.encoding}')
+        logger.info(f't = {self.t} - re-training BART model from scratch')
+        # sim_logger.info(f'Current model: {self.model.n_trees} trees, {self.model.ndpost} posterior samples, {self.model.nskip} burn-in samples, encoding = {self.encoding}')
 
         X = np.array(self.all_encoded_features)
         y = np.array(self.all_rewards)
@@ -135,11 +138,12 @@ class RefreshBARTAgent(BanditAgent):
             self.is_model_fitted = True
 
         except Exception:
-            _sim_logger.exception('Failed to refresh model; keeping previous model(s) in place')
+            logger.exception('Failed to refresh model; keeping previous model(s) in place')
             # self.models or self.model and is_model_fitted remain as they were
-    
-    def _default_schedule(self, total_k) -> Callable[[int], float]:
-    # weight 0 for the very first draw (burn-in), 
+
+    @staticmethod
+    def _default_schedule(total_k) -> Callable[[int], float]:
+    # weight 0 for the very first draw (burn-in),
     # then uniform 1/(total_k-1) for all subsequent samples
         return lambda k: 0.0 if k == 0 else 1.0 / (total_k - 1)
 
@@ -192,7 +196,7 @@ class RefreshBARTAgent(BanditAgent):
         return int(np.argmax(action_estimates))
     
     def update_state(self, arm: int, x: Union[np.ndarray, List[float]], 
-                     y: Union[float, np.ndarray]) -> "RefreshBARTAgent":
+                     y: Union[float, np.ndarray]) -> "BARTTSAgent":
         """
         Update the agent's state with new observation data.
         
@@ -233,7 +237,7 @@ class RefreshBARTAgent(BanditAgent):
         return self
 
 
-class RefreshDefaultBARTAgent(RefreshBARTAgent):
+class DefaultBARTTSAgent(BARTTSAgent):
     """
     Refresh BART agent with default BART parameters.
     """
@@ -256,7 +260,7 @@ class RefreshDefaultBARTAgent(RefreshBARTAgent):
                          initial_random_selections, random_state, encoding)
 
 
-class RefreshLogisticBARTAgent(RefreshBARTAgent):
+class LogisticBARTTSAgent(BARTTSAgent):
     """
     Refresh BART agent for binary outcomes using logistic regression.
     """

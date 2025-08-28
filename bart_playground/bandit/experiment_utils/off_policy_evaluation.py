@@ -1,16 +1,15 @@
 # Off Policy Evaluation (OPE) for Bandit Problems
 
+import warnings
+from typing import Dict, List, Union, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Any, Union, Optional, Tuple
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
-import warnings
-import logging
 
 from bart_playground.bandit.agents.agent import BanditAgent
-# from ...notebooks.bandit.compare_agents import _ca_logger
 
 def estimate_propensity_scores(context_matrix: np.ndarray, actions: np.ndarray, n_arms: int) -> np.ndarray:
     """Estimate propensity scores using multinomial logistic regression."""
