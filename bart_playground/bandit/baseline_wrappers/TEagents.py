@@ -1,5 +1,5 @@
-from .baselines.Hannes.TETS import BernoulliXGBoostTSAgent, BernoulliRandomForestTSAgent
-from .agent import BanditAgent
+from bart_playground.bandit.baselines.Hannes.TETS import BernoulliXGBoostTSAgent, BernoulliRandomForestTSAgent
+from bart_playground.bandit.agents.agent import BanditAgent
 import numpy as np
 from typing import Dict, Any, Union, List
 

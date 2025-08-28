@@ -35,20 +35,20 @@ cores =  multiprocessing.cpu_count() - 1
 
 # %%
 from bart_playground.bandit.bcf_agent import BCFAgent, BCFAgentPSOff
-from bart_playground.bandit.basic_agents import SillyAgent, LinearTSAgent
+from bart_playground.bandit.agents.basic_agents import SillyAgent, LinearTSAgent
 from bart_playground.bandit.ensemble_agent import EnsembleAgent
 from bart_playground.bandit.me_agents import HierTSAgent, LinearTSAgent2, LinearUCBAgent, METSAgent
-from bart_playground.bandit.bart_agent import BARTAgent, LogisticBARTAgent, DefaultBARTAgent, MultiChainBARTAgent
-from bart_playground.bandit.refresh_agent import RefreshDefaultBARTAgent, RefreshLogisticBARTAgent
+from bart_playground.bandit.agents.bart_agent import DefaultBARTAgent
+from bart_playground.bandit.agents.refresh_agent import RefreshDefaultBARTAgent
 from bart_playground.bart import DefaultBART, LogisticBART
 
-from bart_playground.bandit.TEagents import TEAgent
+from bart_playground.bandit.baseline_wrappers.TEagents import TEAgent
 
 
 from compare_agents import (
     AgentSpec, compare_agents_across_scenarios, print_summary_results, plot_comparison_results
 )
-from bart_playground.bandit.sim_util import _sim_logger, OpenMLScenario, FriedmanDScenario, FriedmanScenario, LinearScenario, GLMScenario, LinearFriedmanScenario
+from bart_playground.bandit.experiment_utils.sim_util import _sim_logger, OpenMLScenario, FriedmanScenario, LinearScenario, GLMScenario, LinearFriedmanScenario
 # from bart_playground.bandit.rome.rome_scenarios import HomogeneousScenario, NonlinearScenario
 from drinkless import DrinkLessScenario
 
@@ -89,7 +89,7 @@ profile = False # Profile the simulation (if True, will use a profiler)
 has_gpu = True
 try:
     import torch
-    from bart_playground.bandit.neural_paper_agents import NeuralTSDiagAgent, LinearTSDiagAgent, KernelTSDiagAgent, NeuralTSAgent, NLinearTSAgent, NKernelTSAgent
+    from bart_playground.bandit.baseline_wrappers.neural_paper_agents import NeuralTSDiagAgent, LinearTSDiagAgent, KernelTSDiagAgent, NeuralTSAgent, NLinearTSAgent, NKernelTSAgent
 except:
     has_gpu = False
     _sim_logger.warning("Neural agents not available. Skipping GPU-based agents.")

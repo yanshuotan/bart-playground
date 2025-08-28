@@ -8,7 +8,7 @@ from .params import Parameters
 from .moves import Move
 from .util import Dataset, GIG
 
-from bart_playground.bandit.sim_util import _sim_logger
+from bart_playground.bandit.experiment_utils.sim_util import _sim_logger
     
 # Standalone Numba-optimized functions
 

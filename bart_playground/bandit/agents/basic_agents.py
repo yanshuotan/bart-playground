@@ -1,6 +1,6 @@
 import numpy as np
 from typing import List, Optional, Dict, Any, Union
-from .agent import BanditAgent
+from bart_playground.bandit.agents.agent import BanditAgent
 
 class SillyAgent(BanditAgent):
     """

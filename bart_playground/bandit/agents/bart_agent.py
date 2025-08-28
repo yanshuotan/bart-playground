@@ -1,9 +1,9 @@
 import numpy as np
-from typing import Callable, List, Optional, Union, Dict, Any
-import math
-from ..bart import DefaultBART, LogisticBART
-from ..mcbart import MultiChainBART
-from .agent import BanditAgent
+from typing import Callable, List, Union
+
+from bart_playground.bart import DefaultBART, LogisticBART
+from bart_playground.mcbart import MultiChainBART
+from bart_playground.bandit.agents.agent import BanditAgent
 
 class BanditEncoder:
     """

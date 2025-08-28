@@ -6,10 +6,9 @@ from tqdm import tqdm
 from datetime import datetime
 import ray
 import logging
-import pandas as pd
 
-from bart_playground.bandit.sim_util import simulate, Scenario, _sim_logger
-from bart_playground.bandit.ope import instantiate_agents
+from bart_playground.bandit.experiment_utils.sim_util import simulate, Scenario, _sim_logger
+from bart_playground.bandit.experiment_utils.ope import instantiate_agents
 
 def add_logging_file(save_dir: str):
     now = datetime.now().strftime("%y%m%d_%H%M%S_%f")
@@ -169,7 +168,7 @@ def compare_agents_across_scenarios(scenarios: Dict[str, Scenario],
     if isinstance(sim_indices, int):
         sim_indices = list(range(sim_indices))
     
-    from bart_playground.bandit.sim_util import setup_logging
+    from bart_playground.bandit.experiment_utils.sim_util import setup_logging
     _ca_logger = setup_logging()
     if log_to_file:
         add_logging_file(save_dir)
