@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Callable, List, Union
 
-from bart_playground.bandit.experiment_utils.scenarios import BanditEncoder
+from bart_playground.bandit.experiment_utils.encoder import BanditEncoder
 from bart_playground.bart import DefaultBART, LogisticBART
 from bart_playground.mcbart import MultiChainBART
 from bart_playground.bandit.agents.agent import BanditAgent
