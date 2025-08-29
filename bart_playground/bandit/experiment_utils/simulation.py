@@ -6,6 +6,59 @@ import math
 
 sim_logger = logging.getLogger(__name__)
 
+class Scenario:
+    def __init__(self, P, K, sigma2, random_generator=None):
+        """
+        Parameters:
+            P (int): Number of covariates (features).
+            K (int): Number of arms (including control).
+            sigma2 (float): Noise variance.
+            random_generator: Random number generator instance. If None, np.random.default_rng is used.
+        """
+        self.P = P
+        self.K = K
+        self.sigma2 = sigma2
+        self.rng = random_generator if random_generator is not None else np.random.default_rng()
+        self.init_params()
+
+    def init_params(self):
+        pass
+
+    def set_seed(self, seed):
+        """
+        Set the random seed for reproducibility.
+        """
+        self.rng = np.random.default_rng(seed)
+
+    def shuffle(self, random_state=None):
+        """
+        Shuffle the scenario and reset parameters. Default implementation just reinitializes.
+        """
+        if random_state is not None:
+            self.set_seed(random_state)
+        self.init_params()
+
+    def generate_covariates(self):
+        # Generate a vector of P covariates (features) sampled from a uniform distribution.
+        return self.rng.uniform(-1, 1, size=self.P).astype(np.float32)
+
+    def reward_function(self, x):
+        """
+        Given a feature vector x, compute:
+          - outcome_mean: Expected rewards for each arm.
+          - reward: Outcome_mean plus noise.
+        Must be implemented in subclasses.
+        """
+        raise NotImplementedError("This method should be implemented in subclasses.")
+
+    @property
+    def max_draws(self):
+        return math.inf # Maximum number of draws for the scenario, default is infinity.
+
+    @property
+    def rng_state(self):
+        return self.rng.bit_generator.state
+
 def simulate(scenario, agents, n_draws, agent_names: list[str]=[]):
     """
     Simulate a bandit problem using the provided scenario and agents. The `simulate` function takes a scenario, a list of agents, and the number of draws. For each draw:

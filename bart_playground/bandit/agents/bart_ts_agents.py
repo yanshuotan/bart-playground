@@ -3,7 +3,7 @@ from typing import Callable, List, Union
 import logging
 from bart_playground.bart import DefaultBART, LogisticBART
 from bart_playground.bandit.agents.agent import BanditAgent
-from bart_playground.bandit.experiment_utils.scenarios import BanditEncoder
+from bart_playground.bandit.experiment_utils.encoder import BanditEncoder
 
 logger = logging.getLogger(__name__)
 

@@ -17,5 +17,7 @@ notebooks/bandit/data
 bart_playground/bandit/baselines
 .idea/
 .vscode/
-benchmarks/*.csv
-notebooks/bandit/submit.pbs
+
+/benchmarks/
+/notebooks/
+/new_repo/
