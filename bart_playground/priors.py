@@ -84,6 +84,9 @@ def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps
     
     for node in range(node_counts):
         if leaves[node]:
+            # Check that the node actually has samples
+            if sample_n_in_node[node] == 0:
+                continue
             logdet += math.log(sample_n_in_node[node] / noise_ratio + 1.0)
             ls_resids -= (resid_all[node] ** 2) / sample_n_in_node[node]
             ridge_bias += (resid_all[node] ** 2) / (sample_n_in_node[node] * (sample_n_in_node[node] / noise_ratio + 1.0))
