@@ -175,13 +175,17 @@ class TreesPrior:
             # For single tree, we can use the optimized function with leaf_ids
             tree = bart_params.trees[tree_ids[0]]
             leaf_ids = tree.leaf_ids
+            
+            # Fix: Ensure random vector matches the number of non-empty leaves
+            n_non_empty_leaves = len(np.unique(leaf_ids))
+            
             return _single_tree_resample_leaf_vals(
                 leaf_ids,
                 tree.n,
                 residuals,
                 eps_sigma2=bart_params.global_params["eps_sigma2"][0],
                 f_sigma2=self.f_sigma2,
-                random_normal_p=self.generator.standard_normal(size=len(tree.leaves))
+                random_normal_p=self.generator.standard_normal(size=n_non_empty_leaves)
             )
         else:
             leaf_basis = bart_params.leaf_basis(tree_ids)
