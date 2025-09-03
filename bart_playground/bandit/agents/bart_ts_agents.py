@@ -2,6 +2,7 @@ import numpy as np
 from typing import Callable, List, Union
 import logging
 from bart_playground.bart import DefaultBART, LogisticBART
+from bart_playground.mcbart import MultiChainBART
 from bart_playground.bandit.agents.agent import BanditAgent
 from bart_playground.bandit.experiment_utils.encoder import BanditEncoder
 
@@ -108,7 +109,6 @@ class BARTTSAgent(BanditAgent):
             return
 
         logger.info(f't = {self.t} - re-training BART model from scratch')
-        # sim_logger.info(f'Current model: {self.model.n_trees} trees, {self.model.ndpost} posterior samples, {self.model.nskip} burn-in samples, encoding = {self.encoding}')
 
         X = np.array(self.all_encoded_features)
         y = np.array(self.all_rewards)
@@ -143,9 +143,8 @@ class BARTTSAgent(BanditAgent):
 
     @staticmethod
     def _default_schedule(total_k) -> Callable[[int], float]:
-    # weight 0 for the very first draw (burn-in),
-    # then uniform 1/(total_k-1) for all subsequent samples
-        return lambda k: 0.0 if k == 0 else 1.0 / (total_k - 1)
+        # Simply a uniform schedule
+        return lambda k: 1.0 / total_k
 
     def _get_action_estimates(self, x: Union[np.ndarray, List[float]]) -> np.ndarray:
         """Get action estimates for all arms based on input features x."""
@@ -240,6 +239,7 @@ class BARTTSAgent(BanditAgent):
 class DefaultBARTTSAgent(BARTTSAgent):
     """
     Refresh BART agent with default BART parameters.
+    When n_chains > 1, uses MultiChainBART for ensemble modeling.
     """
     def __init__(self, n_arms: int, n_features: int,
                  ndpost: int = 1000, nskip: int = 100,
@@ -247,15 +247,32 @@ class DefaultBARTTSAgent(BARTTSAgent):
                  dirichlet_prior: bool = False,
                  initial_random_selections: int = 10,
                  random_state: int = 42,
-                 encoding: str = 'multi') -> None:
-        model_factory = lambda: DefaultBART(
-            n_trees=n_trees,
-            ndpost=ndpost,
-            nskip=nskip,
-            random_state=random_state,
-            proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
-            dirichlet_prior=dirichlet_prior
-        )
+                 encoding: str = 'multi',
+                 n_chains: int = 1) -> None:
+        
+        if n_chains > 1:
+            # Use MultiChainBART for ensemble modeling
+            model_factory = lambda: MultiChainBART(
+                n_ensembles=n_chains,
+                bart_class=DefaultBART,
+                n_trees=n_trees,
+                ndpost=ndpost,
+                nskip=nskip,
+                random_state=random_state,
+                proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
+                dirichlet_prior=dirichlet_prior
+            )
+        else:
+            # Use single DefaultBART instance
+            model_factory = lambda: DefaultBART(
+                n_trees=n_trees,
+                ndpost=ndpost,
+                nskip=nskip,
+                random_state=random_state,
+                proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
+                dirichlet_prior=dirichlet_prior
+            )
+        
         super().__init__(n_arms, n_features, model_factory, 
                          initial_random_selections, random_state, encoding)
 
