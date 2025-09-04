@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Tuple, List
 import numpy as np
 
 class BanditAgent(ABC):
@@ -44,3 +44,22 @@ class BanditAgent(ABC):
             self: Updated instance.
         """
         pass
+
+AgentSpec = Tuple[str, type, Dict[str, Any]]
+
+def instantiate_agents(agent_specs: List[Tuple[str, type, Dict]], 
+                              n_arms: int, n_features: int, 
+                              random_state: int = 0) -> List[BanditAgent]:
+    """Create fresh agent instances using the same pattern as compare_agents.py"""
+    agents = []
+    for name, cls, base_kwargs in agent_specs:
+        kwargs = base_kwargs.copy()
+        kwargs['n_arms'] = n_arms
+        kwargs['n_features'] = n_features
+        
+        # Offset seed for reproducibility
+        if 'random_state' in base_kwargs:
+            kwargs['random_state'] = random_state
+            
+        agents.append(cls(**kwargs))
+    return agents

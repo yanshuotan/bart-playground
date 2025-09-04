@@ -1,76 +1,12 @@
 # Off Policy Evaluation (OPE) for Bandit Problems
 
-import warnings
-from typing import Dict, List, Union, Optional, Tuple
+from typing import Dict, List, Union, Optional
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 
 from bart_playground.bandit.agents.agent import BanditAgent
-
-def estimate_propensity_scores(context_matrix: np.ndarray, actions: np.ndarray, n_arms: int) -> np.ndarray:
-    """Estimate propensity scores using multinomial logistic regression."""
-    n_samples = context_matrix.shape[0]
-    
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        
-        if n_arms == 2:
-            model = LogisticRegression(multi_class='ovr', random_state=42, max_iter=1000)
-            model.fit(context_matrix, actions)
-            probs = model.predict_proba(context_matrix)
-            
-            if probs.shape[1] == 1:
-                prob_class = model.classes_[0]
-                ps_matrix = np.zeros((n_samples, n_arms))
-                ps_matrix[:, prob_class] = probs[:, 0]
-                ps_matrix[:, 1 - prob_class] = 1 - probs[:, 0]
-            else:
-                ps_matrix = probs
-        else:
-            model = LogisticRegression(multi_class='multinomial', solver='lbfgs', 
-                                     random_state=42, max_iter=1000)
-            le = LabelEncoder()
-            actions_encoded = le.fit_transform(actions)
-            model.fit(context_matrix, actions_encoded)
-            probs = model.predict_proba(context_matrix)
-            
-            ps_matrix = np.zeros((n_samples, n_arms))
-            for i, original_action in enumerate(le.classes_):
-                if original_action < n_arms:
-                    ps_matrix[:, original_action] = probs[:, i]
-            
-            # Handle missing classes
-            missing_prob = 1e-8
-            for arm in range(n_arms):
-                if arm not in le.classes_:
-                    ps_matrix[:, arm] = missing_prob
-            
-            # Renormalize
-            row_sums = ps_matrix.sum(axis=1, keepdims=True)
-            ps_matrix = ps_matrix / np.maximum(row_sums, 1e-8)
-    
-    return ps_matrix
-
-def instantiate_agents(agent_specs: List[Tuple[str, type, Dict]], 
-                              n_arms: int, n_features: int, 
-                              sim: int = 0) -> List[BanditAgent]:
-    """Create fresh agent instances using the same pattern as compare_agents.py"""
-    agents = []
-    for name, cls, base_kwargs in agent_specs:
-        kwargs = base_kwargs.copy()
-        kwargs['n_arms'] = n_arms
-        kwargs['n_features'] = n_features
-        
-        # Offset seed for reproducibility
-        if 'random_state' in base_kwargs:
-            kwargs['random_state'] = sim
-            
-        agents.append(cls(**kwargs))
-    return agents
 
 def evaluate_agents(data: Dict[str, Union[np.ndarray, pd.DataFrame]], 
                    agents: List[BanditAgent], 
@@ -95,9 +31,7 @@ def evaluate_agents(data: Dict[str, Union[np.ndarray, pd.DataFrame]],
     n_draw = context_matrix.shape[0]
     
     if propensity_scores is None:
-        print("Estimating propensity scores...")
-        ps_matrix = estimate_propensity_scores(context_matrix, actions, n_arms)
-        ps_matrix = np.clip(ps_matrix, 1e-8, 1.0)
+        raise ValueError("Propensity scores are required for off-policy evaluation.")
     else:
         ps_matrix = propensity_scores
         if ps_matrix.shape[0] != n_draw or ps_matrix.shape[1] != n_arms:
