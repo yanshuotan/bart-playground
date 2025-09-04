@@ -4,6 +4,7 @@ from tqdm import tqdm
 from abc import ABC, abstractmethod
 from typing import Callable, Optional
 from scipy.stats import truncnorm
+import logging
 
 from .params import Tree, Parameters
 from .moves import all_moves, Move
@@ -276,22 +277,47 @@ class DefaultSampler(Sampler):
         """
         Perform one iteration of the sampler.
         """
-        iter_current = current.copy() # First make a copy
+        iter_current = current.copy()  # First make a copy
         iter_trace = [(0, iter_current)]
+        moves_history = []
         for k in range(self.tree_prior.n_trees):
-            move = self.sample_move()(
+            move_class = self.sample_move()
+            move = move_class(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
-              )
-            if move.propose(self.generator): # Check if a valid move was proposed
+            )
+
+            accepted = False
+            if move.propose(self.generator):  # Check if a valid move was proposed
                 Z = self.generator.uniform(0, 1)
                 marginalize = getattr(self, 'marginalize', False)
                 if np.log(Z) < self.log_mh_ratio(move, temp, marginalize=marginalize):
-                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
+                    accepted = True
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y=self.data.y,
+                                                                     tree_ids=[k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
-                        iter_trace.append((k+1, move.proposed))
-        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
+                        iter_trace.append((k + 1, move.proposed))
+            moves_history.append(f"Tree {k}: {move_class.__name__} (Accepted: {accepted})")
+        try:
+            iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y=self.data.y)
+        except ValueError as e:
+            logging.error("Error during global param resampling. Moves in this iteration:")
+            for move_log in moves_history:
+                logging.error(move_log)
+            evaluation = iter_current.evaluate()
+            if np.any(np.isnan(evaluation)):
+                logging.error("NaNs detected in model evaluation. Checking individual trees...")
+                for tree_idx, tree in enumerate(iter_current.trees):
+                    tree_eval = tree.evaluate()
+                    if np.any(np.isnan(tree_eval)):
+                        logging.error(f"  -> Tree {tree_idx} is producing NaNs.")
+                        logging.error(f"     Tree {tree_idx} structure:\n{str(tree)}")
+            else:
+                residuals = self.data.y - evaluation
+                logging.error(f"Sum of squared residuals: {np.sum(residuals ** 2)}")
+            raise
+
         if return_trace:
             return iter_trace
         else:

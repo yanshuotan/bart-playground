@@ -385,7 +385,9 @@ class Tree:
     def swap_split(self, parent_id, child_id):
         parent_var, parent_threshold = self.vars[parent_id], self.thresholds[parent_id]
         child_var, child_threshold = self.vars[child_id], self.thresholds[child_id]
-        self.change_split(child_id, parent_var, parent_threshold, update_n=False)
+        is_valid = self.change_split(child_id, parent_var, parent_threshold, update_n=True)
+        if not is_valid:
+            return False
         is_valid = self.change_split(parent_id, child_var, child_threshold, update_n=True)
         return is_valid
     
@@ -488,6 +490,9 @@ class Tree:
             return f"Tree(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals}, n_vals={self.n})"
 
     def _print_tree(self, node_id=0, prefix=""):
+        if node_id >= len(self.vars) or self.vars[node_id] == -2:
+            return ""
+        
         pprefix = prefix + "\t"
         if self.vars[node_id] == -1: # Leaf node
             return prefix + self._print_node(node_id)
