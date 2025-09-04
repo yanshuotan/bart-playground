@@ -148,7 +148,7 @@ class BART:
             xgb_model,
             X: np.ndarray,
             y: Optional[np.ndarray] = None,
-            xgb_kwargs: dict = None,
+            xgb_kwargs: dict | None = None,
             debug: bool = False
     ) -> "BART":
         # Ensure self.data is correctly populated. 
