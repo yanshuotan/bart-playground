@@ -10,6 +10,7 @@ scripts/
 *.log
 .idea/
 .vscode/
+.cursor/
 
 /benchmarks/
 /notebooks/
