@@ -86,13 +86,13 @@ class Tree:
         - leaf_ids : np.ndarray, optional
             Array indicating which leaf each data example belongs to. Default is None.
         """
-        self.dataX = dataX
-        self.vars = vars
-        self.thresholds = thresholds
-        self.leaf_vals : NDArray[np.float32] = leaf_vals
+        self.dataX: Optional[NDArray[Float32Or64]] = dataX
+        self.vars: NDArray[np.int32] = vars
+        self.thresholds: NDArray[Float32Or64] = thresholds
+        self.leaf_vals: NDArray[Float32Or64] = leaf_vals
 
         self.n: NDArray[np.int32] = n
-        self.leaf_ids: NDArray[np.int32] = leaf_ids
+        self.leaf_ids: NDArray[Union[np.int16, np.int32]] = leaf_ids
         self.evals: NDArray[Float32Or64] = evals
         
         # Store float dtype
@@ -119,8 +119,12 @@ class Tree:
         # Define the basic tree parameters.
         vars = np.full(Tree.default_size, -2, dtype=int)  # -2 represents an inexistent node
         vars[0] = -1                      # -1 represents a leaf node
-        thresholds = np.full(8, np.nan, dtype=np.float32)
-        leaf_vals = np.full(8, np.nan, dtype=np.float32)
+        
+        ### Determine float dtype from dataX, default to float32
+        float_dtype = dataX.dtype if dataX is not None else np.float32
+        
+        thresholds = np.full(Tree.default_size, np.nan, dtype=float_dtype)
+        leaf_vals = np.full(Tree.default_size, np.nan, dtype=float_dtype)
         leaf_vals[0] = 0                   # Initialize the leaf value
 
         new_tree = cls(
@@ -163,7 +167,7 @@ class Tree:
             X
         )
 
-    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[np.float32]:
+    def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[Float32Or64]:
         """
         Evaluate the tree for a given input data matrix.
 
@@ -204,20 +208,11 @@ class Tree:
         b[old_size:] = self.float_dtype.type(np.nan)
         self.thresholds = b
 
-        # Resize vars array
-        new_vars = np.full(new_length, -2, dtype=int)
-        new_vars[:len(self.vars)] = self.vars
-        self.vars = new_vars
-
-        # Resize split array
-        new_thresholds = np.full(new_length, np.nan, dtype=np.float32)
-        new_thresholds[:len(self.thresholds)] = self.thresholds
-        self.thresholds = new_thresholds
-
-        # Resize leaf_vals array
-        new_leaf_vals = np.full(new_length, np.nan, dtype=np.float32)
-        new_leaf_vals[:len(self.leaf_vals)] = self.leaf_vals
-        self.leaf_vals = new_leaf_vals
+        # ------- leaf_vals (float) -------
+        c = np.empty(new_size, dtype=self.float_dtype)
+        c[:old_size] = self.leaf_vals
+        c[old_size:] = self.float_dtype.type(np.nan)
+        self.leaf_vals = c
 
         if self.cache_exists:
             # ------- n (int) -------
@@ -250,8 +245,8 @@ class Tree:
             self.leaf_vals = self.leaf_vals[:new_length]
             self.n = self.n[:new_length]
 
-    def split_leaf(self, node_id: int, var: int, threshold: np.float32, left_val: np.float32=np.float32(np.nan), 
-                   right_val: np.float32 = np.float32(np.nan)):
+    def split_leaf(self, node_id: int, var: int, threshold: Float32Or64, left_val: Optional[Float32Or64]=None, 
+                   right_val: Optional[Float32Or64] = None):
         """
         Split a leaf node into two child nodes.
 
@@ -433,9 +428,12 @@ class Tree:
                 and not self.is_terminal_split_node(i)]
 
     @property
-    def leaf_basis(self) -> NDArray[np.bool_]:
-        return self.node_indicators[:, self.vars == -1]
-        # return _compute_leaf_basis(self.node_indicators, self.vars)
+    def leaf_basis(self) -> NDArray[Float32Or64]:
+        leaves = self.leaves
+        basis = np.zeros((len(self.leaf_ids), len(leaves)), dtype=self.float_dtype)
+        for i, leaf in enumerate(leaves):
+            basis[:, i] = (self.leaf_ids == leaf).astype(self.float_dtype)
+        return basis
 
     def __str__(self):
         return self._print_tree()
@@ -576,7 +574,7 @@ class Parameters:
         
         return new_state
 
-    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[np.float32]:
+    def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[Float32Or64]:
         """
         Evaluate the model on the given data.
 
@@ -630,7 +628,7 @@ class Parameters:
             return self.trees[tree_ids[0]].leaf_basis
         return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
 
-    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[np.float32]):
+    def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[Float32Or64]):
         """
         Update the leaf values of specified trees.
 

@@ -102,17 +102,17 @@ class Sampler(ABC):
         # Determine the actual starting state for this MCMC run
         if current is not None:
             current_state = current
-        elif self.trace:  # If self.trace is already populated (e.g., by init_from_xgboost)
-            current_state = self.trace[0]  # Use the pre-loaded state
+        elif self.trace:
+            current_state = self.trace[0]
         else:
-            current_state = self.get_init_state() # Otherwise, generate a new initial state
+            current_state = self.get_init_state()
         
         self.trace = []
         self.n_iter = n_iter
 
         if n_skip == 0:
-            self.trace.append(current) # Default: Add initial state to trace
-        
+            self.trace.append(current_state) # Add initial state to trace
+
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
 
         for iter in iterator:
@@ -122,18 +122,20 @@ class Sampler(ABC):
             temp = self.temp_schedule(iter)
             backup_current = None
             if iter >= n_skip:
-                if isinstance(current, list):
+                if isinstance(current_state, list):
                     # If current is a list (e.g., in LogisticSampler), copy each category
-                    backup_current = [c.copy(copy_cache=False) for c in current]
+                    backup_current = [c.copy(copy_cache=False) for c in current_state]
+                elif isinstance(current_state, Parameters):
+                    backup_current = current_state.copy(copy_cache=False)
                 else:
-                    backup_current = current.copy(copy_cache=False)
+                    raise ValueError("Invalid current state type")
 
-            current = self.one_iter(current, temp, return_trace=False)
+            current_state = self.one_iter(current_state, temp, return_trace=False)
             
             if iter >= n_skip:
                 if len(self.trace) > 0:
                     self.trace[-1] = backup_current
-                self.trace.append(current)
+                self.trace.append(current_state)
         
         return self.trace
     

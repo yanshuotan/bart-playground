@@ -1,26 +1,24 @@
 # Off Policy Evaluation (OPE) for Bandit Problems
 
-from typing import Dict, List, Union, Optional, Any
-
+from typing import Any
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from numpy.typing import NDArray
 
 from bart_playground.bandit.agents.agent import BanditAgent
 
-def sim_propensities(data: Dict[str, Union[np.ndarray, pd.DataFrame]], 
-                   agents: List[BanditAgent], 
-                   n_arms: int,
-                   agent_names: Optional[List[str]] = None,
+def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame], 
+                   agents: list[BanditAgent], 
+                   agent_names: list[str] | None = None,
                    n_choices_per_iter: int = 1,
                    show_progress: bool = True,
-                   return_final_states: bool = False) -> Dict[str, Dict[str, Union[np.ndarray, BanditAgent]]]:
+                   return_final_states: bool = False) -> dict[str, dict[str, NDArray[Any] | BanditAgent]]:
     """Simulate bandit agents and generate actions for off-policy evaluation.
     
     Args:
         data: Dictionary containing 'context', 'action', and 'reward' arrays
         agents: List of bandit agents to evaluate
-        n_arms: Number of arms in the bandit problem
         agent_names: Optional list of agent names
         n_choices_per_iter: Number of choose_arm calls per iteration to calculate pi_t probability
         show_progress: Whether to show progress bar
@@ -35,9 +33,9 @@ def sim_propensities(data: Dict[str, Union[np.ndarray, pd.DataFrame]],
     """
     
     # Extract and prepare data
-    context_matrix = np.array(data['context'])
-    actions = np.array(data['action'])
-    rewards = np.array(data['reward'])
+    context_matrix: NDArray[Any] = np.array(data['context'])
+    actions: NDArray[Any] = np.array(data['action'])
+    rewards: NDArray[Any] = np.array(data['reward'])
     
     if context_matrix.ndim == 1:
         context_matrix = context_matrix.reshape(-1, 1)
@@ -46,19 +44,19 @@ def sim_propensities(data: Dict[str, Union[np.ndarray, pd.DataFrame]],
     if actions.min() == 1:
         actions = actions - 1
     
-    n_draw = context_matrix.shape[0]
+    n_draw: int = context_matrix.shape[0]
     
     # Prepare agent names
     if agent_names is None:
         agent_names = [f"Agent_{i}" for i in range(len(agents))]
     
-    simulation_results = {}
+    simulation_results: dict[str, dict[str, NDArray[Any] | BanditAgent]] = {}
     
     for agent_idx, agent in enumerate(agents):
         agent_name = agent_names[agent_idx]
         print(f"Simulating agent: {agent_name}")
         
-        pi_t_values = np.zeros(n_draw)
+        pi_t_values: NDArray[Any] = np.zeros(n_draw)
         
         iterator = tqdm(range(n_draw), desc=f"Simulating {agent_name}") if show_progress else range(n_draw)
         
@@ -80,7 +78,7 @@ def sim_propensities(data: Dict[str, Union[np.ndarray, pd.DataFrame]],
             # Update agent state
             _ = agent.update_state(a_t, x_t, r_t)
         
-        result_dict: Dict[str, Union[np.ndarray, BanditAgent]] = {
+        result_dict: dict[str, NDArray[Any] | BanditAgent] = {
             'actions': actions,
             'pi_t': pi_t_values,
             'rewards': rewards
@@ -94,8 +92,8 @@ def sim_propensities(data: Dict[str, Union[np.ndarray, pd.DataFrame]],
     return simulation_results
 
 
-def calculate_policy_values(simulation_results: Dict[str, Dict[str, Union[np.ndarray, BanditAgent]]], 
-                          propensity_scores: np.ndarray) -> Dict[str, float]:
+def calculate_policy_values(simulation_results: dict[str, dict[str, NDArray[Any] | BanditAgent]], 
+                          propensity_scores: NDArray[Any]) -> dict[str, float]:
     """Calculate policy values using importance sampling from simulation results.
     
     Args:
@@ -106,7 +104,7 @@ def calculate_policy_values(simulation_results: Dict[str, Dict[str, Union[np.nda
         Dictionary mapping agent names to their estimated policy values
     """
     
-    agent_results = {}
+    agent_results: dict[str, float] = {}
     
     for agent_name, results in simulation_results.items():
         pi_t = results['pi_t']
@@ -114,18 +112,18 @@ def calculate_policy_values(simulation_results: Dict[str, Dict[str, Union[np.nda
         actions = results['actions']
         
         # Cast to ensure proper types
-        pi_t_arr = np.array(pi_t)
-        rewards_arr = np.array(rewards)
-        actions_arr = np.array(actions)
+        pi_t_arr: NDArray[Any] = np.array(pi_t)
+        rewards_arr: NDArray[Any] = np.array(rewards)
+        actions_arr: NDArray[Any] = np.array(actions)
         
         # Extract propensity scores for logged actions
-        propensity_values = np.array([propensity_scores[t, int(actions_arr[t])] for t in range(len(actions_arr))])
+        propensity_values: NDArray[Any] = np.array([propensity_scores[t, int(actions_arr[t])] for t in range(len(actions_arr))])
         
         # Calculate importance weights: w_t = pi_t / p_t
-        importance_weights = pi_t_arr / propensity_values
+        importance_weights: NDArray[Any] = pi_t_arr / propensity_values
         
-        numerator = np.sum(importance_weights * rewards_arr)
-        denominator = np.sum(importance_weights)
+        numerator: float = float(np.sum(importance_weights * rewards_arr))
+        denominator: float = float(np.sum(importance_weights))
         
         # Compute policy value estimate
         V_hat = numerator / denominator if denominator > 0 else 0.0
