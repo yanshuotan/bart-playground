@@ -138,7 +138,7 @@ class Tree:
         self.leaf_vals: NDArray[np.float32] = leaf_vals
 
         self.n: NDArray[np.int32] = n
-        self.leaf_ids: NDArray[np.int16] = leaf_ids
+        self.leaf_ids: NDArray[np.int32] = leaf_ids
         self.evals: NDArray[np.float32] = evals
 
     default_size: int = 8  # Default size for the tree arrays
@@ -148,7 +148,7 @@ class Tree:
         Initialize caching arrays for the tree.
         """
         assert self.dataX is not None, "Data matrix is not provided."
-        self.leaf_ids = np.zeros(self.dataX.shape[0], dtype=np.int16)
+        self.leaf_ids = np.zeros(self.dataX.shape[0], dtype=np.int32)
         self.n = np.zeros(Tree.default_size, dtype=np.int32)
         self.n[0] = self.dataX.shape[0]
         self.evals = np.zeros(self.dataX.shape[0], dtype=np.float32)
