@@ -20,5 +20,4 @@ bart_playground/bandit/baselines
 .cursor/
 
 /benchmarks/
-/notebooks/
 /experiments/
