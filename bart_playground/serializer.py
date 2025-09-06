@@ -1,0 +1,200 @@
+"""
+Pydantic DTOs and helpers to serialize/deserialize Tree and Parameters.
+
+This module provides JSON-friendly Data Transfer Objects (DTOs) for the
+`Tree` and `Parameters` classes defined in `bart_playground.params`, along with
+helpers to convert to/from those runtime objects.
+
+Design notes:
+- NumPy arrays are encoded as base64 with explicit dtype and shape to preserve
+  exact types and avoid large JSON lists. This keeps payloads compact and
+  lossless for float32/float64/int32 arrays used by the codebase.
+- `dataX` can be optionally included/excluded when serializing to control
+  payload size. Cached arrays (`n`, `leaf_ids`, `evals`, `cache`) are
+  serialized if present.
+
+Usage:
+- Create JSON from Parameters: `to_json(params)`
+- Restore Parameters from JSON: `from_json(json_str)`
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import is_dataclass, asdict
+import base64
+import json
+
+import numpy as np
+from pydantic import BaseModel
+
+# Local runtime classes
+from .params import Tree, Parameters
+
+
+class NDArrayDTO(BaseModel):
+    """Lossless encoding for a NumPy array as dtype + shape + base64 data."""
+
+    shape: Tuple[int, ...]
+    dtype: str
+    data: str  # base64-encoded little-endian bytes from `arr.tobytes()`
+
+    @staticmethod
+    def from_array(arr: np.ndarray) -> "NDArrayDTO":
+        # Ensure contiguous memory for stable tobytes
+        a = np.ascontiguousarray(arr)
+        data_b64 = base64.b64encode(a.tobytes()).decode("ascii")
+        return NDArrayDTO(shape=a.shape, dtype=str(a.dtype), data=data_b64)
+
+    def to_array(self) -> np.ndarray:
+        raw = base64.b64decode(self.data.encode("ascii"))
+        arr = np.frombuffer(raw, dtype=np.dtype(self.dtype)).copy()
+        if self.shape:
+            arr = arr.reshape(self.shape)
+        return arr
+
+
+class TreeDTO(BaseModel):
+    """Serializable state for a single Tree."""
+
+    # Optional dataset
+    dataX: Optional[NDArrayDTO] = None
+
+    # Core structure
+    vars: NDArrayDTO
+    thresholds: NDArrayDTO
+    leaf_vals: NDArrayDTO
+
+    # Optional caches
+    n: Optional[NDArrayDTO] = None
+    leaf_ids: Optional[NDArrayDTO] = None
+    evals: Optional[NDArrayDTO] = None
+
+    # Redundant but handy for quick inspection
+    float_dtype: str
+
+
+class ParametersDTO(BaseModel):
+    """Serializable state for full Parameters object."""
+
+    trees: List[TreeDTO]
+    global_params: Dict[str, Any]
+    cache: Optional[NDArrayDTO] = None
+    float_dtype: str
+
+
+def _to_builtin(obj: Any) -> Any:
+    """Recursively convert numpy scalars/arrays and dataclasses to builtin JSON types."""
+    if isinstance(obj, (np.floating, np.integer)):
+        return obj.item()
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    if isinstance(obj, (np.ndarray,)):
+        # Prefer lists for small arrays in params dict; for large data use NDArrayDTO explicitly elsewhere
+        return obj.tolist()
+    if is_dataclass(obj):
+        return _to_builtin(asdict(obj))
+    if isinstance(obj, dict):
+        return {str(k): _to_builtin(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_builtin(v) for v in obj]
+    return obj
+
+
+def tree_to_dto(tree: Tree, *, include_dataX: bool = False) -> TreeDTO:
+    """Convert a runtime Tree into a TreeDTO."""
+    return TreeDTO(
+        dataX=NDArrayDTO.from_array(tree.dataX) if (include_dataX and tree.dataX is not None) else None,
+        vars=NDArrayDTO.from_array(tree.vars),
+        thresholds=NDArrayDTO.from_array(tree.thresholds),
+        leaf_vals=NDArrayDTO.from_array(tree.leaf_vals),
+        n=NDArrayDTO.from_array(tree.n) if getattr(tree, "n", None) is not None else None,
+        leaf_ids=NDArrayDTO.from_array(tree.leaf_ids) if getattr(tree, "leaf_ids", None) is not None else None,
+        evals=NDArrayDTO.from_array(tree.evals) if getattr(tree, "evals", None) is not None else None,
+        float_dtype=str(tree.float_dtype),
+    )
+
+
+def dto_to_tree(dto: TreeDTO) -> Tree:
+    """Convert a TreeDTO back to a runtime Tree object."""
+    dataX = dto.dataX.to_array() if dto.dataX is not None else None
+    vars_arr = dto.vars.to_array().astype(np.int32, copy=False)
+    thresholds_arr = dto.thresholds.to_array()
+    leaf_vals_arr = dto.leaf_vals.to_array()
+
+    n_arr = dto.n.to_array().astype(np.int32, copy=False) if dto.n is not None else None
+    leaf_ids_arr = (
+        dto.leaf_ids.to_array().astype(np.int32, copy=False) if dto.leaf_ids is not None else None
+    )
+    evals_arr = dto.evals.to_array() if dto.evals is not None else None
+
+    tree = Tree(
+        dataX=dataX,
+        vars=vars_arr,
+        thresholds=thresholds_arr,
+        leaf_vals=leaf_vals_arr,
+        n=n_arr,
+        leaf_ids=leaf_ids_arr,
+        evals=evals_arr,
+    )
+    return tree
+
+
+def params_to_dto(params: Parameters, *, include_dataX: bool = False, include_cache: bool = True) -> ParametersDTO:
+    """Convert runtime Parameters to DTO.
+
+    include_dataX controls whether each tree's data matrix is serialized.
+    include_cache controls serialization of the aggregated cache in Parameters.
+    """
+    return ParametersDTO(
+        trees=[tree_to_dto(t, include_dataX=include_dataX) for t in params.trees],
+        global_params=_to_builtin(params.global_params),
+        cache=NDArrayDTO.from_array(params.cache) if (include_cache and getattr(params, "cache", None) is not None) else None,
+        float_dtype=str(params.float_dtype),
+    )
+
+
+def dto_to_params(dto: ParametersDTO) -> Parameters:
+    """Convert a ParametersDTO back into a runtime Parameters instance."""
+    trees = [dto_to_tree(t) for t in dto.trees]
+    cache_arr = dto.cache.to_array() if dto.cache is not None else None
+    # global_params are basic types already
+    params = Parameters(trees=trees, global_params=dict(dto.global_params), cache=cache_arr)
+    return params
+
+
+# Convenience JSON helpers
+def tree_to_json(tree: Tree, *, include_dataX: bool = False) -> str:
+    return tree_to_dto(tree, include_dataX=include_dataX).model_dump_json()
+
+
+def tree_from_json(s: str) -> Tree:
+    dto = TreeDTO.model_validate_json(s)
+    return dto_to_tree(dto)
+
+
+def params_to_json(params: Parameters, *, include_dataX: bool = False, include_cache: bool = True) -> str:
+    dto = params_to_dto(params, include_dataX=include_dataX, include_cache=include_cache)
+    # Use pydantic's JSON dump for consistency
+    return dto.model_dump_json()
+
+
+def params_from_json(s: str) -> Parameters:
+    dto = ParametersDTO.model_validate_json(s)
+    return dto_to_params(dto)
+
+
+__all__ = [
+    "NDArrayDTO",
+    "TreeDTO",
+    "ParametersDTO",
+    "tree_to_dto",
+    "dto_to_tree",
+    "params_to_dto",
+    "dto_to_params",
+    "tree_to_json",
+    "tree_from_json",
+    "params_to_json",
+    "params_from_json",
+]
+
