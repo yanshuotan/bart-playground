@@ -150,6 +150,8 @@ class TreesPrior:
         self.f_k = f_k
         self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.generator = generator
+        # If True, use quick decay parameterization for split probabilities
+        self.quick_decay = quick_decay
                 
     def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """
@@ -463,8 +465,8 @@ class BARTLikelihood:
 class ComprehensivePrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, 
                  specification="linear", generator=np.random.default_rng(),
-                 dirichlet_prior=False):
-        self.tree_prior = TreesPrior(int(n_trees), tree_alpha, tree_beta, f_k, generator)
+                 dirichlet_prior=False, quick_decay: bool = False):
+        self.tree_prior = TreesPrior(int(n_trees), tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
         self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
