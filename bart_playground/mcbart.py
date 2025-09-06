@@ -1,6 +1,6 @@
 import numpy as np
 import ray
-from typing import Callable
+from typing import Callable, Any, List, Dict
 from .bart import DefaultBART 
 
 @ray.remote
@@ -28,7 +28,7 @@ class BARTActor:
     def posterior_f(self, X):
         return self.model.posterior_f(X)
     
-    def posterior_sample(self, X, schedule):
+    def posterior_sample(self, X, schedule: Callable[[int], float]):
         # Use default backtransform behavior
         return self.model.posterior_sample(X, schedule)
 
@@ -57,20 +57,28 @@ class MultiChainBART:
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
 
-        # Generate children random states for reproducibility
+        # Initialize parent random state for chain picking
         self.rng = np.random.default_rng(random_state)
-        random_states = [self.rng.integers(0, 2**32 - 1) for _ in range(n_ensembles)]
+
+        # Generate children random states for reproducibility
+        def _make_child_states(master_seed: int, chain_id: int) -> np.random.SeedSequence:
+            return np.random.SeedSequence(master_seed, spawn_key=(chain_id,))
+
+        child_states = [_make_child_states(int(random_state), i) for i in range(n_ensembles)]
 
         # Create stateful actors. Each actor will build and hold one BART instance.
-        self.bart_actors = [BARTActor.remote(bart_class, random_state=rs, **kwargs)
-                            for rs in random_states]
+        self.bart_actors: List[Any] = [
+            BARTActor.remote(bart_class, random_state=seed_sequence, **kwargs)  # type: ignore
+            for seed_sequence in child_states
+        ]
         print(f"Created {n_ensembles} BARTActor(s) using BART class: {bart_class.__name__}")
         
     @property
     def _trace_length(self):
         """Get the trace length from the first actor's model."""
         if self.bart_actors:
-            return ray.get(self.bart_actors[0].get_attributes.remote()).get('_trace_length', 0)
+            attrs: Dict[str, Any] = ray.get(self.bart_actors[0].get_attributes.remote())
+            return attrs.get('_trace_length', 0)
         return 0
 
     def fit(self, X, y, quietly=False):
