@@ -172,7 +172,7 @@ class Tree:
         vars[0] = -1                      # -1 represents a leaf node
         
         ### Determine float dtype from dataX, default to float32
-        float_dtype = dataX.dtype if dataX is not None else np.float32
+        float_dtype = dataX.dtype if dataX is not None and np.issubdtype(dataX.dtype, np.floating) else np.float32
         
         thresholds = np.full(Tree.default_size, np.nan, dtype=float_dtype)
         leaf_vals = np.full(Tree.default_size, np.nan, dtype=float_dtype)

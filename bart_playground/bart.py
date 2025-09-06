@@ -321,6 +321,7 @@ class LogisticBART(BART):
         super().__init__(preprocessor, sampler, ndpost, nskip)
         
     def fit(self, X, y, quietly=False):
+        y = y.flatten()
         self.sampler.n_categories = np.unique(y).size
         super().fit(X, y, quietly=quietly)
         
