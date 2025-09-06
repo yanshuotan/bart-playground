@@ -383,7 +383,8 @@ class LogisticBART(BART):
         self.sampler.n_categories = value
         
     def fit(self, X, y, quietly=False):
-        self.n_categories = np.unique(y).size
+        y = y.flatten()
+        self.sampler.n_categories = np.unique(y).size
         super().fit(X, y, quietly=quietly)
         
     def posterior_f(self, X):
