@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, Tuple, List, Optional
+import logging
 import numpy as np
 
+logger = logging.getLogger(__name__)
+    
 class BanditAgent(ABC):
     """
     Abstract base class for bandit agents.
@@ -49,7 +52,7 @@ AgentSpec = Tuple[str, type, Dict[str, Any]]
 
 def instantiate_agents(agent_specs: List[Tuple[str, type, Dict]], 
                               n_arms: int, n_features: int, 
-                              random_state: int = 0) -> List[BanditAgent]:
+                              random_state: Optional[int] = None) -> List[BanditAgent]:
     """Create fresh agent instances using the same pattern as compare_agents.py"""
     agents = []
     for name, cls, base_kwargs in agent_specs:
@@ -57,9 +60,15 @@ def instantiate_agents(agent_specs: List[Tuple[str, type, Dict]],
         kwargs['n_arms'] = n_arms
         kwargs['n_features'] = n_features
         
-        # Offset seed for reproducibility
-        if 'random_state' in base_kwargs:
-            kwargs['random_state'] = random_state
-            
+        # If needed, add random_state to the kwargs
+        if 'need_random_state' in base_kwargs:
+            if random_state is not None:
+                kwargs['random_state'] = random_state
+                logger.info(f"Individual random_state provided for {name}. Using random_state {random_state}.")
+            else:
+                raise ValueError(f"Individual random_state not provided for {name} but need_random_state is True.")
+        else:
+            logger.info(f"Individual random_state not provided for {name}. This agent will use its own random policy.")
+
         agents.append(cls(**kwargs))
     return agents
