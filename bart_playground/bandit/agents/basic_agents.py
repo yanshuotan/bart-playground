@@ -110,15 +110,15 @@ class LinearAgentStable(BanditAgent):
             # Sample parameters from the posterior for each arm
             weights = [self._sample_w(a) for a in range(self.n_arms)]
             # Compute the expected reward for each arm
-            u = [float(w.T @ x) for w in weights]
+            u = [(w.T @ x).item() for w in weights]
         else:
             u: List[float] = []
             for a in range(self.n_arms):
                 post_mean = self._get_post_mean(a)
                 # variance term: || L^{-1} x ||^2
                 y = np.linalg.solve(self.L[a], x)
-                var = float(y.T @ y)
-                u.append(float(post_mean.T @ x) + self.alpha * np.sqrt(max(var, 0.0)))
+                var = (y.T @ y).item()
+                u.append((post_mean.T @ x).item() + self.alpha * np.sqrt(max(var, 0.0)))
 
         return u
 
