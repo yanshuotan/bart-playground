@@ -30,6 +30,8 @@ from pydantic import BaseModel
 
 # Local runtime classes
 from .params import Tree, Parameters
+from .bart import DefaultBART, BART
+from .util import DefaultPreprocessor
 
 
 class NDArrayDTO(BaseModel):
@@ -198,3 +200,190 @@ __all__ = [
     "params_from_json",
 ]
 
+# -----------------------
+# BART/DefaultBART support
+# -----------------------
+
+
+class RNGStateDTO(BaseModel):
+    bit_generator: str
+    state: Dict[str, Any]
+
+    @staticmethod
+    def from_generator(gen: np.random.Generator) -> "RNGStateDTO":
+        st = gen.bit_generator.state
+        return RNGStateDTO(bit_generator=st["bit_generator"], state=st)
+
+    def to_generator(self) -> np.random.Generator:
+        # Construct the appropriate BitGenerator and wrap in a Generator
+        bitgen_cls = getattr(np.random, self.bit_generator)
+        bg = bitgen_cls()
+        bg.state = self.state
+        return np.random.Generator(bg)
+
+
+class DefaultPreprocessorDTO(BaseModel):
+    kind: str = "default"
+    max_bins: int
+    y_min: float
+    y_max: float
+
+    @staticmethod
+    def from_preproc(p: DefaultPreprocessor) -> "DefaultPreprocessorDTO":
+        # y_min/max exist after fit
+        y_min = getattr(p, "y_min", 0.0)
+        y_max = getattr(p, "y_max", 0.0)
+        return DefaultPreprocessorDTO(max_bins=p.max_bins, y_min=float(y_min), y_max=float(y_max))
+
+    def to_preproc(self) -> DefaultPreprocessor:
+        p = DefaultPreprocessor(max_bins=self.max_bins)
+        # populate y_min/max so backtransform_y works
+        p.y_min = np.array(self.y_min).item()
+        p.y_max = np.array(self.y_max).item()
+        # thresholds not needed for posterior_sample
+        return p
+
+
+class DefaultBARTDTO(BaseModel):
+    cls: str = "DefaultBART"
+    ndpost: int
+    nskip: int
+    preprocessor: DefaultPreprocessorDTO
+    rng: RNGStateDTO
+    # Trace of Parameter states post burn-in or full trace depending on usage
+    trace: List[ParametersDTO]
+
+
+def default_bart_to_dto(model: DefaultBART, *, include_dataX: bool = False, include_cache: bool = True) -> DefaultBARTDTO:
+    return DefaultBARTDTO(
+        ndpost=int(model.ndpost),
+        nskip=int(model.nskip),
+        preprocessor=DefaultPreprocessorDTO.from_preproc(model.preprocessor),
+        rng=RNGStateDTO.from_generator(model.sampler.generator),
+        trace=[params_to_dto(s, include_dataX=include_dataX, include_cache=include_cache) for s in model.trace],
+    )
+
+
+def dto_to_default_bart(dto: DefaultBARTDTO) -> DefaultBART:
+    # Start from a vanilla DefaultBART then overwrite fields
+    m = DefaultBART()
+    m.ndpost = int(dto.ndpost)
+    m.nskip = int(dto.nskip)
+    m.preprocessor = dto.preprocessor.to_preproc()
+    # Replace RNG state on the sampler
+    m.sampler.generator = dto.rng.to_generator()
+    # Rebuild trace
+    m.trace = [dto_to_params(s) for s in dto.trace]
+    m.is_fitted = True
+    return m
+
+
+def bart_to_json(model: BART, *, include_dataX: bool = False, include_cache: bool = True) -> str:
+    if isinstance(model, DefaultBART):
+        dto = default_bart_to_dto(model, include_dataX=include_dataX, include_cache=include_cache)
+        return dto.model_dump_json()
+    else:
+        raise NotImplementedError("Only DefaultBART is supported in this serializer. If you want generic BART/other variants, let me know.")
+
+
+def bart_from_json(s: str) -> BART:
+    # Peek into JSON to route by cls
+    raw = json.loads(s)
+    cls = raw.get("cls", "DefaultBART")
+    if cls == "DefaultBART":
+        dto = DefaultBARTDTO.model_validate(raw)
+        return dto_to_default_bart(dto)
+    else:
+        raise NotImplementedError(f"Unsupported BART cls '{cls}'. Only DefaultBART is implemented.")
+
+
+__all__ += [
+    "RNGStateDTO",
+    "DefaultPreprocessorDTO",
+    "DefaultBARTDTO",
+    "default_bart_to_dto",
+    "dto_to_default_bart",
+    "bart_to_json",
+    "bart_from_json",
+]
+
+# -----------------------
+# MultiChainBART (DefaultBART chains)
+# -----------------------
+
+
+class MultiChainBARTDTO(BaseModel):
+    cls: str = "MultiChainBART"
+    bart_cls: str = "DefaultBART"
+    n_ensembles: int
+    rng: RNGStateDTO
+    chains: List[DefaultBARTDTO]
+
+
+def multichain_to_dto(n_ensembles: int, rng: np.random.Generator, chains: List[DefaultBART], *, include_dataX: bool = False, include_cache: bool = True) -> MultiChainBARTDTO:
+    return MultiChainBARTDTO(
+        n_ensembles=int(n_ensembles),
+        rng=RNGStateDTO.from_generator(rng),
+        chains=[default_bart_to_dto(m, include_dataX=include_dataX, include_cache=include_cache) for m in chains],
+    )
+
+
+def dto_to_multichain(dto: MultiChainBARTDTO) -> "MultiChainDefaultBARTPortable":
+    rng = dto.rng.to_generator()
+    chains = [dto_to_default_bart(c) for c in dto.chains]
+    return MultiChainDefaultBARTPortable(chains=chains, rng=rng)
+
+
+def multichain_to_json(n_ensembles: int, rng: np.random.Generator, chains: List[DefaultBART], *, include_dataX: bool = False, include_cache: bool = True) -> str:
+    dto = multichain_to_dto(n_ensembles, rng, chains, include_dataX=include_dataX, include_cache=include_cache)
+    return dto.model_dump_json()
+
+
+def multichain_from_json(s: str) -> "MultiChainDefaultBARTPortable":
+    raw = json.loads(s)
+    if raw.get("cls", "MultiChainBART") != "MultiChainBART":
+        raise ValueError("JSON does not represent a MultiChainBARTDTO")
+    if raw.get("bart_cls", "DefaultBART") != "DefaultBART":
+        raise NotImplementedError("Only DefaultBART chains are supported")
+    dto = MultiChainBARTDTO.model_validate(raw)
+    return dto_to_multichain(dto)
+
+
+class MultiChainDefaultBARTPortable:
+    """
+    Lightweight, Ray-free multi-chain container holding DefaultBART chains.
+    Implements posterior_sample compatible with MultiChainBART's logic.
+    """
+
+    def __init__(self, chains: List[DefaultBART], rng: Optional[np.random.Generator] = None):
+        self.chains = chains
+        self.n_ensembles = len(chains)
+        self.rng = rng if rng is not None else np.random.default_rng()
+
+    def posterior_sample(self, X, schedule):
+        idx = self.rng.integers(0, self.n_ensembles)
+        return self.chains[idx].posterior_sample(X, schedule)
+
+    def posterior_f(self, X):
+        import numpy as _np
+        return _np.concatenate([c.posterior_f(X) for c in self.chains], axis=1)
+
+    def predict(self, X):
+        import numpy as _np
+        preds = _np.array([c.predict(X) for c in self.chains])
+        return _np.mean(preds, axis=0)
+
+    def posterior_predict(self, X):
+        import numpy as _np
+        preds = [c.posterior_predict(X) for c in self.chains]
+        return _np.concatenate(preds, axis=1)
+
+
+__all__ += [
+    "MultiChainBARTDTO",
+    "multichain_to_dto",
+    "dto_to_multichain",
+    "multichain_to_json",
+    "multichain_from_json",
+    "MultiChainDefaultBARTPortable",
+]
