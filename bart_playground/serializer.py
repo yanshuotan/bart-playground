@@ -20,7 +20,7 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import is_dataclass, asdict
 import base64
 import json
@@ -31,6 +31,8 @@ from pydantic import BaseModel
 # Local runtime classes
 from .params import Tree, Parameters
 from .bart import DefaultBART, BART
+if TYPE_CHECKING:
+    from .mcbart import MultiChainBART
 from .util import DefaultPreprocessor
 
 
@@ -312,41 +314,36 @@ __all__ += [
 # -----------------------
 
 
-class MultiChainBARTDTO(BaseModel):
-    cls: str = "MultiChainBART"
-    bart_cls: str = "DefaultBART"
-    n_ensembles: int
-    rng: RNGStateDTO
-    chains: List[DefaultBARTDTO]
+def multichain_to_json(model: MultiChainBART) -> str:
+    """Serialize a MultiChainBART instance directly to JSON.
 
-
-def multichain_to_dto(n_ensembles: int, rng: np.random.Generator, chains: List[DefaultBART], *, include_dataX: bool = False, include_cache: bool = True) -> MultiChainBARTDTO:
-    return MultiChainBARTDTO(
-        n_ensembles=int(n_ensembles),
-        rng=RNGStateDTO.from_generator(rng),
-        chains=[default_bart_to_dto(m, include_dataX=include_dataX, include_cache=include_cache) for m in chains],
-    )
-
-
-def dto_to_multichain(dto: MultiChainBARTDTO) -> "MultiChainDefaultBARTPortable":
-    rng = dto.rng.to_generator()
-    chains = [dto_to_default_bart(c) for c in dto.chains]
-    return MultiChainDefaultBARTPortable(chains=chains, rng=rng)
-
-
-def multichain_to_json(n_ensembles: int, rng: np.random.Generator, chains: List[DefaultBART], *, include_dataX: bool = False, include_cache: bool = True) -> str:
-    dto = multichain_to_dto(n_ensembles, rng, chains, include_dataX=include_dataX, include_cache=include_cache)
-    return dto.model_dump_json()
+    Embeds each chain's JSON (from `collect_model_json`) in the payload to avoid
+    Python object materialization and redundant conversions.
+    """
+    chains_json = model.collect_model_json()
+    payload = {
+        "cls": "MultiChainBART",
+        "bart_cls": "DefaultBART",
+        "n_ensembles": int(getattr(model, "n_ensembles")),
+        "rng": RNGStateDTO.from_generator(getattr(model, "rng")).model_dump(),
+        # Store chains as nested JSON objects (not strings)
+        "chains": [json.loads(s) for s in chains_json],
+    }
+    return json.dumps(payload)
 
 
 def multichain_from_json(s: str) -> "MultiChainDefaultBARTPortable":
     raw = json.loads(s)
     if raw.get("cls", "MultiChainBART") != "MultiChainBART":
-        raise ValueError("JSON does not represent a MultiChainBARTDTO")
+        raise ValueError("JSON does not represent a MultiChainBART payload")
     if raw.get("bart_cls", "DefaultBART") != "DefaultBART":
         raise NotImplementedError("Only DefaultBART chains are supported")
-    dto = MultiChainBARTDTO.model_validate(raw)
-    return dto_to_multichain(dto)
+
+    rng = RNGStateDTO.model_validate(raw["rng"]).to_generator()
+    chains_raw = raw.get("chains", [])
+    # Rebuild DefaultBART chains from nested dicts
+    chains = [dto_to_default_bart(DefaultBARTDTO.model_validate(c)) for c in chains_raw]
+    return MultiChainDefaultBARTPortable(chains=chains, rng=rng)
 
 
 class MultiChainDefaultBARTPortable:
@@ -359,6 +356,14 @@ class MultiChainDefaultBARTPortable:
         self.chains = chains
         self.n_ensembles = len(chains)
         self.rng = rng if rng is not None else np.random.default_rng()
+
+    @property
+    def _trace_length(self) -> int:
+        # Mirror MultiChainBART API used by agents for scheduling
+        if not self.chains:
+            return 0
+        # Use first chain's trace length as representative (all typically share ndpost)
+        return self.chains[0]._trace_length
 
     def posterior_sample(self, X, schedule):
         idx = self.rng.integers(0, self.n_ensembles)
@@ -380,9 +385,6 @@ class MultiChainDefaultBARTPortable:
 
 
 __all__ += [
-    "MultiChainBARTDTO",
-    "multichain_to_dto",
-    "dto_to_multichain",
     "multichain_to_json",
     "multichain_from_json",
     "MultiChainDefaultBARTPortable",

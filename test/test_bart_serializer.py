@@ -1,8 +1,7 @@
 import numpy as np
-import numpy as np
 
 from bart_playground.bart import DefaultBART
-from bart_playground.bart import DefaultBART
+from bart_playground.mcbart import MultiChainBART
 from bart_playground.serializer import bart_from_json, bart_to_json
 from bart_playground.serializer import multichain_from_json, multichain_to_json
 
@@ -31,35 +30,31 @@ def test_defaultbart_posterior_f_reproduced_after_json_roundtrip():
     assert f_ref.shape == f_restored.shape
     np.testing.assert_allclose(f_ref, f_restored, rtol=0, atol=0)
 
-def test_multichain_defaultbart_posterior_f_reproduced_after_json_roundtrip():
+def test_multichainbart_posterior_f_reproduced_against_restored_portable():
     rng = np.random.default_rng(7)
     n, p = 30, 4
     X = rng.standard_normal((n, p)).astype(np.float32)
     beta = np.array([0.7, -1.0, 0.3, 0.0], dtype=np.float32)
     y = (X @ beta + rng.normal(0, 0.05, size=n)).astype(np.float32)
 
+    # Train a real MultiChainBART using Ray
     n_ensembles = 3
-    # build small DefaultBART chains
-    chains = []
-    # parent rng to mimic MultiChainBART parent RNG for chain picking
-    parent_rng = np.random.default_rng(2024)
-    # child seeds (SeedSequence propagation compatible with serializer's RNGStateDTO)
-    child_seqs = [np.random.SeedSequence(2024, spawn_key=(i,)) for i in range(n_ensembles)]
-    for ss in child_seqs:
-        m = DefaultBART(ndpost=15, nskip=5, n_trees=8, random_state=ss, max_bins=32)
-        m.fit(X, y, quietly=True)
-        chains.append(m)
+    master_seed = 2024
+    mc = MultiChainBART(
+        n_ensembles=n_ensembles,
+        random_state=master_seed,
+        ndpost=15,
+        nskip=5,
+        n_trees=8,
+        max_bins=32,
+    )
+    mc.fit(X, y, quietly=True)
+    ref = mc.posterior_f(X)
 
-    # reference: concatenated posterior_f from all chains
-    ref = np.concatenate([c.posterior_f(X) for c in chains], axis=1)
-
-    # serialize MultiChain to JSON (include_cache True for exact replication)
-    s = multichain_to_json(n_ensembles=n_ensembles, rng=parent_rng, chains=chains, include_dataX=False, include_cache=True)
+    # Serialize to portable MultiChain and compare posterior_f to the real MultiChainBART
+    s = multichain_to_json(mc)
     restored = multichain_from_json(s)
 
-    # posterior_f should be exactly reproducible from restored container
     out = restored.posterior_f(X)
     assert out.shape == ref.shape
     np.testing.assert_allclose(ref, out, rtol=0, atol=0)
-
-

@@ -2,6 +2,7 @@ import numpy as np
 import ray
 from typing import Callable, Any, List, Dict
 from .bart import DefaultBART 
+from .serializer import bart_to_json
 
 @ray.remote
 class BARTActor:
@@ -43,6 +44,14 @@ class BARTActor:
                 '_trace_length': self.model._trace_length,
             }
         return {'is_fitted': False}
+
+    def get_model(self):
+        """Return the in-actor BART model."""
+        return self.model
+
+    def get_model_json(self):
+        """Return the serialized in-actor BART model."""
+        return bart_to_json(self.model, include_dataX=False, include_cache=True)
 
 class MultiChainBART:
     """
@@ -122,6 +131,14 @@ class MultiChainBART:
         chosen_actor = self.bart_actors[actor_idx]
         sample_future = chosen_actor.posterior_sample.remote(X, schedule)
         return ray.get(sample_future)
+
+    def collect_model_states(self):
+        """Return the in-actor BART models."""
+        return ray.get([actor.get_model.remote() for actor in self.bart_actors])
+
+    def collect_model_json(self):
+        """Return the serialized in-actor BART models."""
+        return ray.get([actor.get_model_json.remote() for actor in self.bart_actors])
 
     def clean_up(self):
         for actor in self.bart_actors:
