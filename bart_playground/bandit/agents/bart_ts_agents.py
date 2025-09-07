@@ -248,7 +248,10 @@ class DefaultBARTTSAgent(BARTTSAgent):
                  initial_random_selections: int = 10,
                  random_state: int = 42,
                  encoding: str = 'multi',
-                 n_chains: int = 1) -> None:
+                 n_chains: int = 1,
+                 tree_alpha: float = 0.95,
+                 tree_beta: float = 2.0,
+                 quick_decay: bool = False) -> None:
         
         if n_chains > 1:
             # Use MultiChainBART for ensemble modeling
@@ -260,7 +263,10 @@ class DefaultBARTTSAgent(BARTTSAgent):
                 nskip=nskip,
                 random_state=random_state,
                 proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
-                dirichlet_prior=dirichlet_prior
+                dirichlet_prior=dirichlet_prior,
+                tree_alpha=tree_alpha,
+                tree_beta=tree_beta,
+                quick_decay=quick_decay
             )
         else:
             # Use single DefaultBART instance
@@ -270,7 +276,10 @@ class DefaultBARTTSAgent(BARTTSAgent):
                 nskip=nskip,
                 random_state=random_state,
                 proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
-                dirichlet_prior=dirichlet_prior
+                dirichlet_prior=dirichlet_prior,
+                tree_alpha=tree_alpha,
+                tree_beta=tree_beta,
+                quick_decay=quick_decay
             )
         
         super().__init__(n_arms, n_features, model_factory, 

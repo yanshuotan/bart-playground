@@ -54,7 +54,7 @@ class LinearAgentStable(BanditAgent):
     This agent supports both TS and UCB.
     """
     def __init__(
-        self, agent_type: AgentType,
+        self, agent_type: AgentType | str,
         n_arms: int, n_features: int, v: float = 1.0,
         alpha: float = 1.0, random_state: Optional[int] = None
         ) -> None:
@@ -73,7 +73,7 @@ class LinearAgentStable(BanditAgent):
         
         # Set exploration parameter v
         self.v = v
-        self.agent_type = agent_type
+        self.agent_type = AgentType(agent_type)
         self.alpha = alpha
         
         # Initialize matrices for each arm

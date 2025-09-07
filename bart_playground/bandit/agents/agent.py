@@ -70,5 +70,7 @@ def instantiate_agents(agent_specs: List[Tuple[str, type, Dict]],
         else:
             logger.info(f"Individual random_state not provided for {name}. This agent will use its own random policy.")
 
+        # Remove control-only flags that shouldn't be passed to constructors
+        kwargs.pop('need_random_state', None)
         agents.append(cls(**kwargs))
     return agents
