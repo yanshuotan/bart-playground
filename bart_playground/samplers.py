@@ -2,8 +2,8 @@
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
-from typing import Callable, Optional
-from scipy.stats import truncnorm
+from typing import Callable, Optional, Any
+from scipy.stats import truncnorm   
 
 from .params import Tree, Parameters
 from .moves import all_moves, Move
@@ -56,9 +56,14 @@ class Sampler(ABC):
         self.trace = []
         self.generator = generator
         # create cache for moves
-        self.moves_cache = None
+        self.moves_str_cache = None
         # current move cache iterator
         self.moves_cache_iterator = None
+
+        # --- Add move statistics ---
+        self.move_selected_counts = {k: 0 for k in self.proposals}
+        self.move_success_counts = {k: 0 for k in self.proposals}
+        self.move_accepted_counts = {k: 0 for k in self.proposals}
         
     @property
     def data(self) -> Dataset:
@@ -133,21 +138,24 @@ class Sampler(ABC):
         to these probabilities.
 
         Returns:
-            The selected move from the all_moves list based on the sampled index.
+            A tuple of (move_str, move_cls) where move_str is the move name and
+            move_cls is the corresponding class from all_moves.
         """
-        if self.moves_cache is None or self.moves_cache_iterator is None:
+        if self.moves_str_cache is None or self.moves_cache_iterator is None:
             moves = list(self.proposals.keys())
             move_probs = list(self.proposals.values())
-            self.moves_cache = [all_moves[move] for move in self.generator.choice(moves, size=100, p=move_probs)]
+            # Cache a batch of move names (strings)
+            self.moves_str_cache = [m for m in self.generator.choice(moves, size=100, p=move_probs)]
             self.moves_cache_iterator = 0
-        move = self.moves_cache[self.moves_cache_iterator]
+        move_str = self.moves_str_cache[self.moves_cache_iterator]
         self.moves_cache_iterator += 1
-        if self.moves_cache_iterator >= len(self.moves_cache):
-            self.moves_cache = None
-        return move
+        if self.moves_cache_iterator >= len(self.moves_str_cache):
+            self.moves_str_cache = None
+        move_cls = all_moves[move_str]
+        return move_str, move_cls
     
     @abstractmethod
-    def get_init_state(self):
+    def get_init_state(self) -> Any:
         """
         Retrieve the initial state for the sampler.
 
@@ -160,7 +168,7 @@ class Sampler(ABC):
         pass
 
     @abstractmethod
-    def one_iter(self, current, temp, return_trace=False):
+    def one_iter(self, current, temp, return_trace=False) -> Any:
         """
         Perform one iteration of the sampler.
         """
@@ -244,11 +252,6 @@ class DefaultSampler(Sampler):
         # store seed forest for XGBoost init
         self.init_trees = init_trees
 
-        # --- Add move statistics ---
-        self.move_selected_counts = {k: 0 for k in self.proposals}
-        self.move_success_counts = {k: 0 for k in self.proposals}
-        self.move_accepted_counts = {k: 0 for k in self.proposals}
-
     def get_init_state(self) -> Parameters:
         """
         Retrieve the initial state for the sampler.
@@ -286,8 +289,7 @@ class DefaultSampler(Sampler):
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
         for k in range(self.tree_prior.n_trees):
-            move_cls = self.sample_move()
-            move_key = [k for k, v in all_moves.items() if v == move_cls][0]
+            move_key, move_cls = self.sample_move()
             self.move_selected_counts[move_key] += 1
             move = move_cls(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
@@ -371,12 +373,16 @@ class ProbitSampler(Sampler):
         latents = self.__sample_Z(self.data.y, iter_current.evaluate())
         
         for k in range(self.tree_prior.n_trees):
-            move = self.sample_move()(
+            move_str, move_cls = self.sample_move()
+            self.move_selected_counts[move_str] += 1
+            move = move_cls(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
                 )
             if move.propose(self.generator): # Check if a valid move was proposed
+                self.move_success_counts[move_str] += 1
                 Z = self.generator.uniform(0, 1)
                 if np.log(Z) < self.log_mh_ratio(move, temp, latents):
+                    self.move_accepted_counts[move_str] += 1
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = latents, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
@@ -506,13 +512,17 @@ class LogisticSampler(Sampler):
                     
         for category in range(self.n_categories):
             for h in range(self.tree_prior.n_trees):
-                move = self.sample_move()(
+                move_str, move_cls = self.sample_move()
+                self.move_selected_counts[move_str] += 1
+                move = move_cls(
                     iter_current[category], [h], possible_thresholds=self.possible_thresholds, tol=self.tol
                 )
                 if move.propose(self.generator):  # Check if a valid move was proposed
+                    self.move_success_counts[move_str] += 1
                     yi_match = (self.data.y == category)
                     Z = self.generator.uniform(0, 1)
                     if np.log(Z) < self.log_mh_ratio(move, temp=temp, data_y=yi_match):
+                        self.move_accepted_counts[move_str] += 1
                         new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y=yi_match, tree_ids=[h])
                         move.proposed.update_leaf_vals([h], new_leaf_vals)
                         iter_current[category] = move.proposed
