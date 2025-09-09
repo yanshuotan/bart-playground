@@ -9,6 +9,7 @@ scripts/
 .DS_Store
 *.log
 .idea/*
+.cursor/*
 benchmarks/*.csv
 notebooks/deprecated/*
 notebooks/results/*

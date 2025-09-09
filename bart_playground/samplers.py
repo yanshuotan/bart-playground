@@ -23,7 +23,8 @@ class Sampler(ABC):
     Base class for the BART sampler.
     """
     def __init__(self, prior, proposal_probs: dict,  
-                 generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule()):
+                 generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule(),
+                 tol: int = 100):
         """
         Initialize the sampler with the given parameters.
 
@@ -44,6 +45,11 @@ class Sampler(ABC):
         """
         self._data : Optional[Dataset] = None
         self.prior = prior
+
+        self.tree_prior = prior.tree_prior
+        self.likelihood = prior.likelihood
+        self.tol = tol
+
         self.n_iter = None
         self.proposals = proposal_probs
         self.temp_schedule = temp_schedule
@@ -78,7 +84,7 @@ class Sampler(ABC):
         if len(self.trace) > 0:
             self.trace[-1].clear_cache()
         
-    def run(self, n_iter, progress_bar = True, quietly = False, current = None, n_skip = 0):
+    def run(self, n_iter: int, progress_bar: bool = True, quietly: bool = False, current: Parameters | list[Parameters] | None = None, n_skip: int = 0):
         """
         Run the sampler for a specified number of iterations from `current` or a fresh start.
 
@@ -89,19 +95,18 @@ class Sampler(ABC):
             progress_bar = False
 
         # Determine the actual starting state for this MCMC run
-        current: Parameters
         if current is not None:
-            current = current
+            current_state = current
         elif self.trace:  # If self.trace is already populated (e.g., by init_from_xgboost)
-            current = self.trace[0]  # Use the pre-loaded state
+            current_state = self.trace[0]  # Use the pre-loaded state
         else:
-            current = self.get_init_state() # Otherwise, generate a new initial state
+            current_state = self.get_init_state() # Otherwise, generate a new initial state
         
         self.trace = []
         self.n_iter = n_iter
 
         if n_skip == 0:
-            self.trace.append(current) # Add initial state to trace
+            self.trace.append(current_state) # Add initial state to trace
 
         iterator = tqdm(range(n_iter), desc="Iterations") if progress_bar else range(n_iter)
 
@@ -110,11 +115,11 @@ class Sampler(ABC):
                 print(f"Running iteration {iter}/{n_iter}")
             
             temp = self.temp_schedule(iter)
-            current = self.one_iter(current, temp, return_trace=False)
+            current_state = self.one_iter(current_state, temp, return_trace=False)
 
             if iter >= n_skip:
                 self.clear_last_cache()  # Clear cache of the last trace
-                self.trace.append(current)
+                self.trace.append(current_state)
         
         return self.trace
     
@@ -227,17 +232,14 @@ class DefaultSampler(Sampler):
         Accepts an optional list of pre-initialized trees without changing default behavior.
         """
         # preserve original default proposal behavior
-        self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow": 0.5, "prune": 0.5}
 
         # original prior unpacking
-        self.tree_prior = prior.tree_prior
         self.global_prior = prior.global_prior
-        self.likelihood = prior.likelihood
 
         # initialize base sampler
-        super().__init__(prior, proposal_probs, generator, temp_schedule)
+        super().__init__(prior, proposal_probs, generator, temp_schedule, tol)
 
         # store seed forest for XGBoost init
         self.init_trees = init_trees
@@ -314,13 +316,10 @@ class ProbitSampler(Sampler):
     """
     def __init__(self, prior : ProbitPrior, proposal_probs: dict,
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
-        self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
-        self.tree_prior = prior.tree_prior
-        self.likelihood = prior.likelihood
-        super().__init__(prior, proposal_probs, generator, temp_schedule)
+        super().__init__(prior, proposal_probs, generator, temp_schedule, tol)
 
     def get_init_state(self) -> Parameters:
         """
@@ -396,14 +395,11 @@ class LogisticSampler(Sampler):
     """
     def __init__(self, prior : LogisticPrior, proposal_probs: dict,
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=100):
-        self.tol = tol
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
-        self.tree_prior = prior.tree_prior
-        self.likelihood = prior.likelihood
         self.n_i = None
-        super().__init__(prior, proposal_probs, generator, temp_schedule)
+        super().__init__(prior, proposal_probs, generator, temp_schedule, tol)
     
     @property
     def n_categories(self) -> int:

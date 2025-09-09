@@ -514,10 +514,14 @@ class LogisticTreesPrior(TreesPrior):
         """
         # Cached values of rh, sh and even pi_h from parent may be used. 
         # The speedup is small though (2-4%)
-        if(self.parent.param is not bart_params):
+        if self.parent is None:
+            raise ValueError("Parent LogisticPrior not set")
+        if self.parent.param is not bart_params:
             print("Error: BART Parameter used by calculated values is not the same as that provided to LogisticTreesPrior.resample_leaf_vals, this may lead to incorrect results.")
             print("Please contact the developer to see if we need fall back to re-calculating rh, sh and pi_h.")
             raise ValueError("BART Parameter mismatch")
+        if self.parent.rh is None or self.parent.sh is None or self.parent.pi_h is None:
+            raise ValueError("Parent LogisticPrior attributes (rh, sh, pi_h) not initialized")
         rh = self.parent.rh
         sh = self.parent.sh
         pi_h = self.parent.pi_h
@@ -558,7 +562,7 @@ class LogisticLikelihood(BARTLikelihood):
         """
         self.c = c
         self.d = d
-        self.parent : LogisticPrior = parent  # LogisticPrior
+        self.parent: LogisticPrior | None = parent  # LogisticPrior
         # f_sigma2 useless
         super().__init__(f_sigma2=0.0)
 
@@ -624,12 +628,15 @@ class LogisticLikelihood(BARTLikelihood):
         rh, sh = self._get_rh_sh(
             tree.leaf_ids, latent_tree_product, data_y, len(tree.vars), tree.leaves
         )
-        self.parent.rh = rh
-        self.parent.sh = sh
-        self.parent.param = bart_params
+        if self.parent is not None:
+            self.parent.rh = rh
+            self.parent.sh = sh
+            self.parent.param = bart_params
         
         # assert np.allclose(rh, rhn) and np.allclose(sh, shn), "Mismatch in rh and sh calculation."
-        log_likelihood_sum, self.parent.pi_h = self._trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
+        log_likelihood_sum, pi_h = self._trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
+        if self.parent is not None:
+            self.parent.pi_h = pi_h
 
         return log_likelihood_sum
 
@@ -646,11 +653,11 @@ class LogisticPrior:
         self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self)
         self.likelihood = LogisticLikelihood(c, d, parent=self)
         
-        # Placeholders for values reused in resampling
-        self.rh = None  
-        self.sh = None
-        self.pi_h = None
-        self.param = None
+        # Placeholders for values reused in resampling - will be set during likelihood calculation
+        self.rh: np.ndarray | None = None  
+        self.sh: np.ndarray | None = None
+        self.pi_h: np.ndarray | None = None
+        self.param: Parameters | None = None  # Will hold Parameters object
     
     def set_latents(self, latents):
         self.tree_prior.set_latents(latents)
