@@ -157,8 +157,8 @@ class Swap(Move):
                  possible_thresholds = None, tol : int = 100):
         super().__init__(current, trees_changed, tol = tol)
         assert len(trees_changed) == 1
-        self.swappable_pairs = None
-        self.idx = None
+        self.swappable_pairs = []
+        self.idx = 0
         
     @property
     def _num_possible_proposals(self):
@@ -199,3 +199,11 @@ all_moves = {"grow" : Grow,
             "prune" : Prune,
             "change" : Change,
             "swap" : Swap}
+
+# Mapping of each move to its contrary move used in MH ratio adjustments
+contrary_moves = {
+    "grow": "prune",
+    "prune": "grow",
+    "change": "change",
+    "swap": "swap",
+}
