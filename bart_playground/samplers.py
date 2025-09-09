@@ -242,6 +242,11 @@ class DefaultSampler(Sampler):
         # store seed forest for XGBoost init
         self.init_trees = init_trees
 
+        # --- Add move statistics ---
+        self.move_selected_counts = {k: 0 for k in self.proposals}
+        self.move_success_counts = {k: 0 for k in self.proposals}
+        self.move_accepted_counts = {k: 0 for k in self.proposals}
+
     def get_init_state(self) -> Parameters:
         """
         Retrieve the initial state for the sampler.
@@ -279,13 +284,18 @@ class DefaultSampler(Sampler):
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
         for k in range(self.tree_prior.n_trees):
-            move = self.sample_move()(
+            move_cls = self.sample_move()
+            move_key = [k for k, v in all_moves.items() if v == move_cls][0]
+            self.move_selected_counts[move_key] += 1
+            move = move_cls(
                 iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
               )
             if move.propose(self.generator): # Check if a valid move was proposed
+                self.move_success_counts[move_key] += 1
                 Z = self.generator.uniform(0, 1)
                 marginalize = getattr(self, 'marginalize', False)
                 if np.log(Z) < self.log_mh_ratio(move, temp, marginalize=marginalize):
+                    self.move_accepted_counts[move_key] += 1
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
