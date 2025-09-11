@@ -15,6 +15,7 @@ scripts/
 .cursor/*
 
 benchmarks/*.csv
+test/generators/*
 *.pkl
 
 /benchmarks/

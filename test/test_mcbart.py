@@ -12,7 +12,7 @@ def _toy_regression(n=40, d=3, rng=None):
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")
-class TestMultiChainBARTSeedSequence:
+class TestMultiChainBART:
     def test_fit_predict_runs(self):
         X, y = _toy_regression(n=50, d=3, rng=0)
         model = MultiChainBART(
