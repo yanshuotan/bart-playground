@@ -2,15 +2,20 @@
 *.egg-info/
 .venv
 venv/
+
 *.dot
 *.prof
 scripts/
 .hydra/hydra.yaml
 .DS_Store
 *.log
-.idea/
-.vscode/
-.cursor/
+
+.vscode/*
+.idea/*
+.cursor/*
+
+benchmarks/*.csv
+*.pkl
 
 /benchmarks/
 /experiments/
