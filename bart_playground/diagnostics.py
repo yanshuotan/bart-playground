@@ -1,32 +1,48 @@
 import numpy as np
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import arviz as az
 from .params import Parameters
 from .mcbart import MultiChainBART
 from .samplers import Sampler
 
-def _extract_scalar_series_from_state(state: Parameters, key: str = "eps_sigma2") -> float:
+def _extract_scalar_series_from_state(state: Parameters, key: str) -> float:
     """
     Extract a scalar from a sampler state.
     """
     return state.global_params[key].item()
 
-def _collect_single_chain_values(model: Any, key: str = "eps_sigma2") -> List[float]:
+def _collect_single_chain_values(model: Any, key: str, X: Optional[np.ndarray] = None) -> List[float]:
     """
     Collect per-iteration scalar series for a single chain.
+
+    If X is provided, returns a scalar series based on f(x) evaluated at each
+    posterior draw (mean over rows in X, backtransformed when applicable).
     """
     if not getattr(model, "is_fitted", False):
         raise ValueError("Model must be fitted before diagnostics.")
     trace = getattr(model, "trace", None)
     if trace is None or len(trace) == 0:
         raise ValueError("Empty trace; run sampling first.")
-    return [
-        _extract_scalar_series_from_state(state, key=key)
-        for state in trace
-    ]
+    # If no X provided, extract scalar from global parameters
+    if X is None:
+        return [
+            _extract_scalar_series_from_state(state, key=key)
+            for state in trace
+        ]
 
-def _collect_chain_series(model: Any, key: str = "eps_sigma2") -> Tuple[np.ndarray, int, int]:
+    # Otherwise, compute f(x) at each draw; reduce to scalar via mean over rows
+    X_arr = np.asarray(X)
+    if X_arr.ndim == 1:
+        X_arr = X_arr.reshape(1, -1)
+
+    vals: List[float] = []
+    for state in trace:
+        y_eval = model.predict_trace(state, X_arr, backtransform=True)
+        vals.append(float(np.mean(y_eval)))
+    return vals
+
+def _collect_chain_series(model: Any, key: str = "eps_sigma2", X: Optional[np.ndarray] = None) -> Tuple[np.ndarray, int, int]:
     """
     Collect per-iteration scalar series per chain.
 
@@ -42,7 +58,7 @@ def _collect_chain_series(model: Any, key: str = "eps_sigma2") -> Tuple[np.ndarr
         chains = model.collect_model_states()
         per_chain: List[List[float]] = []
         for chain_model in chains:
-            vals = _collect_single_chain_values(chain_model, key=key)
+            vals = _collect_single_chain_values(chain_model, key=key, X=X)
             per_chain.append(vals)
         # Ensure equal length across chains (truncate to min length if necessary)
         min_len = min(len(v) for v in per_chain)
@@ -53,7 +69,7 @@ def _collect_chain_series(model: Any, key: str = "eps_sigma2") -> Tuple[np.ndarr
         return series, series.shape[0], series.shape[1]
 
     # DefaultBART / single-chain
-    vals = _collect_single_chain_values(model, key=key)
+    vals = _collect_single_chain_values(model, key=key, X=X)
     series = np.asarray(vals, dtype=float)[None, :]  # shape (1, draws)
     return series, 1, series.shape[1]
 
@@ -127,7 +143,7 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
     return result
 
 
-def compute_diagnostics(model: Any, key: str = "eps_sigma2") -> Dict[str, Any]:
+def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """
     Compute MCMC diagnostics for a fitted BART-like model.
 
@@ -141,8 +157,11 @@ def compute_diagnostics(model: Any, key: str = "eps_sigma2") -> Dict[str, Any]:
     ----------
     model : Any
         A fitted `DefaultBART`-like object or `MultiChainBART`.
-    key : str
-        Name of the scalar in `global_params` to use (default: 'eps_sigma2').
+    key : str, optional
+        Name of the scalar in `global_params` to use (default is 'eps_sigma2' if not provided).
+        Ignored when X is provided.
+    X : np.ndarray, optional
+        If provided, compute diagnostics for f(x) evaluated at X per draw.
 
     Returns
     -------
@@ -153,18 +172,24 @@ def compute_diagnostics(model: Any, key: str = "eps_sigma2") -> Dict[str, Any]:
           'acceptance': { per-move stats and 'overall' }
         }
     """
-    series, n_chains, n_draws = _collect_chain_series(model, key=key)
+    # Default key (only relevant when X is None)
+    use_key = "eps_sigma2" if (X is None and key is None) else (key if key is not None else "eps_sigma2")
+    series, n_chains, n_draws = _collect_chain_series(model, key=use_key, X=X)
 
     # Create InferenceData with one observed variable named after the key
-    posterior = {key: series[:, :, None]}  # add dummy dim for shape (chains, draws, 1)
+    var_name = (use_key if X is None else "f(x)")
+    posterior = {var_name: series[:, :, None]}  # add dummy dim for shape (chains, draws, 1)
     idata = az.from_dict(posterior=posterior)
 
     # R-hat and ESS (bulk)
-    rhat = float(az.rhat(idata, method="rank")[key].values.squeeze())
-    ess_bulk = float(az.ess(idata, method="bulk")[key].values.squeeze())
+    rhat_da: Any = az.rhat(idata, method="rank")
+    ess_da: Any = az.ess(idata, method="bulk")
+    rhat = float(rhat_da[var_name].values.squeeze())
+    ess_bulk = float(ess_da[var_name].values.squeeze())
 
     # MCSE of the mean for the scalar series; ArviZ mcse returns array per var
-    mcse_mean = float(az.mcse(idata)[key].values.squeeze())
+    mcse_da: Any = az.mcse(idata)
+    mcse_mean = float(mcse_da[var_name].values.squeeze())
     flat = series.reshape(-1).astype(np.float64, copy=False)
     sd = float(np.std(flat, ddof=1)) if flat.size > 1 else float("nan")
     mcse_over_sd = float(mcse_mean / sd) if sd > 0 and np.isfinite(mcse_mean) else float("nan")

@@ -97,12 +97,8 @@ class BART:
         Get the posterior distribution of f(x) for each row in X.
         """
         preds = np.zeros((X.shape[0], self.ndpost))
-        for i, k in enumerate(self._range_post):
-            y_eval = self.trace[k].evaluate(X)
-            if backtransform:
-                preds[:, i] = self.preprocessor.backtransform_y(y_eval)
-            else:
-                preds[:, i] = y_eval
+        for k in range(self.ndpost):
+            preds[:, k] = self.predict_trace(self.trace[k], X, backtransform=backtransform)
         return preds
     
     WeightSchedule = Callable[[int], float]
@@ -128,6 +124,16 @@ class BART:
         Predict using the BART model.
         """
         return np.mean(self.posterior_f(X), axis=1)
+    
+    def predict_trace(self, trace_state, X, backtransform=True):
+        """
+        Predict using a single trace state.
+        """
+        y_eval = trace_state.evaluate(X)
+        if backtransform:
+            return self.preprocessor.backtransform_y(y_eval)
+        else:
+            return y_eval
     
     def posterior_predict(self, X):
         """
