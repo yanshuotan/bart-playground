@@ -8,7 +8,7 @@ from collections import Counter
 # Define generic float types to support both float32 and float64
 Float32Or64 = Union[np.float32, np.float64]
 
-@njit
+@njit(cache=True)
 def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_leaf_id):
     """
     Numba-optimized function to update all node counts and leaf_ids.
@@ -46,19 +46,71 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
 
     return success
 
-@njit
-def traverse_tree_numba(vars, thresholds, split_nodes, X):
-    n, p = X.shape
-    node_ids = np.zeros(n, np.int64)
-    for si in range(split_nodes.shape[0]):
-        node = split_nodes[si]
-        var = vars[node]
-        thr = thresholds[node]
-        for i in range(n):
-            if node_ids[i] == node:
-                # boolean test gets coerced to 0/1
-                node_ids[i] = node * 2 + 1 + (X[i, var] > thr)
+@njit(cache=True)
+def _descendants_numba(node_id: int, vars: NDArray[np.int32]):
+    """
+    Numba-optimized function to find all descendants of a given node in the tree.
+    """
+    subtree_nodes = np.empty(len(vars), np.int32)
+    queue_start = 0
+    queue_end = 1
+    subtree_nodes[queue_start] = node_id
+    while queue_start < queue_end:
+        current_node = subtree_nodes[queue_start]
+        queue_start += 1
+        # Add child nodes to the queue
+        left_child = current_node * 2 + 1
+        right_child = current_node * 2 + 2
+        if left_child < len(vars) and vars[left_child] > -2:
+            subtree_nodes[queue_end] = left_child
+            queue_end += 1
+        if right_child < len(vars) and vars[right_child] > -2:
+            subtree_nodes[queue_end] = right_child
+            queue_end += 1
+    
+    return subtree_nodes[1:queue_end]
+
+@njit(cache=True)
+def _traverse_tree_numba(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
+    """
+    Numba-optimized function to traverse the tree for a given input data matrix.
+
+    Parameters:
+    - X: np.ndarray
+        Input data (2D array).
+    - vars: np.ndarray
+        Array of variables used for splitting at each node.
+    - thresholds: np.ndarray
+        Array of split values at each node.
+
+    Returns:
+    - np.ndarray
+        An array of leaf node indices for each row in X.
+    """
+    n_samples = X.shape[0]
+    node_ids = np.zeros(n_samples, dtype=np.int32)
+
+    for i in range(n_samples):
+        node_ids[i] = _traverse_tree_single(X[i], vars, thresholds, 0, None)
+    
     return node_ids
+
+@njit(cache=True)
+def _traverse_tree_single(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray, starting_node, n_to_update):
+    """
+    Numba-optimized function to traverse the tree for a given input data array (1D).
+    """
+    current_node = starting_node
+    while vars[current_node] >= 0:  # While it's a split node
+        split_var = vars[current_node]
+        threshold = thresholds[current_node]
+        if X[split_var] <= threshold:
+            current_node = 2 * current_node + 1
+        else:
+            current_node = 2 * current_node + 2
+        if n_to_update is not None:
+            n_to_update[current_node] += 1 # Increment count for the subtree node
+    return current_node
 
 class Tree:
     """

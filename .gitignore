@@ -19,5 +19,10 @@ bart_playground/bandit/baselines
 .vscode/
 .cursor/
 
-/benchmarks/
-/experiments/
+.vscode/*
+.idea/*
+.cursor/*
+
+benchmarks/*.csv
+test/generators/*
+*.pkl
