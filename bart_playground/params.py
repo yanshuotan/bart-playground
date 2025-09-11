@@ -7,7 +7,7 @@ from collections import Counter
 # Define generic float types to support both float32 and float64
 Float32Or64 = Union[np.float32, np.float64]
 
-@njit
+@njit(cache=True)
 def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_leaf_id):
     """
     Numba-optimized function to update all node counts and leaf_ids.
@@ -45,7 +45,7 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
 
     return success
 
-@njit
+@njit(cache=True)
 def _descendants_numba(node_id: int, vars: NDArray[np.int32]):
     """
     Numba-optimized function to find all descendants of a given node in the tree.
@@ -69,7 +69,7 @@ def _descendants_numba(node_id: int, vars: NDArray[np.int32]):
     
     return subtree_nodes[1:queue_end]
 
-@njit
+@njit(cache=True)
 def _traverse_tree_numba(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
     """
     Numba-optimized function to traverse the tree for a given input data matrix.
@@ -94,7 +94,7 @@ def _traverse_tree_numba(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray
     
     return node_ids
 
-@njit
+@njit(cache=True)
 def _traverse_tree_single(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray, starting_node, n_to_update):
     """
     Numba-optimized function to traverse the tree for a given input data array (1D).
