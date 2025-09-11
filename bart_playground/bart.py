@@ -83,11 +83,7 @@ class BART:
         """
         preds = np.zeros((X.shape[0], self.ndpost))
         for k in range(self.ndpost):
-            y_eval = self.trace[k].evaluate(X)
-            if backtransform:
-                preds[:, k] = self.preprocessor.backtransform_y(y_eval)
-            else:
-                preds[:, k] = y_eval
+            preds[:, k] = self.predict_trace(self.trace[k], X, backtransform=backtransform)
         return preds
     
     def predict(self, X):
@@ -95,6 +91,16 @@ class BART:
         Predict using the BART model.
         """
         return np.mean(self.posterior_f(X), axis=1)
+    
+    def predict_trace(self, trace_state, X, backtransform=True):
+        """
+        Predict using a single trace state.
+        """
+        y_eval = trace_state.evaluate(X)
+        if backtransform:
+            return self.preprocessor.backtransform_y(y_eval)
+        else:
+            return y_eval
     
     def posterior_predict(self, X):
         """
