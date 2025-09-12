@@ -5,12 +5,15 @@ from scipy.special import kv
 import math
 
 # For faster random sampling
-def fast_choice(generator, array):
+def fast_choice(generator, array, size=1):
     """Fast random selection from an array."""
     len_arr = len(array)
     if len_arr == 1:
         return array[0]
-    return array[generator.integers(0, len_arr)]
+    if size == 1:
+        return array[generator.integers(0, len_arr)]
+    array = np.array(array)
+    return array[generator.integers(0, len_arr, size=size)]
 
 def fast_choice_with_weights(generator, array, weights):
     """Fast random selection from an array with given weights."""
