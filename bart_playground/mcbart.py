@@ -53,6 +53,9 @@ class BARTActor:
         """Return the serialized in-actor BART model."""
         return bart_to_json(self.model, include_dataX=False, include_cache=True)
 
+    def apply(self, func, *args, **kwargs):
+        return func(self.model, *args, **kwargs)
+
 class MultiChainBART:
     """
     Multi-chain BART model that runs multiple BART chains in parallel using Ray.
@@ -139,6 +142,27 @@ class MultiChainBART:
     def collect_model_json(self):
         """Return the serialized in-actor BART models."""
         return ray.get([actor.get_model_json.remote() for actor in self.bart_actors])
+
+    def collect(self, func: Callable[..., Any], *args, **kwargs):
+        """
+        Map a callable across all actors and return their results.
+
+        Parameters
+        ----------
+        func : Callable[[Any], Any]
+            A top-level, Ray-serializable function with signature
+            func(model, *args, **kwargs) -> Any. It will be executed inside each
+            actor process, receiving the in-actor model as the first argument.
+        *args, **kwargs :
+            Additional arguments passed to the callable.
+
+        Returns
+        -------
+        List[Any]
+            One result per actor, in actor order.
+        """
+        futures = [actor.apply.remote(func, *args, **kwargs) for actor in self.bart_actors]
+        return ray.get(futures)
 
     def clean_up(self):
         for actor in self.bart_actors:

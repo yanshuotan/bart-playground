@@ -6,13 +6,7 @@ from .params import Parameters
 from .mcbart import MultiChainBART
 from .samplers import Sampler
 
-def _extract_scalar_series_from_state(state: Parameters, key: str) -> float:
-    """
-    Extract a scalar from a sampler state.
-    """
-    return state.global_params[key].item()
-
-def _collect_single_chain_values(model: Any, key: str, X: Optional[np.ndarray] = None) -> List[float]:
+def _actor_collect_values(model: Any, key: str, X: Optional[np.ndarray] = None) -> List[float]:
     """
     Collect per-iteration scalar series for a single chain.
 
@@ -27,7 +21,7 @@ def _collect_single_chain_values(model: Any, key: str, X: Optional[np.ndarray] =
     # If no X provided, extract scalar from global parameters
     if X is None:
         return [
-            _extract_scalar_series_from_state(state, key=key)
+            state.global_params[key].item()
             for state in trace
         ]
 
@@ -55,11 +49,7 @@ def _collect_chain_series(model: Any, key: str = "eps_sigma2", X: Optional[np.nd
     """
     # MultiChainBART exposes actors and per-actor models via collect_model_states()
     if isinstance(model, MultiChainBART):
-        chains = model.collect_model_states()
-        per_chain: List[List[float]] = []
-        for chain_model in chains:
-            vals = _collect_single_chain_values(chain_model, key=key, X=X)
-            per_chain.append(vals)
+        per_chain: List[List[float]] = model.collect(_actor_collect_values, key, X)
         # Ensure equal length across chains (truncate to min length if necessary)
         min_len = min(len(v) for v in per_chain)
         if min_len == 0:
@@ -69,9 +59,23 @@ def _collect_chain_series(model: Any, key: str = "eps_sigma2", X: Optional[np.nd
         return series, series.shape[0], series.shape[1]
 
     # DefaultBART / single-chain
-    vals = _collect_single_chain_values(model, key=key, X=X)
+    vals = _actor_collect_values(model, key=key, X=X)
     series = np.asarray(vals, dtype=float)[None, :]  # shape (1, draws)
     return series, 1, series.shape[1]
+
+def _actor_collect_move_counts(model: Any) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
+    """
+    Return (selected, success, accepted) move count dictionaries from the in-actor sampler.
+    """
+    sampler: Sampler = model.sampler
+    sel = dict(getattr(sampler, "move_selected_counts", {}))
+    suc = dict(getattr(sampler, "move_success_counts", {}))
+    acc = dict(getattr(sampler, "move_accepted_counts", {}))
+    # Ensure plain ints
+    sel = {k: int(v) for k, v in sel.items()}
+    suc = {k: int(v) for k, v in suc.items()}
+    acc = {k: int(v) for k, v in acc.items()}
+    return sel, suc, acc
 
 def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
     """
@@ -84,20 +88,14 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
     { move: {selected, proposed, accepted, acc_rate, prop_rate}, 'overall': {...} }
     where proposed == success in the sampler terminology.
     """
-    def read_counts(sampler: Sampler) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
-        sel = getattr(sampler, "move_selected_counts", {})
-        suc = getattr(sampler, "move_success_counts", {})
-        acc = getattr(sampler, "move_accepted_counts", {})
-        return dict(sel), dict(suc), dict(acc)
 
     agg_sel: Dict[str, int] = {}
     agg_suc: Dict[str, int] = {}
     agg_acc: Dict[str, int] = {}
 
     if isinstance(model, MultiChainBART):
-        chains = model.collect_model_states()
-        for chain_model in chains:
-            sel, suc, acc = read_counts(chain_model.sampler)
+        counts_list = model.collect(_actor_collect_move_counts)
+        for sel, suc, acc in counts_list:
             for k, v in sel.items():
                 agg_sel[k] = agg_sel.get(k, 0) + int(v)
             for k, v in suc.items():
@@ -105,7 +103,7 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
             for k, v in acc.items():
                 agg_acc[k] = agg_acc.get(k, 0) + int(v)
     else:
-        sel, suc, acc = read_counts(model.sampler)
+        sel, suc, acc = _actor_collect_move_counts(model)
         agg_sel, agg_suc, agg_acc = sel, suc, acc
 
     # Compute per-move rates
@@ -142,7 +140,6 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
     }
     return result
 
-
 def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """
     Compute MCMC diagnostics for a fitted BART-like model.
@@ -173,7 +170,7 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
         }
     """
     # Default key (only relevant when X is None)
-    use_key = "eps_sigma2" if (X is None and key is None) else (key if key is not None else "eps_sigma2")
+    use_key = "eps_sigma2" if (X is None and key is None) else (key if key is not None else "eps_sigma2") 
     series, n_chains, n_draws = _collect_chain_series(model, key=use_key, X=X)
 
     # Create InferenceData with one observed variable named after the key
@@ -206,9 +203,6 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
         "acceptance": acceptance,
     }
 
-
 __all__ = [
     "compute_diagnostics",
 ]
-
-
