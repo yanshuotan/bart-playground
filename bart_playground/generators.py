@@ -31,6 +31,7 @@ def generate_data_from_defaultbart_prior(
     f_k: float = 2.0,
     eps_nu: float = 3.0,
     eps_lambda: float = 1.0,
+    eps_sigma2: float | None = None,
     random_state: int | None = 42,
     max_depth: int = 10,
     min_node_size: int = 1,
@@ -135,7 +136,7 @@ def generate_data_from_defaultbart_prior(
 
     # 3) Noise variance prior and observations
     # sigma^2 ~ InvGamma(eps_nu/2, scale = eps_nu * eps_lambda / 2)
-    sigma2 = float(invgamma.rvs(a=eps_nu / 2.0, scale=eps_nu * eps_lambda / 2.0, random_state=rng))
+    sigma2 = float(invgamma.rvs(a=eps_nu / 2.0, scale=eps_nu * eps_lambda / 2.0, random_state=rng)) if eps_sigma2 is None else eps_sigma2
     y = f + rng.normal(0.0, np.sqrt(sigma2), size=n).astype(np.float32)
 
     if return_latent:
@@ -166,26 +167,32 @@ def generate_data_heatmap(**kwargs) -> str:
     
     all_obs = np.stack([X_grid.ravel(), Y_grid.ravel()], axis=1)
     all_res = _sum_trees(all_obs)
+    all_res_with_noise = all_res + np.random.normal(0.0, np.sqrt(sigma2), size=all_res.shape)
 
-    fig, ax = plt.subplots(figsize=(5, 4), dpi=150)
-    im = ax.pcolormesh(
-        X_grid, Y_grid,
-        all_res.reshape(grid_size, grid_size),
-        cmap='viridis',
-        shading='auto'
-    )
-    fig.colorbar(im, ax=ax)
-    ax.set_title('DefaultBART prior f(x) heatmap (p=2)')
-    ax.set_xlabel('x1')
-    ax.set_ylabel('x2')
+    def _save_heatmap(Z, title, filename):
+        fig, ax = plt.subplots(figsize=(5, 4), dpi=150)
+        im = ax.pcolormesh(
+            X_grid, Y_grid,
+            Z.reshape(grid_size, grid_size),
+            cmap='viridis',
+            shading='auto'
+        )
+        fig.colorbar(im, ax=ax)
+        ax.set_title(title)
+        ax.set_xlabel('x1')
+        ax.set_ylabel('x2')
+        out_dir = os.path.join(os.path.dirname(__file__))
+        out_path = os.path.join(out_dir, '../test/generators', filename)
+        fig.savefig(out_path, bbox_inches='tight')
+        plt.close(fig)
+        return out_path
 
-    out_dir = os.path.join(os.path.dirname(__file__))
-    out_path = os.path.join(out_dir, '../test/generators/generator_heatmap.png')
-    fig.savefig(out_path, bbox_inches='tight')
-    plt.close(fig)
+    # Save heatmaps for f(x) and f(x)+noise
+    out_path = _save_heatmap(all_res, 'DefaultBART prior f(x) heatmap (p=2)', 'generator_heatmap.png')
+    _ = _save_heatmap(all_res_with_noise, 'DefaultBART prior f(x) + noise heatmap (p=2)', 'generator_heatmap_with_noise.png')
 
     return out_path
 
 if __name__ == '__main__':
-    generate_data_heatmap(n=10000)
+    generate_data_heatmap(n=10000, eps_sigma2=0.01)
     
