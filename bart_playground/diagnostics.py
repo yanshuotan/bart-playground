@@ -6,12 +6,11 @@ from .params import Parameters
 from .mcbart import MultiChainBART
 from .samplers import Sampler
 
-def _actor_collect_values(model: Any, key: str, X: Optional[np.ndarray] = None) -> List[float]:
+def _actor_collect_values(model: Any, key: str, X: Optional[np.ndarray] = None) -> List[Any]:
     """
     Collect per-iteration scalar series for a single chain.
 
-    If X is provided, returns a scalar series based on f(x) evaluated at each
-    posterior draw (mean over rows in X, backtransformed when applicable).
+    If X is provided, returns a vector per draw (f(X) per row, backtransformed when applicable).
     """
     if not getattr(model, "is_fitted", False):
         raise ValueError("Model must be fitted before diagnostics.")
@@ -25,43 +24,52 @@ def _actor_collect_values(model: Any, key: str, X: Optional[np.ndarray] = None) 
             for state in trace
         ]
 
-    # Otherwise, compute f(x) at each draw; reduce to scalar via mean over rows
+    # Otherwise, compute f(x) at each draw
     X_arr = np.asarray(X)
     if X_arr.ndim == 1:
         X_arr = X_arr.reshape(1, -1)
 
-    vals: List[float] = []
+    vals: List[Any] = []
     for state in trace:
         y_eval = model.predict_trace(state, X_arr, backtransform=True)
-        vals.append(float(np.mean(y_eval)))
+        vals.append(np.asarray(y_eval).reshape(-1))
     return vals
 
 def _collect_chain_series(model: Any, key: str = "eps_sigma2", X: Optional[np.ndarray] = None) -> Tuple[np.ndarray, int, int]:
     """
-    Collect per-iteration scalar series per chain.
+    Collect per-iteration series per chain.
 
     Returns
     -------
     series : np.ndarray
-        Shape (n_chains, n_draws) array of scalar values.
+        Shape (n_chains, n_draws, k) array. When X is None, k == 1.
     n_chains : int
     n_draws : int
     """
     # MultiChainBART exposes actors and per-actor models via collect_model_states()
     if isinstance(model, MultiChainBART):
-        per_chain: List[List[float]] = model.collect(_actor_collect_values, key, X)
-        # Ensure equal length across chains (truncate to min length if necessary)
-        min_len = min(len(v) for v in per_chain)
-        if min_len == 0:
-            raise ValueError("No post-burn-in draws available in at least one chain.")
-        per_chain = [v[:min_len] for v in per_chain]
-        series = np.asarray(per_chain, dtype=float)
-        return series, series.shape[0], series.shape[1]
+        per_chain: List[List[Any]] = model.collect(_actor_collect_values, key, X)
+    else:
+        per_chain = [_actor_collect_values(model, key, X)]
 
-    # DefaultBART / single-chain
-    vals = _actor_collect_values(model, key=key, X=X)
-    series = np.asarray(vals, dtype=float)[None, :]  # shape (1, draws)
-    return series, 1, series.shape[1]
+    # Ensure equal length across chains (truncate to min length if necessary)
+    min_len = min(len(v) for v in per_chain)
+    if min_len == 0:
+        raise ValueError("No post-burn-in draws available in at least one chain.")
+    per_chain = [v[:min_len] for v in per_chain]
+    # Build array
+    if X is not None:
+        # Expect list[list[np.ndarray]] with consistent last-dim
+        # Determine vector length
+        per_chain_norm: List[List[np.ndarray]] = [
+            [np.asarray(arr).reshape(-1) for arr in chain_vals]
+            for chain_vals in per_chain
+        ]
+        series = np.stack([np.stack(chain_vals, axis=0) for chain_vals in per_chain_norm], axis=0)
+    else:
+        series2d = np.asarray(per_chain, dtype=float)
+        series = series2d[:, :, None]  # shape (n_chains, n_draws, 1)
+    return series, series.shape[0], series.shape[1]
 
 def _actor_collect_move_counts(model: Any) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
     """
@@ -147,7 +155,7 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
     Metrics:
     - R-hat (rank normalized, split) via ArviZ
     - bulk ESS via ArviZ
-    - MCSE (mean MC standard error) for the scalar series
+    - MCSE (mean MC standard error)
     - Move acceptance statistics from the sampler
 
     Parameters
@@ -158,7 +166,7 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
         Name of the scalar in `global_params` to use (default is 'eps_sigma2' if not provided).
         Ignored when X is provided.
     X : np.ndarray, optional
-        If provided, compute diagnostics for f(x) evaluated at X per draw.
+        If provided, compute diagnostics for f(X) evaluated at each draw without aggregation (per-row diagnostics).
 
     Returns
     -------
@@ -175,31 +183,33 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
 
     # Create InferenceData with one observed variable named after the key
     var_name = (use_key if X is None else "f(x)")
-    posterior = {var_name: series[:, :, None]}  # add dummy dim for shape (chains, draws, 1)
+    posterior = {var_name: series} # Shape (chains, draws, k)
     idata = az.from_dict(posterior=posterior)
 
     # R-hat and ESS (bulk)
     rhat_da: Any = az.rhat(idata, method="rank")
     ess_da: Any = az.ess(idata, method="bulk")
-    rhat = float(rhat_da[var_name].values.squeeze())
-    ess_bulk = float(ess_da[var_name].values.squeeze())
+    rhat_arr = np.asarray(rhat_da[var_name].values).squeeze()
+    ess_arr = np.asarray(ess_da[var_name].values).squeeze()
 
     # MCSE of the mean for the scalar series; ArviZ mcse returns array per var
     mcse_da: Any = az.mcse(idata)
-    mcse_mean = float(mcse_da[var_name].values.squeeze())
-    flat = series.reshape(-1).astype(np.float64, copy=False)
-    sd = float(np.std(flat, ddof=1)) if flat.size > 1 else float("nan")
-    mcse_over_sd = float(mcse_mean / sd) if sd > 0 and np.isfinite(mcse_mean) else float("nan")
+    mcse_arr = np.asarray(mcse_da[var_name].values).squeeze()
+    # Compute SD across chained draws per variable: (chains*draws, k)
+    flat = series.reshape(-1, series.shape[-1]).astype(np.float64, copy=False)
+    sd_vec = np.std(flat, axis=0, ddof=1)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        mcse_over_sd_vec = np.where(sd_vec > 0, mcse_arr / sd_vec, np.nan)
 
     acceptance = _collect_move_acceptance(model)
 
     return {
         "n_chains": int(n_chains),
         "n_draws": int(n_draws),
-        "rhat": rhat,
-        "ess_bulk": ess_bulk,
-        "mcse_mean": mcse_mean,
-        "mcse_over_sd": mcse_over_sd,
+        "rhat": rhat_arr.reshape(-1),
+        "ess_bulk": ess_arr.reshape(-1),
+        "mcse_mean": mcse_arr.reshape(-1),
+        "mcse_over_sd": mcse_over_sd_vec.reshape(-1),
         "acceptance": acceptance,
     }
 

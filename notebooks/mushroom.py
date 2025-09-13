@@ -2,7 +2,7 @@ import numpy as np
 from sklearn.datasets import fetch_openml
 from sklearn.preprocessing import OrdinalEncoder
 
-def load_mushroom(dataset_size: int = 8000):
+def load_mushroom(dataset_size: int = 8000, rng: np.random.Generator = np.random.default_rng(42)):
     X, y = fetch_openml('mushroom', version=1, return_X_y=True)
     for col in X.select_dtypes('category'):
         # -1 in codes indicates NaN by pandas convention
@@ -13,15 +13,15 @@ def load_mushroom(dataset_size: int = 8000):
     y_arm = OrdinalEncoder(dtype=int).fit_transform(y_array) 
     
     # make the dataset a little bit smaller
-    indices = np.random.choice(X_array.shape[0], size=dataset_size, replace=False)
+    indices = rng.choice(X_array.shape[0], size=dataset_size, replace=False)
     # indices = range(X.shape[0])
     X_array = X_array[indices, :]
     y_arm = y_arm[indices]
     
     return X_array, y_arm
 
-def load_mushroom_encoded():
-    X, y_arm = load_mushroom()
+def load_mushroom_encoded(*args, **kwargs):
+    X, y_arm = load_mushroom(*args, **kwargs)
     
     n_arm = np.max(y_arm) + 1
     dim = X.shape[1] * n_arm # total number of encoded covariates (location-encoded for each arm) 
