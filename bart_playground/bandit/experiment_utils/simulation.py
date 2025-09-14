@@ -3,6 +3,7 @@ from tqdm import tqdm
 import time, logging
 import pandas as pd
 import math
+from typing import Callable, Optional
 
 sim_logger = logging.getLogger(__name__)
 
@@ -28,7 +29,12 @@ class Scenario:
         """
         Set the random seed for reproducibility.
         """
-        self.rng = np.random.default_rng(seed)
+        if seed is not None:
+            sim_logger.info(f"Setting seed to {seed} in {self.__class__.__name__}.set_seed()")
+            self.rng = np.random.default_rng(seed)
+        else:
+            sim_logger.warning(f"No seed provided, using np.random.default_rng() in {self.__class__.__name__}.set_seed()")
+            self.rng = np.random.default_rng()
 
     def shuffle(self, random_state=None):
         """
@@ -40,7 +46,7 @@ class Scenario:
 
     def generate_covariates(self):
         # Generate a vector of P covariates (features) sampled from a uniform distribution.
-        return self.rng.uniform(-1, 1, size=self.P).astype(np.float32)
+        return np.asarray(self.rng.uniform(-1, 1, size=self.P), dtype=np.float32)
 
     def reward_function(self, x):
         """
@@ -59,7 +65,7 @@ class Scenario:
     def rng_state(self):
         return self.rng.bit_generator.state
 
-def simulate(scenario, agents, n_draws, agent_names: list[str]=[]):
+def simulate(scenario, agents, n_draws, agent_names: list[str]=[], on_draw: Optional[Callable[[int], None]] = None):
     """
     Simulate a bandit problem using the provided scenario and agents. The `simulate` function takes a scenario, a list of agents, and the number of draws. For each draw:
 
@@ -100,6 +106,15 @@ def simulate(scenario, agents, n_draws, agent_names: list[str]=[]):
             agent.update_state(arm, x, u["reward"][arm])
             time_agents[draw, i] = time.time() - t0
         
+        # Allows external code to snapshot state (0-based index).
+        if on_draw is not None:
+            try:
+                on_draw(draw)
+            except Exception as e:
+                # Swallow errors to avoid breaking core simulation
+                sim_logger.error(f"Error in on_draw callback: {e}")
+                pass
+
         # Log current status every sqrt(n_draws) draws.
         logging_frequency = int(math.sqrt(n_draws))
         if (draw + 1) % logging_frequency == 0 or draw == n_draws - 1:   
