@@ -6,18 +6,11 @@ from .params import Parameters
 from .mcbart import MultiChainBART
 from .samplers import Sampler
 
-def _extract_scalar_series_from_state(state: Parameters, key: str) -> float:
-    """
-    Extract a scalar from a sampler state.
-    """
-    return state.global_params[key].item()
-
-def _collect_single_chain_values(model: Any, key: str, X: Optional[np.ndarray] = None) -> List[float]:
+def _actor_collect_values(model: Any, key: str, X: Optional[np.ndarray] = None) -> List[Any]:
     """
     Collect per-iteration scalar series for a single chain.
 
-    If X is provided, returns a scalar series based on f(x) evaluated at each
-    posterior draw (mean over rows in X, backtransformed when applicable).
+    If X is provided, returns a vector per draw (f(X) per row, backtransformed when applicable).
     """
     if not getattr(model, "is_fitted", False):
         raise ValueError("Model must be fitted before diagnostics.")
@@ -27,51 +20,70 @@ def _collect_single_chain_values(model: Any, key: str, X: Optional[np.ndarray] =
     # If no X provided, extract scalar from global parameters
     if X is None:
         return [
-            _extract_scalar_series_from_state(state, key=key)
+            state.global_params[key].item()
             for state in trace
         ]
 
-    # Otherwise, compute f(x) at each draw; reduce to scalar via mean over rows
+    # Otherwise, compute f(x) at each draw
     X_arr = np.asarray(X)
     if X_arr.ndim == 1:
         X_arr = X_arr.reshape(1, -1)
 
-    vals: List[float] = []
+    vals: List[Any] = []
     for state in trace:
         y_eval = model.predict_trace(state, X_arr, backtransform=True)
-        vals.append(float(np.mean(y_eval)))
+        vals.append(np.asarray(y_eval).reshape(-1))
     return vals
 
 def _collect_chain_series(model: Any, key: str = "eps_sigma2", X: Optional[np.ndarray] = None) -> Tuple[np.ndarray, int, int]:
     """
-    Collect per-iteration scalar series per chain.
+    Collect per-iteration series per chain.
 
     Returns
     -------
     series : np.ndarray
-        Shape (n_chains, n_draws) array of scalar values.
+        Shape (n_chains, n_draws, k) array. When X is None, k == 1.
     n_chains : int
     n_draws : int
     """
     # MultiChainBART exposes actors and per-actor models via collect_model_states()
     if isinstance(model, MultiChainBART):
-        chains = model.collect_model_states()
-        per_chain: List[List[float]] = []
-        for chain_model in chains:
-            vals = _collect_single_chain_values(chain_model, key=key, X=X)
-            per_chain.append(vals)
-        # Ensure equal length across chains (truncate to min length if necessary)
-        min_len = min(len(v) for v in per_chain)
-        if min_len == 0:
-            raise ValueError("No post-burn-in draws available in at least one chain.")
-        per_chain = [v[:min_len] for v in per_chain]
-        series = np.asarray(per_chain, dtype=float)
-        return series, series.shape[0], series.shape[1]
+        per_chain: List[List[Any]] = model.collect(_actor_collect_values, key, X)
+    else:
+        per_chain = [_actor_collect_values(model, key, X)]
 
-    # DefaultBART / single-chain
-    vals = _collect_single_chain_values(model, key=key, X=X)
-    series = np.asarray(vals, dtype=float)[None, :]  # shape (1, draws)
-    return series, 1, series.shape[1]
+    # Ensure equal length across chains (truncate to min length if necessary)
+    min_len = min(len(v) for v in per_chain)
+    if min_len == 0:
+        raise ValueError("No post-burn-in draws available in at least one chain.")
+    per_chain = [v[:min_len] for v in per_chain]
+    # Build array
+    if X is not None:
+        # Expect list[list[np.ndarray]] with consistent last-dim
+        # Determine vector length
+        per_chain_norm: List[List[np.ndarray]] = [
+            [np.asarray(arr).reshape(-1) for arr in chain_vals]
+            for chain_vals in per_chain
+        ]
+        series = np.stack([np.stack(chain_vals, axis=0) for chain_vals in per_chain_norm], axis=0)
+    else:
+        series2d = np.asarray(per_chain, dtype=float)
+        series = series2d[:, :, None]  # shape (n_chains, n_draws, 1)
+    return series, series.shape[0], series.shape[1]
+
+def _actor_collect_move_counts(model: Any) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
+    """
+    Return (selected, success, accepted) move count dictionaries from the in-actor sampler.
+    """
+    sampler: Sampler = model.sampler
+    sel = dict(getattr(sampler, "move_selected_counts", {}))
+    suc = dict(getattr(sampler, "move_success_counts", {}))
+    acc = dict(getattr(sampler, "move_accepted_counts", {}))
+    # Ensure plain ints
+    sel = {k: int(v) for k, v in sel.items()}
+    suc = {k: int(v) for k, v in suc.items()}
+    acc = {k: int(v) for k, v in acc.items()}
+    return sel, suc, acc
 
 def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
     """
@@ -84,20 +96,14 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
     { move: {selected, proposed, accepted, acc_rate, prop_rate}, 'overall': {...} }
     where proposed == success in the sampler terminology.
     """
-    def read_counts(sampler: Sampler) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int]]:
-        sel = getattr(sampler, "move_selected_counts", {})
-        suc = getattr(sampler, "move_success_counts", {})
-        acc = getattr(sampler, "move_accepted_counts", {})
-        return dict(sel), dict(suc), dict(acc)
 
     agg_sel: Dict[str, int] = {}
     agg_suc: Dict[str, int] = {}
     agg_acc: Dict[str, int] = {}
 
     if isinstance(model, MultiChainBART):
-        chains = model.collect_model_states()
-        for chain_model in chains:
-            sel, suc, acc = read_counts(chain_model.sampler)
+        counts_list = model.collect(_actor_collect_move_counts)
+        for sel, suc, acc in counts_list:
             for k, v in sel.items():
                 agg_sel[k] = agg_sel.get(k, 0) + int(v)
             for k, v in suc.items():
@@ -105,7 +111,7 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
             for k, v in acc.items():
                 agg_acc[k] = agg_acc.get(k, 0) + int(v)
     else:
-        sel, suc, acc = read_counts(model.sampler)
+        sel, suc, acc = _actor_collect_move_counts(model)
         agg_sel, agg_suc, agg_acc = sel, suc, acc
 
     # Compute per-move rates
@@ -142,7 +148,6 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
     }
     return result
 
-
 def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """
     Compute MCMC diagnostics for a fitted BART-like model.
@@ -150,7 +155,7 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
     Metrics:
     - R-hat (rank normalized, split) via ArviZ
     - bulk ESS via ArviZ
-    - MCSE (mean MC standard error) for the scalar series
+    - MCSE (mean MC standard error)
     - Move acceptance statistics from the sampler
 
     Parameters
@@ -161,7 +166,7 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
         Name of the scalar in `global_params` to use (default is 'eps_sigma2' if not provided).
         Ignored when X is provided.
     X : np.ndarray, optional
-        If provided, compute diagnostics for f(x) evaluated at X per draw.
+        If provided, compute diagnostics for f(X) evaluated at each draw without aggregation (per-row diagnostics).
 
     Returns
     -------
@@ -173,42 +178,41 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
         }
     """
     # Default key (only relevant when X is None)
-    use_key = "eps_sigma2" if (X is None and key is None) else (key if key is not None else "eps_sigma2")
+    use_key = "eps_sigma2" if (X is None and key is None) else (key if key is not None else "eps_sigma2") 
     series, n_chains, n_draws = _collect_chain_series(model, key=use_key, X=X)
 
     # Create InferenceData with one observed variable named after the key
     var_name = (use_key if X is None else "f(x)")
-    posterior = {var_name: series[:, :, None]}  # add dummy dim for shape (chains, draws, 1)
+    posterior = {var_name: series} # Shape (chains, draws, k)
     idata = az.from_dict(posterior=posterior)
 
     # R-hat and ESS (bulk)
     rhat_da: Any = az.rhat(idata, method="rank")
     ess_da: Any = az.ess(idata, method="bulk")
-    rhat = float(rhat_da[var_name].values.squeeze())
-    ess_bulk = float(ess_da[var_name].values.squeeze())
+    rhat_arr = np.asarray(rhat_da[var_name].values).squeeze()
+    ess_arr = np.asarray(ess_da[var_name].values).squeeze()
 
     # MCSE of the mean for the scalar series; ArviZ mcse returns array per var
     mcse_da: Any = az.mcse(idata)
-    mcse_mean = float(mcse_da[var_name].values.squeeze())
-    flat = series.reshape(-1).astype(np.float64, copy=False)
-    sd = float(np.std(flat, ddof=1)) if flat.size > 1 else float("nan")
-    mcse_over_sd = float(mcse_mean / sd) if sd > 0 and np.isfinite(mcse_mean) else float("nan")
+    mcse_arr = np.asarray(mcse_da[var_name].values).squeeze()
+    # Compute SD across chained draws per variable: (chains*draws, k)
+    flat = series.reshape(-1, series.shape[-1]).astype(np.float64, copy=False)
+    sd_vec = np.std(flat, axis=0, ddof=1)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        mcse_over_sd_vec = np.where(sd_vec > 0, mcse_arr / sd_vec, np.nan)
 
     acceptance = _collect_move_acceptance(model)
 
     return {
         "n_chains": int(n_chains),
         "n_draws": int(n_draws),
-        "rhat": rhat,
-        "ess_bulk": ess_bulk,
-        "mcse_mean": mcse_mean,
-        "mcse_over_sd": mcse_over_sd,
+        "rhat": rhat_arr.reshape(-1),
+        "ess_bulk": ess_arr.reshape(-1),
+        "mcse_mean": mcse_arr.reshape(-1),
+        "mcse_over_sd": mcse_over_sd_vec.reshape(-1),
         "acceptance": acceptance,
     }
-
 
 __all__ = [
     "compute_diagnostics",
 ]
-
-
