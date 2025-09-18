@@ -15,7 +15,7 @@ def _actor_collect_values(model: Any, key: str, X: Optional[np.ndarray] = None) 
     if not getattr(model, "is_fitted", False):
         raise ValueError("Model must be fitted before diagnostics.")
     trace = getattr(model, "trace", None)
-    if trace is None or len(trace) == 0:
+    if trace is None or len(getattr(model, 'range_post', [])) == 0:
         raise ValueError("Empty trace; run sampling first.")
     # If no X provided, extract scalar from global parameters
     if X is None:
@@ -30,8 +30,8 @@ def _actor_collect_values(model: Any, key: str, X: Optional[np.ndarray] = None) 
         X_arr = X_arr.reshape(1, -1)
 
     vals: List[Any] = []
-    for state in trace:
-        y_eval = model.predict_trace(state, X_arr, backtransform=True)
+    for k in model.range_post:
+        y_eval = model.predict_trace(int(k), X_arr, backtransform=True)
         vals.append(np.asarray(y_eval).reshape(-1))
     return vals
 

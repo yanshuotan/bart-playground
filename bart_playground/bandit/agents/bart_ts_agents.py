@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Callable, List, Union
 import logging
-from bart_playground.bart import DefaultBART, LogisticBART
+from bart_playground.bart import DefaultBART, LogisticBART, BART
 from bart_playground.mcbart import MultiChainBART
 from bart_playground.bandit.agents.agent import BanditAgent
 from bart_playground.bandit.experiment_utils.encoder import BanditEncoder
@@ -46,6 +46,7 @@ class BARTTSAgent(BanditAgent):
         
         # Model setup
         self.model_factory = model_factory
+        self.models : list[BART] = []
         if self.encoding == 'separate':
             self.models = [model_factory() for _ in range(n_arms)]
         else:
@@ -63,6 +64,10 @@ class BARTTSAgent(BanditAgent):
         # Model state
         self.is_model_fitted = False
         
+        # Posterior sample management
+        self._post_indices = []
+        self._post_idx_pos = 0
+        
     @property
     def model(self):
         return self.models[0]
@@ -73,12 +78,6 @@ class BARTTSAgent(BanditAgent):
     @property
     def separate_models(self) -> bool:
         return self.encoding == 'separate'
-    
-    def _should_refresh(self) -> bool:
-        """Check if model should be refreshed based on time step."""
-        if self.t < self.initial_random_selections:
-            return False
-        return np.ceil(8 * np.log(self.t)) > np.ceil(8 * np.log(self.t - 1))
     
     @staticmethod
     def _enough_data(outcomes, min_obs=4):
@@ -102,34 +101,37 @@ class BARTTSAgent(BanditAgent):
         else:
             # Check overall data sufficiency
             return self._enough_data(rewards)
+        
+    def _ndpost_needed(self, max_needed: int) -> int:
+        """Determine the number of posterior samples needed for the next refresh. At most self.ndpost."""
+        return int(min(getattr(self.model, 'ndpost', max_needed), max_needed))
     
     def _refresh_model(self) -> None:
         """Re-fit the model from scratch using all historical data."""
-        if not self._has_sufficient_data():
-            return
-
         logger.info(f't = {self.t} - re-training BART model from scratch')
 
         X = np.array(self.all_encoded_features)
         y = np.array(self.all_rewards)
 
         try:
+            # Determine maximum number of actions until next refresh
+            max_needed = self._steps_until_next_refresh(self.t)
             if self.separate_models:
                 # Train separate models for each arm
-                new_models = {}
+                new_models: list[BART] = []
                 for arm in range(self.n_arms):
                     arm_mask = np.array(self.all_arms) == arm
                     X_arm = X[arm_mask]
                     y_arm = y[arm_mask]
-                    model = self.model_factory()
+                    model = self.model_factory(self._ndpost_needed(max_needed)) 
                     model.fit(X_arm, y_arm, quietly=True)
-                    new_models[arm] = model
+                    new_models.append(model)
 
                 # Only replace if all fits succeeded
                 self.models = new_models
 
             else:
-                new_model = self.model_factory()
+                new_model = self.model_factory(self._ndpost_needed(max_needed)) 
                 new_model.fit(X, y, quietly=True)
 
             # Only replace on success
@@ -137,14 +139,12 @@ class BARTTSAgent(BanditAgent):
 
             self.is_model_fitted = True
 
+            # Reset sequential posterior index queue
+            self._reset_post_queue()
+
         except Exception:
             logger.exception('Failed to refresh model; keeping previous model(s) in place')
             # self.models or self.model and is_model_fitted remain as they were
-
-    @staticmethod
-    def _default_schedule(total_k) -> Callable[[int], float]:
-        # Simply a uniform schedule
-        return lambda k: 1.0 / total_k
 
     def _get_action_estimates(self, x: Union[np.ndarray, List[float]]) -> np.ndarray:
         """Get action estimates for all arms based on input features x."""
@@ -160,21 +160,65 @@ class BARTTSAgent(BanditAgent):
                     post_sample = post_sample[:, 1]
             return post_sample
         
-        prob_schedule = self._default_schedule(self.model._trace_length)
+        # Use a precomputed, non-repeating posterior draw index
+        k = self._next_post_index()
+        def _eval_at(model, X: np.ndarray, k: int) -> np.ndarray:
+            return model.predict_trace(k, X, backtransform=True)
+        
         if not self.separate_models:
             x_combined = self.encoder.encode(x, arm=-1)  # Encode for all arms
-            post_mean_samples = self.model.posterior_sample(x_combined, prob_schedule)
+            post_mean_samples = _eval_at(self.model, x_combined, k)
             action_estimates = _reformat(post_mean_samples)
         else:
             action_estimates = np.zeros(self.n_arms)
             for arm in range(self.n_arms):
-                if hasattr(self.models[arm], 'posterior_sample'):  # Check if model is fitted
-                    post_mean_samples = self.models[arm].posterior_sample(x, prob_schedule)
-                    action_estimates[arm] = _reformat(post_mean_samples)
+                if self.is_model_fitted:
+                    model = self.models[arm]
+                    post_val = _eval_at(model, x, k)
+                    action_estimates[arm] = _reformat(post_val)
                 else:
-                    action_estimates[arm] = 0.0  # Default value for unfitted models
+                    logger.warning(f'Model for arm {arm} is not fitted, returning 0.0')
+                    action_estimates[arm] = 0.0
         
         return action_estimates
+
+    @staticmethod
+    def _refresh_idx(t: int) -> int:
+        """Determine the time step at which the model should be refreshed."""
+        return int(np.ceil(8 * np.log(t)))
+
+    def _should_refresh(self) -> bool:
+        """Check if model should be refreshed based on time step."""
+        if self.t < self.initial_random_selections or not self._has_sufficient_data():
+            return False
+        return self._refresh_idx(self.t) > self._refresh_idx(self.t - 1)
+    
+    def _steps_until_next_refresh(self, t_now: int) -> int:
+        """Compute the number of selections until the next refresh trigger based on the schedule."""
+        # We assume we are in steady-state (enough data and past initial random phase)
+        steps = 1
+        while self._refresh_idx(t_now + steps) <= self._refresh_idx(t_now + steps - 1):
+            steps += 1
+        return steps
+
+    def _reset_post_queue(self) -> None:
+        """Reset the non-repeating posterior index queue after a refresh."""
+        self._post_indices = []
+        self._post_idx_pos = 0
+        # Use any one model to infer the posterior range
+        self._post_indices = list(self.model.range_post)
+        self.rng.shuffle(self._post_indices)
+
+    def _next_post_index(self) -> int:
+        """Return the next posterior index to use without repetition.
+        If the queue is exhausted or not initialized, re-initialize it."""
+        if self._post_idx_pos < len(self._post_indices):
+            k = self._post_indices[self._post_idx_pos]
+            self._post_idx_pos += 1
+            return k
+        else: # Re-initialize the queue
+            self._reset_post_queue()
+            return self._next_post_index()
     
     def choose_arm(self, x: Union[np.ndarray, List[float]], **kwargs) -> int:
         """
@@ -255,11 +299,11 @@ class DefaultBARTTSAgent(BARTTSAgent):
         
         if n_chains > 1:
             # Use MultiChainBART for ensemble modeling
-            model_factory = lambda: MultiChainBART(
+            model_factory = lambda new_ndpost=ndpost: MultiChainBART(
                 n_ensembles=n_chains,
                 bart_class=DefaultBART,
                 n_trees=n_trees,
-                ndpost=ndpost,
+                ndpost=new_ndpost,
                 nskip=nskip,
                 random_state=random_state,
                 proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
@@ -270,9 +314,9 @@ class DefaultBARTTSAgent(BARTTSAgent):
             )
         else:
             # Use single DefaultBART instance
-            model_factory = lambda: DefaultBART(
+            model_factory = lambda new_ndpost=ndpost: DefaultBART(
                 n_trees=n_trees,
-                ndpost=ndpost,
+                ndpost=new_ndpost,
                 nskip=nskip,
                 random_state=random_state,
                 proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
@@ -299,9 +343,9 @@ class LogisticBARTTSAgent(BARTTSAgent):
         if n_arms > 2 and encoding == 'native':
             raise NotImplementedError("RefreshLogisticBARTAgent: native encoding currently only supports n_arms = 2.")
         
-        model_factory = lambda: LogisticBART(
+        model_factory = lambda new_ndpost=ndpost: LogisticBART(
             n_trees=n_trees,
-            ndpost=ndpost,
+            ndpost=new_ndpost,
             nskip=nskip,
             random_state=random_state,
             proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1}
