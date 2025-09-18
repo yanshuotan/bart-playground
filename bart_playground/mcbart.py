@@ -33,6 +33,10 @@ class BARTActor:
         # Use default backtransform behavior
         return self.model.posterior_sample(X, schedule)
 
+    def predict_trace(self, k: int, X, backtransform: bool = True):
+        """Evaluate prediction at a specific trace index k using the in-actor model."""
+        return self.model.predict_trace(k, X, backtransform=backtransform)
+
     def get_attributes(self):
         """Helper to retrieve attributes from the model inside the actor."""
         if self.model.is_fitted:
@@ -61,10 +65,11 @@ class MultiChainBART:
     Multi-chain BART model that runs multiple BART chains in parallel using Ray.
     This allows for efficient, low-overhead updates.
     """
-    def __init__(self, n_ensembles, bart_class=DefaultBART, random_state=42, **kwargs):
+    def __init__(self, n_ensembles, bart_class=DefaultBART, random_state=42, ndpost=1000, **kwargs):
         self.n_ensembles = n_ensembles
         self.bart_class = bart_class
-
+        self.ndpost = ndpost
+        
         # Initialize Ray. ignore_reinit_error is useful in interactive environments.
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
@@ -80,7 +85,7 @@ class MultiChainBART:
 
         # Create stateful actors. Each actor will build and hold one BART instance.
         self.bart_actors: List[Any] = [
-            BARTActor.remote(bart_class, random_state=seed_sequence, **kwargs)  # type: ignore
+            BARTActor.remote(bart_class, random_state=seed_sequence, ndpost=ndpost, **kwargs)  # type: ignore
             for seed_sequence in child_states
         ]
         print(f"Created {n_ensembles} BARTActor(s) using BART class: {bart_class.__name__}")
@@ -92,6 +97,16 @@ class MultiChainBART:
             attrs: Dict[str, Any] = ray.get(self.bart_actors[0].get_attributes.remote())
             return attrs.get('_trace_length', 0)
         return 0
+
+    @property
+    def range_post(self):
+        """
+        Get the range of posterior samples.
+        """
+        total_iterations = self._trace_length
+        if total_iterations < self.ndpost:
+            raise ValueError(f"Not enough posterior samples: {total_iterations} < {self.ndpost} (provided ndpost).")
+        return range(total_iterations - self.ndpost, total_iterations)
 
     def fit(self, X, y, quietly=False):
         """Fit all BART instances in parallel using Ray actors."""
@@ -134,6 +149,12 @@ class MultiChainBART:
         chosen_actor = self.bart_actors[actor_idx]
         sample_future = chosen_actor.posterior_sample.remote(X, schedule)
         return ray.get(sample_future)
+
+    def predict_trace(self, k: int, X, backtransform: bool = True):
+        """Predict using a specific trace index by averaging across all actors (chains)."""
+        preds_futures = [actor.predict_trace.remote(k, X, backtransform) for actor in self.bart_actors]
+        all_preds = np.array(ray.get(preds_futures))
+        return np.mean(all_preds, axis=0)
 
     def collect_model_states(self):
         """Return the in-actor BART models."""
