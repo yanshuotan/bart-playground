@@ -87,6 +87,12 @@ def simulate(scenario, agents, n_draws, agent_names: list[str]=[], on_draw: Opti
     n_agents = len(agents)
     cum_regrets = np.zeros((n_draws, n_agents))
     time_agents = np.zeros((n_draws, n_agents))
+
+    def _is_perfect_square(n):
+        if n < 0:
+            return False
+        root = int(math.sqrt(n))
+        return root * root == n
     
     for draw in tqdm(range(n_draws), desc="Simulating", miniters=1):
         x = scenario.generate_covariates()
@@ -105,7 +111,6 @@ def simulate(scenario, agents, n_draws, agent_names: list[str]=[], on_draw: Opti
             # Update agent's state with the chosen arm's data.
             agent.update_state(arm, x, u["reward"][arm])
             time_agents[draw, i] = time.time() - t0
-        
         # Allows external code to snapshot state (0-based index).
         if on_draw is not None:
             try:
@@ -115,16 +120,24 @@ def simulate(scenario, agents, n_draws, agent_names: list[str]=[], on_draw: Opti
                 sim_logger.error(f"Error in on_draw callback: {e}")
                 pass
 
-        # Log current status every sqrt(n_draws) draws.
-        logging_frequency = int(math.sqrt(n_draws))
-        if (draw + 1) % logging_frequency == 0 or draw == n_draws - 1:   
+        # Log current status based on square number intervals
+        draw_idx = draw + 1
+        should_log = False
+        if draw_idx == 10:
+            should_log = True
+        elif draw_idx > 10 and _is_perfect_square(draw_idx):
+            should_log = True
+        elif draw_idx == n_draws:  # Always log the final draw
+            should_log = True
+            
+        if should_log:   
                 df = pd.DataFrame({
                     "AgentName":       agent_names,
                     "CumRegret":   cum_regrets[draw, :],
                     "CumTime":     np.sum(time_agents[:draw, :], axis=0)
                 })
                 # log it with fixed‐width columns and 6 decimal places
-                sim_logger.debug(f"Draw {draw+1}/{n_draws}: \n" + df.to_string(
+                sim_logger.debug(f"Draw {draw_idx}/{n_draws}: \n" + df.to_string(
                     index=False,
                     float_format="%.6f"
                 ))

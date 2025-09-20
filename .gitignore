@@ -26,3 +26,7 @@ bart_playground/bandit/baselines
 benchmarks/*.csv
 test/generators/*
 *.pkl
+
+/benchmarks/
+/experiments/
+/notebooks/

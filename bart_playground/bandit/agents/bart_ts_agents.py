@@ -52,6 +52,9 @@ class BARTTSAgent(BanditAgent):
         else:
             self.models = [model_factory()]
         
+        # Record the maximum ndpost as the user-initialized value to cap future refreshes
+        self.max_ndpost = int(getattr(self.model, 'ndpost', 0))
+
         # Check if model is logistic
         self.is_logistic = isinstance(self.model, LogisticBART)
         
@@ -80,7 +83,7 @@ class BARTTSAgent(BanditAgent):
         return self.encoding == 'separate'
     
     @staticmethod
-    def _enough_data(outcomes, min_obs=4):
+    def _enough_data(outcomes, min_obs=5):
         """Check if we have enough data for the initial fit."""
         return outcomes.size >= min_obs # and np.unique(outcomes).size > 1
     
@@ -104,7 +107,7 @@ class BARTTSAgent(BanditAgent):
         
     def _ndpost_needed(self, max_needed: int) -> int:
         """Determine the number of posterior samples needed for the next refresh. At most self.ndpost."""
-        return int(min(getattr(self.model, 'ndpost', max_needed), max_needed))
+        return int(min(self.max_ndpost, max_needed))
     
     def _refresh_model(self) -> None:
         """Re-fit the model from scratch using all historical data."""
@@ -217,6 +220,7 @@ class BARTTSAgent(BanditAgent):
             self._post_idx_pos += 1
             return k
         else: # Re-initialize the queue
+            logger.warning('Posterior index queue exhausted, re-initializing')
             self._reset_post_queue()
             return self._next_post_index()
     
