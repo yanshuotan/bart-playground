@@ -338,8 +338,7 @@ class GlobalParamPrior:
             raise ValueError("Invalid specification for the noise variance prior.")
         
         if sigma_hat <= 1e-5:
-            logger.warning("Estimated sigma_hat is too small, returning a small positive value (1e-5) to avoid numerical issues.")
-            logger.info(f"Estimated sigma_hat: {sigma_hat}, specification: {specification}")
+            logger.warning(f"Estimated sigma_hat {sigma_hat} is too small, returning a small positive value (1e-5) to avoid numerical issues. Specification: {specification}.")
             sigma_hat = float(1e-5)
         
         # chi2.ppf suffices
