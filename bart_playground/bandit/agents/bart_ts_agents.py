@@ -1,6 +1,7 @@
 import numpy as np
-from typing import Callable, List, Union
+from typing import Callable, List, Union, Tuple, cast
 import logging
+from abc import abstractmethod
 from bart_playground.bart import DefaultBART, LogisticBART, BART
 from bart_playground.mcbart import MultiChainBART
 from bart_playground.bandit.agents.agent import BanditAgent
@@ -283,6 +284,83 @@ class BARTTSAgent(BanditAgent):
         
         return self
 
+    @property
+    def n_post(self) -> int:
+        """Number of available posterior samples after burn-in.
+        Returns 0 if model is not fitted yet.
+        """
+        try:
+            if not self.is_model_fitted:
+                return 0
+            # Use any one model to infer posterior range
+            return len(list(self.model.range_post))
+        except Exception:
+            return 0
+
+    def _preprocess_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int, int, int]:
+        """
+        Preprocess probe covariates and return common parameters.
+
+        Args:
+            X_probes: Input probe covariates
+
+        Returns:
+            Tuple of (X_probes_processed, n_probes, n_arms, n_post)
+            Returns (empty_X, n_probes, n_arms, 0) if n_post <= 0
+        """
+        # Ensure 2D X_probes
+        X_probes = np.array(X_probes)
+        if X_probes.ndim == 1:
+            X_probes = X_probes.reshape(1, -1)
+
+        n_probes = X_probes.shape[0]
+        n_arms = self.n_arms
+        n_post = self.n_post
+
+        return X_probes, n_probes, n_arms, n_post
+
+    def _get_empty_draws(self, n_probes: int, n_arms: int) -> Tuple[np.ndarray, int]:
+        """Return empty draws array when model is not fitted."""
+        logger.warning('Model is not fitted, returning empty draws for probes')
+        return np.zeros((0, n_probes, n_arms), dtype=float), 0
+
+    def _rows_to_draws(self, rows: np.ndarray, n_probes: int, n_arms: int) -> np.ndarray:
+        """
+        Helper to reshape stacked rows (n_probes * n_arms, n_post) -> (n_post, n_probes, n_arms)
+
+        Args:
+            rows: Array of shape (n_probes * n_arms, n_post)
+            n_probes: Number of probe points
+            n_arms: Number of arms
+
+        Returns:
+            Array of shape (n_post, n_probes, n_arms)
+        """
+        arr = rows.reshape(n_probes, n_arms, -1)  # -1 infers n_post
+        return np.transpose(arr, (2, 0, 1))
+
+    @abstractmethod
+    def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
+        """
+        Compute posterior draws over all arms for provided probe covariates.
+
+        Args:
+            X_probes: Array of shape (n_probes, n_features)
+
+        Returns:
+            draws: np.ndarray shaped (n_post, n_probes, n_arms)
+            n_post: int, actual number of posterior draws used
+
+        Notes:
+            - For regression BART: draws correspond to posterior samples of f(x, arm).
+            - For logistic BART: draws correspond to expected reward used in selection:
+              * encoding in {'multi','one-hot'}: P(y=1 | x, arm)
+              * encoding == 'separate': P(y=1 | x) per arm model
+              * encoding == 'native' (binary arms only): category probabilities per arm
+            - Returns (empty array with shape (0, n_probes, n_arms), 0) when not fitted.
+        """
+        pass
+
 
 class DefaultBARTTSAgent(BARTTSAgent):
     """
@@ -330,8 +408,51 @@ class DefaultBARTTSAgent(BARTTSAgent):
                 quick_decay=quick_decay
             )
         
-        super().__init__(n_arms, n_features, model_factory, 
+        super().__init__(n_arms, n_features, model_factory,
                          initial_random_selections, random_state, encoding)
+
+    def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
+        """
+        Compute posterior draws over all arms for provided probe covariates using DefaultBART.
+
+        Args:
+            X_probes: Array of shape (n_probes, n_features)
+
+        Returns:
+            draws: np.ndarray shaped (n_post, n_probes, n_arms)
+            n_post: int, actual number of posterior draws used
+
+        Notes:
+            - Draws correspond to posterior samples of f(x, arm).
+            - Returns (empty array with shape (0, n_probes, n_arms), 0) when not fitted.
+        """
+        X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
+
+        if n_post <= 0:
+            return self._get_empty_draws(n_probes, n_arms)
+
+        # Regression BART pathway (DefaultBART):
+        if not self.separate_models:
+            # Encode each probe for all arms and stack
+            encoded_list: list[np.ndarray] = []
+            for i in range(n_probes):
+                x = X_probes[i, :]
+                X_enc = self.encoder.encode(x, arm=-1)  # (n_arms, combined_dim)
+                encoded_list.append(X_enc)
+            X_all = np.vstack(encoded_list)  # (n_probes*n_arms, combined_dim)
+            # Posterior samples f(X)
+            f_rows = self.model.posterior_f(X_all, backtransform=True)  # (n_rows, n_post)
+            # Convert to (n_post, n_probes, n_arms)
+            draws = self._rows_to_draws(f_rows, n_probes, n_arms)
+            return draws, n_post
+        else:
+            # Separate models per arm
+            draws = np.zeros((n_post, n_probes, n_arms), dtype=float)
+            for arm in range(n_arms):
+                model = self.models[arm]
+                f = model.posterior_f(X_probes, backtransform=True)  # (n_probes, n_post)
+                draws[:, :, arm] = f.T  # (n_post, n_probes)
+            return draws, n_post
 
 
 class LogisticBARTTSAgent(BARTTSAgent):
@@ -356,3 +477,56 @@ class LogisticBARTTSAgent(BARTTSAgent):
         )
         super().__init__(n_arms, n_features, model_factory,
                          initial_random_selections, random_state, encoding)
+
+    def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
+        """
+        Compute posterior draws over all arms for provided probe covariates using LogisticBART.
+
+        Args:
+            X_probes: Array of shape (n_probes, n_features)
+
+        Returns:
+            draws: np.ndarray shaped (n_post, n_probes, n_arms)
+            n_post: int, actual number of posterior draws used
+
+        Notes:
+            - Draws correspond to expected reward used in selection:
+              * encoding in {'multi','one-hot'}: P(y=1 | x, arm)
+              * encoding == 'separate': P(y=1 | x) per arm model
+              * encoding == 'native' (binary arms only): category probabilities per arm
+            - Returns (empty array with shape (0, n_probes, n_arms), 0) when not fitted.
+        """
+        X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
+
+        if n_post <= 0:
+            return self._get_empty_draws(n_probes, n_arms)
+
+        # Logistic BART pathway
+        if not self.separate_models:
+            if self.encoding in ['multi', 'one-hot']:
+                # Encode each probe for all arms and stack rows
+                encoded_list = []
+                for i in range(n_probes):
+                    x = X_probes[i, :]
+                    X_enc = self.encoder.encode(x, arm=-1)  # (n_arms, combined_dim)
+                    encoded_list.append(X_enc)
+                X_all = np.vstack(encoded_list)  # (n_probes*n_arms, combined_dim)
+                model_logit = cast(LogisticBART, self.model)
+                prob = model_logit.posterior_predict_proba(X_all)  # (n_rows, n_post, n_categories)
+                # Select probability of positive class (category 1) per row
+                if prob.shape[2] < 2:
+                    raise ValueError("LogisticBART with multi/one-hot encoding requires at least 2 categories.")
+                p1_rows = prob[:, :, 1]  # (n_rows, n_post)
+                draws = self._rows_to_draws(p1_rows, n_probes, n_arms)
+                return draws, n_post
+            else:
+                raise NotImplementedError(f"Unsupported encoding for logistic BARTTSAgent probes: {self.encoding}")
+        else:
+            # Separate logistic models per arm; use P(y=1|x) as arm value
+            draws = np.zeros((n_post, n_probes, n_arms), dtype=float)
+            for arm in range(n_arms):
+                model = cast(LogisticBART, self.models[arm])
+                prob = model.posterior_predict_proba(X_probes)  # (n_probes, n_post, n_categories)
+                p1 = prob[:, :, 1]  # (n_probes, n_post)
+                draws[:, :, arm] = p1.T
+            return draws, n_post
