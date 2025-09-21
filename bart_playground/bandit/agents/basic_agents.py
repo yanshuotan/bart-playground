@@ -1,5 +1,5 @@
 import numpy as np
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, Tuple
 from bart_playground.bandit.agents.agent import BanditAgent
 from enum import Enum
 class SillyAgent(BanditAgent):
@@ -162,3 +162,45 @@ class LinearAgentStable(BanditAgent):
         self.L[arm_idx] = np.linalg.cholesky(self.B[arm_idx])
 
         return self
+
+    def posterior_draws_on_probes(self, X_probes: np.ndarray, n_post: int = 200) -> Tuple[np.ndarray, int]:
+        """
+        Generate posterior draws for LinearTS across all probes and arms.
+
+        Args:
+            X_probes: shape (n_probes, n_features) without intercept term.
+            n_post: number of posterior samples to draw for diagnostics.
+
+        Returns:
+            draws: np.ndarray shaped (n_post, n_probes, n_arms)
+            n_post: int, number of draws actually used
+
+        Notes:
+            - Uses the agent's posterior w ~ N(mu, v^2 * (B^{-1})) via cached Cholesky L.
+            - For UCB mode, this diagnostic is not meaningful; method still returns TS-style draws using v.
+        """
+        X_probes = np.asarray(X_probes, dtype=float)
+        if X_probes.ndim == 1:
+            X_probes = X_probes.reshape(1, -1)
+        n_probes = X_probes.shape[0]
+        n_arms = self.n_arms
+
+        draws = np.zeros((n_post, n_probes, n_arms), dtype=float)
+
+        # Normalize probes by adding intercept once
+        def _norm(X: np.ndarray) -> np.ndarray:
+            X = np.asarray(X, dtype=float)
+            if X.ndim == 1:
+                X = X.reshape(-1, 1)
+            ones = np.ones((X.shape[0], 1), dtype=float)
+            return np.hstack([X, ones])
+
+        Xn = _norm(X_probes)  # (n_probes, n_features+1) matches self.n_features
+
+        for s in range(n_post):
+            # Sample per-arm weights and evaluate u = x^T w
+            for a in range(n_arms):
+                w = self._sample_w(a)  # shape (n_features, 1)
+                draws[s, :, a] = (Xn @ w).reshape(-1)
+
+        return draws, int(n_post)

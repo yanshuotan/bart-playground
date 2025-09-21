@@ -65,7 +65,14 @@ class Scenario:
     def rng_state(self):
         return self.rng.bit_generator.state
 
-def simulate(scenario, agents, n_draws, agent_names: list[str]=[], on_draw: Optional[Callable[[int], None]] = None):
+def simulate(
+    scenario,
+    agents,
+    n_draws,
+    agent_names: list[str] = [],
+    on_draw: Optional[Callable[[int], None]] = None,
+    on_metrics: Optional[Callable[[int, np.ndarray, np.ndarray, list[str]], None]] = None,
+):
     """
     Simulate a bandit problem using the provided scenario and agents. The `simulate` function takes a scenario, a list of agents, and the number of draws. For each draw:
 
@@ -118,6 +125,15 @@ def simulate(scenario, agents, n_draws, agent_names: list[str]=[], on_draw: Opti
             except Exception as e:
                 # Swallow errors to avoid breaking core simulation
                 sim_logger.error(f"Error in on_draw callback: {e}")
+                pass
+
+        # Expose per-draw cumulative metrics to external callback (0-based index)
+        if on_metrics is not None:
+            try:
+                cum_times_row = np.sum(time_agents[:draw+1, :], axis=0)
+                on_metrics(draw, cum_regrets[draw, :], cum_times_row, agent_names)
+            except Exception as e:
+                sim_logger.error(f"Error in on_metrics callback: {e}")
                 pass
 
         # Log current status based on square number intervals
