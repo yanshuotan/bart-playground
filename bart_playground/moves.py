@@ -629,7 +629,11 @@ class MultiSwap(Swap):
 all_moves = {"grow" : Grow,
             "prune" : Prune,
             "change" : Change,
-            "swap" : Swap}
+            "swap" : Swap,
+            "multi_grow" : MultiGrow,
+            "multi_prune" : MultiPrune,
+            "multi_change" : MultiChange,
+            "multi_swap" : MultiSwap}
 
 # Mapping of each move to its contrary move used in MH ratio adjustments
 contrary_moves = {
@@ -637,4 +641,8 @@ contrary_moves = {
     "prune": "grow",
     "change": "change",
     "swap": "swap",
+    "multi_grow": "multi_prune",
+    "multi_prune": "multi_grow",
+    "multi_change": "multi_change",
+    "multi_swap": "multi_swap"
 }

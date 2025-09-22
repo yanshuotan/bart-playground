@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm import tqdm
 from abc import ABC, abstractmethod
-from typing import Callable, Optional, Any
+from typing import Callable, Optional, Any, Union
 from scipy.stats import truncnorm   
 
 from .params import Tree, Parameters
@@ -52,7 +52,6 @@ class Sampler(ABC):
         self.n_iter = None
         self.proposals = proposal_probs
         self.temp_schedule = temp_schedule
-        self.multi_tries = multi_tries
         self.trace = []
         self.generator = generator
         # create cache for moves
@@ -393,6 +392,91 @@ class ProbitSampler(Sampler):
         else:
             del iter_trace
             return iter_current
+        
+class MultiSampler(Sampler):
+    """
+    Default implementation of the BART sampler.
+    """
+    def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
+                 generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=1, 
+                 multi_tries: Union[int, list[int]] = 10):
+        self.tol = tol
+        if proposal_probs is None:
+            proposal_probs = {"grow" : 0.5,
+                              "prune" : 0.5}
+        self.tree_prior = prior.tree_prior
+        self.global_prior = prior.global_prior
+        self.likelihood = prior.likelihood
+        self.multi_tries = multi_tries
+        super().__init__(prior, proposal_probs, generator, temp_schedule)
+        # --- Add move statistics ---
+        self.move_selected_counts = {k: 0 for k in self.proposals}
+        self.move_success_counts = {k: 0 for k in self.proposals}
+        self.move_accepted_counts = {k: 0 for k in self.proposals}
+        self.multi_ratios = {
+            "multigrow": [],
+            "multiprune": [],
+            "multichange": [],
+            "multiswap": []
+        }
+
+
+    def get_init_state(self) -> Parameters:
+        """
+        Retrieve the initial state for the sampler.
+
+        Returns:
+            The initial state for the sampler.
+        """
+        if self.data is None:
+            raise AttributeError("Need data before running sampler.")
+        trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
+        global_params = self.global_prior.init_global_params(self.data)
+        init_state = Parameters(trees, global_params)
+        return init_state
+    
+    def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
+        """Calculate total log Metropolis-Hastings ratio"""
+        data_y = self.data.y if data_y is None else data_y
+        return move.log_tran_ratio # Already considers prior and likelihood in move.py
+
+    def one_iter(self, current, temp, return_trace=False):
+        """
+        Perform one iteration of the sampler.
+        """
+        iter_current = current.copy() # First make a copy
+        iter_trace = [(0, iter_current)]
+        for k in range(self.tree_prior.n_trees):
+            move_key, move_cls = self.sample_move()
+            self.move_selected_counts[move_key] += 1
+            move = move_cls(
+                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol,
+                likelihood=self.likelihood, tree_prior=self.tree_prior, data_y=self.data.y,
+                n_samples_list=self.multi_tries
+            )
+            if move.propose(self.generator): # Check if a valid move was proposed
+                self.move_success_counts[move_key] += 1
+                move_name = type(move).__name__.lower()
+                if hasattr(move, "candidate_sampling_ratio"): # Record the sampling ratio for multi-moves
+                    for key in self.multi_ratios:
+                        if key in move_name:
+                            self.multi_ratios[key].append(move.candidate_sampling_ratio)
+                            break
+                Z = self.generator.uniform(0, 1)
+                if np.log(Z) < self.log_mh_ratio(move, temp): # Already consider prior and likelihood in move
+                    self.move_accepted_counts[move_key] += 1
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
+                    move.proposed.update_leaf_vals([k], new_leaf_vals)
+                    iter_current = move.proposed
+                    if return_trace:
+                        iter_trace.append((k+1, move.proposed))
+        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
+        if return_trace:
+            return iter_trace
+        else:
+            del iter_trace
+            return iter_current
+    
     
 class LogisticSampler(Sampler):
     """
@@ -526,8 +610,8 @@ class LogisticSampler(Sampler):
         else:
             del iter_trace
             return iter_current
-    
-all_samplers = {"default" : DefaultSampler, "binary": ProbitSampler, "logistic": LogisticSampler}
+
+all_samplers = {"default" : DefaultSampler, "multi": MultiSampler, "binary": ProbitSampler, "logistic": LogisticSampler}
 
 default_proposal_probs = {"grow" : 0.25,
                           "prune" : 0.25,
