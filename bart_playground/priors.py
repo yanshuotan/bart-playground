@@ -110,11 +110,11 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
 @njit(cache=True)
-def _trees_log_prior_numba(tree_vars, alpha, beta):
+def _trees_log_prior_numba(tree_vars, alpha, beta, quick_decay=False):
     # Calculate depth for each node
     d = np.ceil(np.log2(np.arange(len(tree_vars)) + 2)) - 1
     # Calculate log probability of split
-    log_p_split = np.log(alpha) - beta * np.log(1 + d)
+    log_p_split = np.log(alpha) - beta * np.log(1 + d) if not quick_decay else np.log(alpha) * d
     
     # Use loops instead of vectorized operations for better performance with Numba
     #   and better readability
@@ -139,14 +139,16 @@ class TreesPrior:
         f_sigma2 (float): Variance of the leaf parameters.
         generator: Random number generator.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng()):
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng(), quick_decay: bool = False):
         self.n_trees = n_trees
         self.alpha = tree_alpha
         self.beta = tree_beta
         self.f_k = f_k
         self.f_sigma2 = 0.25 / (self.f_k ** 2 * n_trees)
         self.generator = generator
-
+        # If True, use quick decay parameterization for split probabilities
+        self.quick_decay = quick_decay
+                
     def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """
         Resample the values of the leaf nodes for the specified trees.
@@ -212,7 +214,7 @@ class TreesPrior:
         log_prior = 0
         for tree_id in tree_ids:
             tree = bart_params.trees[tree_id]
-            log_prior += _trees_log_prior_numba(tree.vars, self.alpha, self.beta)
+            log_prior += _trees_log_prior_numba(tree.vars, self.alpha, self.beta, self.quick_decay)
         return log_prior
     
     def trees_log_prior_ratio(self, move : Move):
@@ -468,8 +470,8 @@ class BARTLikelihood:
 class ComprehensivePrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, 
                  specification="linear", generator=np.random.default_rng(),
-                 dirichlet_prior=False):
-        self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
+                 dirichlet_prior=False, quick_decay: bool = False):
+        self.tree_prior = TreesPrior(int(n_trees), tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
         self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
@@ -477,8 +479,8 @@ class ProbitPrior:
     """
     BART Prior for binary classification tasks.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng()):
-        self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator)
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng(), quick_decay: bool = False):
+        self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
 class LogisticTreesPrior(TreesPrior):
@@ -487,7 +489,7 @@ class LogisticTreesPrior(TreesPrior):
     
     Inherits from TreesPrior and overrides the resample_leaf_vals method to handle logistic regression.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, c = 0.0, d = 0.0, generator=np.random.default_rng(), parent = None):
+    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, c = 0.0, d = 0.0, generator=np.random.default_rng(), parent = None, quick_decay: bool = False):
         """
         Initialize the logistic trees prior with parameters.
         
@@ -511,7 +513,7 @@ class LogisticTreesPrior(TreesPrior):
         self.c = c
         self.d = d
         self.parent = parent  # LogisticPrior
-        super().__init__(n_trees, tree_alpha, tree_beta, f_k=2.0, generator=generator)
+        super().__init__(n_trees, tree_alpha, tree_beta, f_k=2.0, generator=generator, quick_decay=quick_decay)
 
     def set_latents(self, latents):
         self.latents = latents
@@ -538,10 +540,14 @@ class LogisticTreesPrior(TreesPrior):
         """
         # Cached values of rh, sh and even pi_h from parent may be used. 
         # The speedup is small though (2-4%)
-        if(self.parent.param is not bart_params):
+        if self.parent is None:
+            raise ValueError("Parent LogisticPrior not set")
+        if self.parent.param is not bart_params:
             print("Error: BART Parameter used by calculated values is not the same as that provided to LogisticTreesPrior.resample_leaf_vals, this may lead to incorrect results.")
             print("Please contact the developer to see if we need fall back to re-calculating rh, sh and pi_h.")
             raise ValueError("BART Parameter mismatch")
+        if self.parent.rh is None or self.parent.sh is None or self.parent.pi_h is None:
+            raise ValueError("Parent LogisticPrior attributes (rh, sh, pi_h) not initialized")
         rh = self.parent.rh
         sh = self.parent.sh
         pi_h = self.parent.pi_h
@@ -582,7 +588,7 @@ class LogisticLikelihood(BARTLikelihood):
         """
         self.c = c
         self.d = d
-        self.parent : LogisticPrior = parent  # LogisticPrior
+        self.parent: LogisticPrior | None = parent  # LogisticPrior
         # f_sigma2 useless
         super().__init__(f_sigma2=0.0)
 
@@ -648,12 +654,15 @@ class LogisticLikelihood(BARTLikelihood):
         rh, sh = self._get_rh_sh(
             tree.leaf_ids, latent_tree_product, data_y, len(tree.vars), tree.leaves
         )
-        self.parent.rh = rh
-        self.parent.sh = sh
-        self.parent.param = bart_params
+        if self.parent is not None:
+            self.parent.rh = rh
+            self.parent.sh = sh
+            self.parent.param = bart_params
         
         # assert np.allclose(rh, rhn) and np.allclose(sh, shn), "Mismatch in rh and sh calculation."
-        log_likelihood_sum, self.parent.pi_h = self._trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
+        log_likelihood_sum, pi_h = self._trees_log_marginal_lkhd_numba_backend(self.c, self.d, rh, sh)
+        if self.parent is not None:
+            self.parent.pi_h = pi_h
 
         return log_likelihood_sum
 
@@ -661,20 +670,20 @@ class LogisticPrior:
     """
     BART Prior for logistic classification tasks.
     """
-    def __init__(self, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, generator=np.random.default_rng()):
+    def __init__(self, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, generator=np.random.default_rng(), quick_decay: bool = False):
         if c == 0.0 or d == 0.0:
             a0 = 3.5 / math.sqrt(2)
             c = n_trees/(a0 ** 2) + 0.5
             d = n_trees/(a0 ** 2)
         
-        self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self)
+        self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self, quick_decay=quick_decay)
         self.likelihood = LogisticLikelihood(c, d, parent=self)
         
-        # Placeholders for values reused in resampling
-        self.rh = None  
-        self.sh = None
-        self.pi_h = None
-        self.param = None
+        # Placeholders for values reused in resampling - will be set during likelihood calculation
+        self.rh: np.ndarray | None = None  
+        self.sh: np.ndarray | None = None
+        self.pi_h: np.ndarray | None = None
+        self.param: Parameters | None = None  # Will hold Parameters object
     
     def set_latents(self, latents):
         self.tree_prior.set_latents(latents)
