@@ -4,7 +4,7 @@ import pandas as pd
 import arviz as az
 import time
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, root_mean_squared_error
 from joblib import Parallel, delayed
 
 def _single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, proposal_probs_mtmh, multi_tries):
@@ -27,7 +27,7 @@ def _single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, proposal_probs_mtm
             train_time = time.time() - t0
         sigmas = [trace.global_params['eps_sigma2'] for trace in bart.sampler.trace]
         preds = bart.posterior_f(X_test, backtransform=True)
-        rmses = [mean_squared_error(y_test, preds[:, k], squared=False) for k in range(preds.shape[1])]
+        rmses = [root_mean_squared_error(y_test, preds[:, k]) for k in range(preds.shape[1])]
         chains_sigma2.append(sigmas)
         chains_rmse.append(rmses)
         if i == 0:

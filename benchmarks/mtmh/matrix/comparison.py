@@ -6,17 +6,12 @@ from bart_playground import *
 import arviz as az
 import time
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, root_mean_squared_error
 from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
 from joblib import Parallel, delayed
 
 def _gelman_rubin_single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, proposal_probs_mtmh, proposal_probs_default):
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import mean_squared_error
-    import numpy as np
-    import arviz as az
-
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=seed)
     # MultiBART
     chains_mtmh = []
@@ -27,7 +22,7 @@ def _gelman_rubin_single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, propo
         bart.fit(X_train, y_train, quietly=True)
         sigmas = [trace.global_params['eps_sigma2'] for trace in bart.sampler.trace]
         preds = bart.posterior_f(X_test, backtransform=True)
-        rmses = [mean_squared_error(y_test, preds[:, k], squared=False) for k in range(preds.shape[1])]
+        rmses = [root_mean_squared_error(y_test, preds[:, k]) for k in range(preds.shape[1])]
         chains_mtmh.append(sigmas)
         rmse_chains_mtmh.append(rmses)
     chains_array = np.array(chains_mtmh)
@@ -49,7 +44,7 @@ def _gelman_rubin_single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, propo
         bart_default.fit(X_train, y_train, quietly=True)
         sigmas = [trace.global_params['eps_sigma2'] for trace in bart_default.sampler.trace]
         preds = bart_default.posterior_f(X_test, backtransform=True)
-        rmses = [mean_squared_error(y_test, preds[:, k], squared=False) for k in range(preds.shape[1])]
+        rmses = [root_mean_squared_error(y_test, preds[:, k]) for k in range(preds.shape[1])]
         chains_default.append(sigmas)
         rmse_chains_default.append(rmses)
     chains_array = np.array(chains_default)
