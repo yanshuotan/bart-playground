@@ -399,8 +399,9 @@ class MultiSampler(Sampler):
     """
     def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=1, 
-                 multi_tries: Union[int, list[int]] = 10):
+                 multi_tries: Union[int, list[int]] = 10, init_trees: Optional[list[Tree]] = None):
         self.tol = tol
+        self.init_trees = init_trees
         if proposal_probs is None:
             proposal_probs = {"grow" : 0.5,
                               "prune" : 0.5}
@@ -430,7 +431,17 @@ class MultiSampler(Sampler):
         """
         if self.data is None:
             raise AttributeError("Need data before running sampler.")
-        trees = [Tree.new(self.data.X) for _ in range(self.tree_prior.n_trees)]
+        N = self.tree_prior.n_trees
+
+        if self.init_trees is not None:
+            provided = len(self.init_trees)
+            # Copy up to N of the provided trees
+            trees = [t.copy() for t in self.init_trees[:N]]
+            # Pad with fresh stumps if fewer than N
+            if provided < N:
+                trees += [Tree.new(self.data.X) for _ in range(N - provided)]
+        else:
+            trees = [Tree.new(self.data.X) for _ in range(N)]
         global_params = self.global_prior.init_global_params(self.data)
         init_state = Parameters(trees, global_params)
         return init_state
