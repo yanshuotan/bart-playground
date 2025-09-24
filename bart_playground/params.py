@@ -119,7 +119,7 @@ class Tree:
     def __init__(
         self, dataX: Optional[NDArray[Float32Or64]],
         vars : NDArray[np.int32], thresholds : NDArray[Float32Or64], leaf_vals : NDArray[Float32Or64],
-                  n, leaf_ids, evals):
+                  n, evals, leaf_data_indices=None):
         """
         Initialize the tree parameters.
 
@@ -134,8 +134,8 @@ class Tree:
             Values at the leaf nodes. Default is None.
         - n : np.ndarray, optional
             Array representing the number of data points at each node. Default is None.
-        - leaf_ids : np.ndarray, optional
-            Array indicating which leaf each data example belongs to. Default is None.
+        - leaf_data_indices : dict, optional
+            Dictionary mapping leaf_id -> list of data indices in that leaf. Default is None.
         """
         self.dataX: Optional[NDArray[Float32Or64]] = dataX
         self.vars: NDArray[np.int32] = vars
@@ -143,8 +143,9 @@ class Tree:
         self.leaf_vals: NDArray[Float32Or64] = leaf_vals
 
         self.n: NDArray[np.int32] = n
-        self.leaf_ids: NDArray[np.int32] = leaf_ids
         self.evals: NDArray[Float32Or64] = evals
+
+        self.leaf_data_indices: Optional[dict] = leaf_data_indices
         
         # Store float dtype
         self.float_dtype = self.thresholds.dtype
@@ -156,10 +157,10 @@ class Tree:
         Initialize caching arrays for the tree.
         """
         assert self.dataX is not None, "Data matrix is not provided."
-        self.leaf_ids = np.zeros(self.dataX.shape[0], dtype=np.int32)
         self.n = np.zeros(Tree.default_size, dtype=np.int32)
         self.n[0] = self.dataX.shape[0]
         self.evals = np.zeros(self.dataX.shape[0], dtype=self.float_dtype)
+        self.leaf_data_indices = {0: list(range(self.dataX.shape[0]))}
         
     @property
     def cache_exists(self):
@@ -180,7 +181,8 @@ class Tree:
 
         new_tree = cls(
             dataX if dataX is not None else None,
-            vars, thresholds, leaf_vals, n=None, leaf_ids=None, evals=None
+            vars, thresholds, leaf_vals, n=None, evals=None,
+            leaf_data_indices=None
         )
         if dataX is not None:
             # If dataX is provided, initialize caching arrays.
@@ -201,8 +203,8 @@ class Tree:
             other.thresholds.copy(), 
             other.leaf_vals.copy(),
             other.n.copy() if other.n is not None else None,
-            other.leaf_ids.copy() if other.leaf_ids is not None else None,
-            other.evals.copy() if other.evals is not None else None
+            other.evals.copy() if other.evals is not None else None,
+            {k: v.copy() for k, v in other.leaf_data_indices.items()} if other.leaf_data_indices is not None else None
         )
 
     def copy(self):
@@ -343,10 +345,29 @@ class Tree:
         self.leaf_vals[left_child] = self.float_dtype.type(np.nan) if left_val is None else left_val
         self.leaf_vals[right_child] = self.float_dtype.type(np.nan) if right_val is None else right_val
         
-        # Assert cache arrays exist
-        is_valid = _update_n_and_leaf_id_numba(
-            node_id, self.dataX, False, self.vars, self.thresholds, self.n, self.leaf_ids
-        )
+        # Update leaf_data_indices directly (simple and reliable)
+        parent_data_indices = self.leaf_data_indices[node_id]
+        left_indices = []
+        right_indices = []
+        
+        # Split the data indices based on the threshold
+        for data_idx in parent_data_indices:
+            if self.dataX[data_idx, var] <= threshold:
+                left_indices.append(data_idx)
+            else:
+                right_indices.append(data_idx)
+        
+        # Update the leaf_data_indices dictionary
+        del self.leaf_data_indices[node_id]  # Remove parent leaf
+        self.leaf_data_indices[left_child] = left_indices
+        self.leaf_data_indices[right_child] = right_indices
+        
+        # Update n array
+        if self.cache_exists:
+            self.n[left_child] = len(left_indices)
+            self.n[right_child] = len(right_indices)
+        
+        is_valid = self.n[left_child] > 0 and self.n[right_child] > 0
 
         return is_valid
 
@@ -371,13 +392,22 @@ class Tree:
         
         desc = _descendants_numba(node_id, self.vars)
 
+        # Collect all data indices from descendant leaves if using leaf_data_indices
+        all_data_indices = []
+        for descendant in desc:
+            if descendant in self.leaf_data_indices:
+                all_data_indices.extend(self.leaf_data_indices[descendant])
+                del self.leaf_data_indices[descendant]
+        
+        # Add the collected data indices to the pruned node (now a leaf)
+        self.leaf_data_indices[node_id] = all_data_indices
+
         for this_node in desc:
             self.vars[this_node] = -2  # Mark all descendant nodes as pruned
             self.thresholds[this_node] = self.float_dtype.type(np.nan)
             self.leaf_vals[this_node] = self.float_dtype.type(np.nan)
             if self.cache_exists:
                 self.n[this_node] = 0
-                self.leaf_ids[self.leaf_ids == this_node] = node_id  # Update leaf_ids for pruned nodes
 
         # Turn the original node into a leaf
         self.vars[node_id] = -1
@@ -391,7 +421,61 @@ class Tree:
         self.vars[node_id] = var
         self.thresholds[node_id] = threshold
         if update_n:
-            return self.update_n(node_id)
+            # Get all descendants of the node
+            desc = _descendants_numba(node_id, self.vars)
+
+            if self.cache_exists:
+                for descendant in desc:
+                    self.n[descendant] = 0
+            
+            # Collect all data from affected leaves
+            all_affected_data = []
+            for descendant in desc:
+                if descendant in self.leaf_data_indices:
+                    all_affected_data.extend(self.leaf_data_indices[descendant])
+                    del self.leaf_data_indices[descendant]
+            
+            # Redistribute data points by traversing from node_id
+            for data_idx in all_affected_data:
+                # Traverse from node_id to find destination leaf
+                current_node = node_id
+                while self.vars[current_node] >= 0:  # while split node
+                    split_var = self.vars[current_node]
+                    split_threshold = self.thresholds[current_node]
+                    if self.dataX[data_idx, split_var] <= split_threshold:
+                        current_node = current_node * 2 + 1
+                    else:
+                        current_node = current_node * 2 + 2
+                
+                # Add to destination leaf
+                if current_node not in self.leaf_data_indices:
+                    self.leaf_data_indices[current_node] = []
+                self.leaf_data_indices[current_node].append(data_idx)
+            
+            # Update n array
+            if self.cache_exists:
+                for leaf_node, indices in self.leaf_data_indices.items():
+                    self.n[leaf_node] = len(indices)
+
+                affected_nodes = list(desc)
+                for node in sorted(affected_nodes, reverse=True):
+                    if self.vars[node] >= 0:  # split node
+                        left_child = node * 2 + 1
+                        right_child = node * 2 + 2
+                        
+                        left_n = self.n[left_child] if left_child < len(self.n) else 0
+                        right_n = self.n[right_child] if right_child < len(self.n) else 0
+                        
+                        self.n[node] = left_n + right_n
+                
+            # Check if all leaves have data
+            is_valid = True
+            for descendant in desc:
+                if self.vars[descendant] == -1 and descendant not in self.leaf_data_indices:
+                    is_valid = False
+                    break
+
+            return is_valid
         return True
     
     def swap_split(self, parent_id, child_id):
@@ -434,7 +518,12 @@ class Tree:
         )
 
     def update_outputs(self):
-        self.evals = self.leaf_vals[self.leaf_ids]
+        """
+        Update cached evaluation outputs using leaf_data_indices.
+        """
+        # Use leaf_data_indices to set evaluation values
+        for leaf_id, data_indices in self.leaf_data_indices.items():
+            self.evals[data_indices] = self.leaf_vals[leaf_id]
 
     def set_leaf_value(self, node_id, leaf_val):
         if self.is_leaf(node_id):

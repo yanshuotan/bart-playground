@@ -23,30 +23,33 @@ def _get_resid_all(leaf_ids, node_counts, residuals):
     return resid_all, leaves
 
 @njit(cache=True)
-def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_sigma2, f_sigma2, random_normal_p):
+def _single_tree_resample_leaf_vals(leaf_resid_sums, leaf_n_samples, eps_sigma2, f_sigma2, random_normal_p):
     """
-    Numba-optimized function to resample leaf values using leaf_ids and sample_n_in_node.
+    Numba-optimized function to resample leaf values using pre-computed residual sums.
+    
+    Parameters:
+    -----------
+    leaf_resid_sums : np.ndarray
+        Sum of residuals for each leaf
+    leaf_n_samples : np.ndarray  
+        Number of samples in each leaf
+    eps_sigma2 : float
+        Error variance
+    f_sigma2 : float
+        Prior variance for leaf parameters
+    random_normal_p : np.ndarray
+        Random normal samples
     """
-    node_counts = len(sample_n_in_node)
-    resid_all, leaves = _get_resid_all(leaf_ids, node_counts, residuals)
-        
-    n_leaves = 0
-    for node in range(node_counts):
-        if leaves[node]:
-            n_leaves += 1
-            
+    n_leaves = len(leaf_resid_sums)
     noise_ratio = eps_sigma2 / f_sigma2
     
-    # Compute posterior parameters only for leaf nodes
+    # Compute posterior parameters for each leaf
     post_cov_diag = np.zeros(n_leaves, dtype=np.float32)
     post_mean = np.zeros(n_leaves, dtype=np.float32)
     
-    leaf_idx = 0
-    for node in range(node_counts):
-        if leaves[node]:
-            post_cov_diag[leaf_idx] = eps_sigma2 / (sample_n_in_node[node] + noise_ratio)
-            post_mean[leaf_idx] = resid_all[node] / (sample_n_in_node[node] + noise_ratio)
-            leaf_idx += 1
+    for i in range(n_leaves):
+        post_cov_diag[i] = eps_sigma2 / (leaf_n_samples[i] + noise_ratio)
+        post_mean[i] = leaf_resid_sums[i] / (leaf_n_samples[i] + noise_ratio)
     
     leaf_params_new = np.sqrt(post_cov_diag) * random_normal_p + post_mean
     return leaf_params_new
@@ -68,25 +71,37 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     return leaf_params_new
 
 @njit(cache=True)
-def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps_sigma2, f_sigma2):
+def _single_tree_log_marginal_lkhd_numba(leaf_resid_sums, leaf_n_samples, total_resid_sq, eps_sigma2, f_sigma2):
     """
-    Numba-optimized function to calculate log marginal likelihood when there is only one tree.
-    sample_n_in_node is the number of samples in each node, which is not limited to the samples counts in the leaves.
-    """
-    # Calculate counts for each leaf
-    node_counts = len(sample_n_in_node)
-    resid_all, leaves = _get_resid_all(leaf_ids, node_counts, resids)
+    Numba-optimized function to calculate log marginal likelihood using pre-computed residual sums.
     
-    ls_resids = np.sum(resids ** 2)
-    ridge_bias = 0.0
-    logdet = 0.0
+    Parameters:
+    -----------
+    leaf_resid_sums : np.ndarray
+        Sum of residuals for each leaf
+    leaf_n_samples : np.ndarray
+        Number of samples in each leaf  
+    total_resid_sq : float
+        Total sum of squared residuals
+    eps_sigma2 : float
+        Error variance
+    f_sigma2 : float
+        Prior variance for leaf parameters
+    """
+    n_leaves = len(leaf_resid_sums)
     noise_ratio = eps_sigma2 / f_sigma2
     
-    for node in range(node_counts):
-        if leaves[node]:
-            logdet += math.log(sample_n_in_node[node] / noise_ratio + 1.0)
-            ls_resids -= (resid_all[node] ** 2) / sample_n_in_node[node]
-            ridge_bias += (resid_all[node] ** 2) / (sample_n_in_node[node] * (sample_n_in_node[node] / noise_ratio + 1.0))
+    ls_resids = total_resid_sq
+    ridge_bias = 0.0
+    logdet = 0.0
+    
+    for i in range(n_leaves):
+        n_samples = leaf_n_samples[i]
+        resid_sum = leaf_resid_sums[i]
+        
+        logdet += math.log(n_samples / noise_ratio + 1.0)
+        ls_resids -= (resid_sum ** 2) / n_samples
+        ridge_bias += (resid_sum ** 2) / (n_samples * (n_samples / noise_ratio + 1.0))
 
     return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
 
@@ -171,16 +186,25 @@ class TreesPrior:
         """
         residuals = data_y - bart_params.evaluate(all_except=tree_ids)
         if len(tree_ids) == 1:
-            # For single tree, we can use the optimized function with leaf_ids
+            # For single tree, compute residual sums in Python
             tree = bart_params.trees[tree_ids[0]]
-            leaf_ids = tree.leaf_ids
+
+            # Use leaf_data_indices to compute residual sums
+            leaf_nodes = list(tree.leaf_data_indices.keys())
+            leaf_resid_sums = np.zeros(len(leaf_nodes), dtype=np.float32)
+            leaf_n_samples = np.zeros(len(leaf_nodes), dtype=np.int32)
+            
+            for i, leaf_id in enumerate(leaf_nodes):
+                data_indices = tree.leaf_data_indices[leaf_id]
+                leaf_resid_sums[i] = np.sum(residuals[data_indices])
+                leaf_n_samples[i] = len(data_indices)
+            
             return _single_tree_resample_leaf_vals(
-                leaf_ids,
-                tree.n,
-                residuals,
+                leaf_resid_sums,
+                leaf_n_samples,
                 eps_sigma2=bart_params.global_params["eps_sigma2"][0],
                 f_sigma2=self.f_sigma2,
-                random_normal_p=self.generator.standard_normal(size=len(tree.leaves))
+                random_normal_p=self.generator.standard_normal(size=len(leaf_nodes))
             )
         else:
             leaf_basis = bart_params.leaf_basis(tree_ids)
@@ -401,12 +425,25 @@ class BARTLikelihood:
         """
         resids = (data_y - bart_params.evaluate(all_except=tree_ids))
         if len(tree_ids) == 1:
-            # For single tree, we can use the optimized function with leaf_ids
+            # For single tree, compute residual sums in Python
             tree = bart_params.trees[tree_ids[0]]
+
+            # Use leaf_data_indices to compute residual sums
+            leaf_nodes = list(tree.leaf_data_indices.keys())
+            leaf_resid_sums = np.zeros(len(leaf_nodes), dtype=np.float32)
+            leaf_n_samples = np.zeros(len(leaf_nodes), dtype=np.int32)
+            
+            for i, leaf_id in enumerate(leaf_nodes):
+                data_indices = tree.leaf_data_indices[leaf_id]
+                leaf_resid_sums[i] = np.sum(resids[data_indices])
+                leaf_n_samples[i] = len(data_indices)
+            
+            total_resid_sq = np.sum(resids ** 2)
+            
             return _single_tree_log_marginal_lkhd_numba(
-                tree.leaf_ids, 
-                tree.n,
-                resids, 
+                leaf_resid_sums,
+                leaf_n_samples,
+                total_resid_sq,
                 bart_params.global_params["eps_sigma2"][0], 
                 self.f_sigma2
             )
