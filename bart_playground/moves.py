@@ -239,16 +239,12 @@ class MultiGrow(Grow):
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         eps_sigma2 = self.current.global_params["eps_sigma2"][0]
         n_samples = self.get_n_samples(tree)
-        all_candidates = [
-            (node_id, var)
-            for node_id in tree.leaves
-            for var in range(tree.dataX.shape[1])
-        ]
 
         candidates = []
         n_candidate_trials = 0
         while len(candidates) < n_samples:
-            node_id, var = fast_choice(generator, all_candidates)
+            node_id = fast_choice(generator, tree.leaves)
+            var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
             threshold = fast_choice(generator, self.possible_thresholds[var])
             n_candidate_trials += 1
             # Use the combined simulation function instead of copy + split_leaf
@@ -385,14 +381,9 @@ class MultiPrune(Prune):
         log_pi = log_likelihood + log_prior
         log_fwd_weights.append(0.5 * float(log_pi))
 
-        all_grow_candidates = [
-            (leaf_id, var)
-            for leaf_id in tree.leaves
-            for var in range(tree.dataX.shape[1])
-        ]
-
         while len(log_fwd_weights) < n_samples:
-            node_id, var = fast_choice(generator, all_grow_candidates)
+            node_id = fast_choice(generator, tree.leaves)
+            var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
             threshold = fast_choice(generator, self.possible_thresholds[var])
             new_leaf_ids, new_n, new_vars = tree.simulate_split_leaf(node_id, var, threshold)
             left_child = node_id * 2 + 1
@@ -428,16 +419,12 @@ class MultiChange(Change):
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         eps_sigma2 = self.current.global_params["eps_sigma2"][0]
         n_samples = self.get_n_samples(tree)
-        all_candidates = [
-            (node_id, var)
-            for node_id in tree.split_nodes
-            for var in range(tree.dataX.shape[1])
-        ]
 
         candidates = []
         n_candidate_trials = 0
         while len(candidates) < n_samples:
-            node_id, var = fast_choice(generator, all_candidates)
+            node_id = fast_choice(generator, tree.split_nodes)
+            var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
             threshold = fast_choice(generator, self.possible_thresholds[var])
             n_candidate_trials += 1
             new_leaf_ids, new_n, new_vars = tree.simulate_change_split(node_id, var, threshold)
@@ -482,7 +469,8 @@ class MultiChange(Change):
         log_fwd_weights.append(0.5*float(log_pi))
 
         while len(log_fwd_weights) < n_samples:
-            node_id, var = fast_choice(generator, all_candidates)
+            node_id = fast_choice(generator, tree.split_nodes)
+            var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
             threshold = fast_choice(generator, self.possible_thresholds[var])
             # Use simulation function instead of copy + change_split
             new_leaf_ids, new_n, new_vars = tree.simulate_change_split(node_id, var, threshold)
