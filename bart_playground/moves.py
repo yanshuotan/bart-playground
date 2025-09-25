@@ -241,12 +241,11 @@ class MultiGrow(Grow):
         n_samples = self.get_n_samples(tree)
 
         candidates = []
-        n_candidate_trials = 0
-        while len(candidates) < n_samples:
+        for _ in range(n_samples):
             node_id = fast_choice(generator, tree.leaves)
             var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
             threshold = fast_choice(generator, self.possible_thresholds[var])
-            n_candidate_trials += 1
+            
             # Use the combined simulation function instead of copy + split_leaf
             new_leaf_ids, new_n, new_vars = tree.simulate_split_leaf(node_id, var, threshold)
 
@@ -264,13 +263,16 @@ class MultiGrow(Grow):
                 
                 log_pi = log_likelihood + log_prior
                 candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
-
-        if not candidates:
-            return False
-        
-        self.candidate_sampling_ratio = n_candidate_trials / len(candidates)
+            else:
+                # Invalid split - set weight to 0 (log weight to -inf)
+                candidates.append((node_id, var, threshold, -np.inf))
 
         log_bwd_weights = np.array([w for _, _, _, w in candidates])
+
+        # Check if all weights are -inf (all candidates invalid)
+        if np.all(log_bwd_weights == -np.inf):
+            return False
+        
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights) # Select y
@@ -381,7 +383,7 @@ class MultiPrune(Prune):
         log_pi = log_likelihood + log_prior
         log_fwd_weights.append(0.5 * float(log_pi))
 
-        while len(log_fwd_weights) < n_samples:
+        for _ in range(n_samples - 1):
             node_id = fast_choice(generator, tree.leaves)
             var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
             threshold = fast_choice(generator, self.possible_thresholds[var])
@@ -395,6 +397,8 @@ class MultiPrune(Prune):
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
                 log_pi = log_likelihood + log_prior
                 log_fwd_weights.append(0.5 * float(log_pi))
+            else:
+                log_fwd_weights.append(-np.inf)  # Invalid split
 
         log_fwd_weights = np.array(log_fwd_weights)
         log_weight_x = log_fwd_weights[[0]]
@@ -422,7 +426,7 @@ class MultiChange(Change):
 
         candidates = []
         n_candidate_trials = 0
-        while len(candidates) < n_samples:
+        for _ in range(n_samples):
             node_id = fast_choice(generator, tree.split_nodes)
             var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
             threshold = fast_choice(generator, self.possible_thresholds[var])
@@ -442,12 +446,15 @@ class MultiChange(Change):
                 )
                 log_pi = log_likelihood
                 candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
-
-        self.candidate_sampling_ratio = n_candidate_trials / n_samples
-        if not candidates:
-            return False
+            else:
+                candidates.append((node_id, var, threshold, -np.inf))
 
         log_bwd_weights = np.array([w for _, _, _, w in candidates])
+
+        # Check if all weights are -inf (all candidates invalid)
+        if np.all(log_bwd_weights == -np.inf):
+            return False
+
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
@@ -468,7 +475,7 @@ class MultiChange(Change):
         log_pi = log_likelihood
         log_fwd_weights.append(0.5*float(log_pi))
 
-        while len(log_fwd_weights) < n_samples:
+        for _ in range(n_samples - 1):
             node_id = fast_choice(generator, tree.split_nodes)
             var = fast_choice_with_weights(generator, np.arange(tree.dataX.shape[1]), weights=self.s)
             threshold = fast_choice(generator, self.possible_thresholds[var])
@@ -490,6 +497,9 @@ class MultiChange(Change):
                 
                 log_pi = log_likelihood
                 log_fwd_weights.append(0.5*float(log_pi))
+            else:
+                log_fwd_weights.append(-np.inf)  # Invalid change
+
         log_fwd_weights = np.array(log_fwd_weights)
         log_weight_x = log_fwd_weights[[0]]
         max_log_fwd = np.max(log_fwd_weights)
@@ -523,7 +533,7 @@ class MultiSwap(Swap):
         log_pi_cache = {}
         candidates = []
         n_candidate_trials = 0
-        while len(candidates) < n_samples:
+        for _ in range(n_samples):
             parent_id, child_id = fast_choice(generator, all_candidates)
             n_candidate_trials += 1
             cache_key = (parent_id, child_id)
@@ -536,23 +546,26 @@ class MultiSwap(Swap):
                 for i in range(parent_id, len(new_vars)):
                     if new_vars[i] != -2 and new_n[i] == 0:
                         valid = False
-                        all_candidates.remove((parent_id, child_id))  # Remove invalid candidate
-                        if not all_candidates:
-                            return False
                         break
-                if not valid:
-                    continue
-                # Calculate likelihood using simulated data
-                log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
-                )
-                log_pi = log_likelihood
+                if valid:
+                    # Calculate likelihood using simulated data
+                    log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                        new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                    )
+                    log_pi = log_likelihood
+                else:
+                    log_pi = -np.inf  # Invalid swap
                 log_pi_cache[cache_key] = log_pi
             candidates.append((parent_id, child_id, 0.5*float(log_pi)))
 
         self.candidate_sampling_ratio = n_candidate_trials / min(n_samples, len(all_candidates)) if all_candidates else 1
 
         log_bwd_weights = np.array([w for _, _, w in candidates])
+
+        # Check if all weights are -inf (all candidates invalid)
+        if np.all(log_bwd_weights == -np.inf):
+            return False
+
         max_log_bwd = np.max(log_bwd_weights)
         bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
         idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
@@ -574,14 +587,7 @@ class MultiSwap(Swap):
         log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_pi_cache[(parent_id, child_id)] = log_pi
 
-        all_candidates = [
-            (parent_id, 2 * parent_id + lr)
-            for parent_id in tree.nonterminal_split_nodes
-            for lr in [1, 2]
-            if tree.vars[2 * parent_id + lr] != -1
-        ]
-
-        while len(log_fwd_weights) < n_samples:
+        for _ in range(n_samples - 1):
             p_id, c_id = fast_choice(generator, all_candidates)
             cache_key = (p_id, c_id)
             if cache_key in log_fwd_pi_cache:
@@ -593,14 +599,14 @@ class MultiSwap(Swap):
                 for i in range(p_id, len(new_vars)):
                     if new_vars[i] != -2 and new_n[i] == 0:
                         valid = False
-                        all_candidates.remove((p_id, c_id))  # Remove invalid candidate
                         break
-                if not valid:
-                    continue
-                log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
-                )
-                log_pi = log_likelihood
+                if valid:
+                    log_likelihood = self.likelihood.calculate_simulated_likelihood(
+                        new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                    )
+                    log_pi = log_likelihood
+                else:
+                    log_pi = -np.inf  # Invalid swap
                 log_fwd_pi_cache[cache_key] = log_pi
             log_fwd_weights.append(0.5*float(log_pi))
 
