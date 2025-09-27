@@ -2,7 +2,7 @@ import numpy as np
 from typing import Any, Dict, List, Tuple, Optional
 
 import arviz as az
-from .params import Parameters
+import pandas as pd
 from .mcbart import MultiChainBART
 from .samplers import Sampler
 
@@ -42,7 +42,11 @@ def _collect_chain_series(model: Any, key: str = "eps_sigma2", X: Optional[np.nd
     Returns
     -------
     series : np.ndarray
-        Shape (n_chains, n_draws, k) array. When X is None, k == 1.
+        Shape (n_chains, n_draws, output_dim) array.
+        - When X is None: output_dim == 1 (scalar global parameter per draw)
+        - When X is not None: output_dim equals the length of the prediction vector,
+          which is n_samples if model outputs scalars, or n_samples * output_features
+          if model outputs vectors (flattened to 1D)
     n_chains : int
     n_draws : int
     """
@@ -85,7 +89,37 @@ def _actor_collect_move_counts(model: Any) -> Tuple[Dict[str, int], Dict[str, in
     acc = {k: int(v) for k, v in acc.items()}
     return sel, suc, acc
 
-def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
+from dataclasses import dataclass, asdict
+@dataclass
+class MoveAcceptance:
+    selected: int
+    proposed: int
+    accepted: int
+
+    @property
+    def acc_rate(self) -> float:
+        return self.accepted / self.proposed if self.proposed > 0 else np.nan
+    
+    @property
+    def prop_rate(self) -> float:
+        return self.proposed / self.selected if self.selected > 0 else np.nan
+
+    def __post_init__(self):
+        self.selected = int(self.selected)
+        self.proposed = int(self.proposed)
+        self.accepted = int(self.accepted)
+
+    def combine(self, other: 'MoveAcceptance') -> 'MoveAcceptance':
+        return MoveAcceptance(
+            selected=self.selected + other.selected,
+            proposed=self.proposed + other.proposed,
+            accepted=self.accepted + other.accepted,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {**asdict(self), "acc_rate": float(self.acc_rate), "prop_rate": float(self.prop_rate)}
+
+def _collect_move_acceptance(model: Any) -> Dict[str, MoveAcceptance]:
     """
     Collect per-move selection/success/acceptance counts and rates.
 
@@ -93,7 +127,7 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
     For multi-chain, aggregates these dicts across chains.
 
     Returns a dictionary with keys per move and 'overall' with:
-    { move: {selected, proposed, accepted, acc_rate, prop_rate}, 'overall': {...} }
+    { move: MoveAcceptance, 'overall': MoveAcceptance }
     where proposed == success in the sampler terminology.
     """
 
@@ -115,7 +149,7 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
         agg_sel, agg_suc, agg_acc = sel, suc, acc
 
     # Compute per-move rates
-    result: Dict[str, Dict[str, float]] = {}
+    result: Dict[str, MoveAcceptance] = {}
     all_moves = set(agg_sel) | set(agg_suc) | set(agg_acc)
     total_selected = 0
     total_proposed = 0
@@ -127,25 +161,9 @@ def _collect_move_acceptance(model: Any) -> Dict[str, Dict[str, float]]:
         total_selected += sel
         total_proposed += suc
         total_accepted += acc
-        acc_rate = (acc / suc) if suc > 0 else np.nan
-        prop_rate = (suc / sel) if sel > 0 else np.nan
-        result[mv] = {
-            "selected": float(sel),
-            "proposed": float(suc),
-            "accepted": float(acc),
-            "acc_rate": float(acc_rate) if np.isfinite(acc_rate) else np.nan,
-            "prop_rate": float(prop_rate) if np.isfinite(prop_rate) else np.nan,
-        }
+        result[mv] = MoveAcceptance(selected=sel, proposed=suc, accepted=acc)
 
-    overall_acc_rate = (total_accepted / total_proposed) if total_proposed > 0 else np.nan
-    overall_prop_rate = (total_proposed / total_selected) if total_selected > 0 else np.nan
-    result["overall"] = {
-        "selected": float(total_selected),
-        "proposed": float(total_proposed),
-        "accepted": float(total_accepted),
-        "acc_rate": float(overall_acc_rate) if np.isfinite(overall_acc_rate) else np.nan,
-        "prop_rate": float(overall_prop_rate) if np.isfinite(overall_prop_rate) else np.nan,
-    }
+    result["overall"] = MoveAcceptance(selected=total_selected, proposed=total_proposed, accepted=total_accepted)
     return result
 
 def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.ndarray] = None) -> Dict[str, Any]:
@@ -172,29 +190,35 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
     -------
     dict
         {
-          'n_chains', 'n_draws',
-          'rhat', 'ess_bulk', 'mcse_mean', 'mcse_over_sd',
+          'meta': { 'n_chains', 'n_draws' },
+          'metrics': pandas.DataFrame with columns [...metrics...],
           'acceptance': { per-move stats and 'overall' }
         }
     """
+    if not getattr(model, "is_fitted", False):
+        raise ValueError("Model must be fitted before diagnostics.")
+    if len(getattr(model, 'range_post', [])) == 0:
+        raise ValueError("Empty trace; run sampling first.")
+
     # Default key (only relevant when X is None)
+    # TODO: maybe not necessary?
     use_key = "eps_sigma2" if (X is None and key is None) else (key if key is not None else "eps_sigma2") 
     series, n_chains, n_draws = _collect_chain_series(model, key=use_key, X=X)
 
     # Create InferenceData with one observed variable named after the key
-    var_name = (use_key if X is None else "f(x)")
+    var_name = (use_key if X is None else "f_x")
     posterior = {var_name: series} # Shape (chains, draws, k)
     idata = az.from_dict(posterior=posterior)
 
     # R-hat and ESS (bulk)
     rhat_da: Any = az.rhat(idata, method="rank")
     ess_da: Any = az.ess(idata, method="bulk")
-    rhat_arr = np.asarray(rhat_da[var_name].values).squeeze()
-    ess_arr = np.asarray(ess_da[var_name].values).squeeze()
+    rhat_arr = np.asarray(rhat_da[var_name].values)
+    ess_arr = np.asarray(ess_da[var_name].values)
 
     # MCSE of the mean for the scalar series; ArviZ mcse returns array per var
     mcse_da: Any = az.mcse(idata)
-    mcse_arr = np.asarray(mcse_da[var_name].values).squeeze()
+    mcse_arr = np.asarray(mcse_da[var_name].values)
     # Compute SD across chained draws per variable: (chains*draws, k)
     flat = series.reshape(-1, series.shape[-1]).astype(np.float64, copy=False)
     sd_vec = np.std(flat, axis=0, ddof=1)
@@ -203,13 +227,19 @@ def compute_diagnostics(model: Any, key: Optional[str] = None, X: Optional[np.nd
 
     acceptance = _collect_move_acceptance(model)
 
-    return {
-        "n_chains": int(n_chains),
-        "n_draws": int(n_draws),
+    metrics_df = pd.DataFrame({
         "rhat": rhat_arr.reshape(-1),
         "ess_bulk": ess_arr.reshape(-1),
         "mcse_mean": mcse_arr.reshape(-1),
         "mcse_over_sd": mcse_over_sd_vec.reshape(-1),
+    })
+
+    return {
+        "meta": {
+            "n_chains": int(n_chains),
+            "n_draws": int(n_draws)
+        },
+        "metrics": metrics_df,
         "acceptance": acceptance,
     }
 

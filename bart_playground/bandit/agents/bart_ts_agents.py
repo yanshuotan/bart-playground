@@ -1,11 +1,13 @@
 import numpy as np
-from typing import Callable, List, Union, Tuple, cast
+import pandas as pd
+from typing import Callable, List, Union, Tuple, cast, Optional, Dict, Any
 import logging
 from abc import abstractmethod
 from bart_playground.bart import DefaultBART, LogisticBART, BART
 from bart_playground.mcbart import MultiChainBART
 from bart_playground.bandit.agents.agent import BanditAgent
 from bart_playground.bandit.experiment_utils.encoder import BanditEncoder
+from bart_playground.diagnostics import compute_diagnostics, MoveAcceptance
 
 logger = logging.getLogger(__name__)
 
@@ -221,9 +223,80 @@ class BARTTSAgent(BanditAgent):
             self._post_idx_pos += 1
             return k
         else: # Re-initialize the queue
-            logger.warning('Posterior index queue exhausted, re-initializing')
+            logger.warning(f'Posterior index queue exhausted ({self.n_post} samples used), re-initializing.')
             self._reset_post_queue()
             return self._next_post_index()
+
+    def diagnostics_chain(self, key: str = "eps_sigma2") -> Dict[str, Any]:
+        """
+        Compute chain-level MCMC diagnostics for the underlying model.
+        """
+        if not self.is_model_fitted or self.n_post <= 0:
+            return { }
+        return compute_diagnostics(self.model, key=key)
+
+    def diagnostics_probes(self, X_probes: np.ndarray) -> Dict[str, Any]:
+        """
+        Compute f(X) diagnostics for probes.
+        Raises NotImplementedError if model is logistic and encoding is native.
+        Raises ValueError if model is not fitted or has no post-burn-in draws (from `compute_diagnostics`).
+        """
+        if self.is_logistic:
+            raise NotImplementedError("diagnostics_probes: logistic handling not implemented yet")
+
+        # Preprocess probes and check posterior draws
+        X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
+
+        diag: dict[str, Any] = {"meta": {}, "metrics": {}, "acceptance": {}}
+
+        if not self.separate_models:
+            # Build rows for all (probe, arm) pairs
+            encoded_list: List[np.ndarray] = []
+            for p in range(n_probes):
+                x = X_probes[p, :]
+                X_enc = self.encoder.encode(x, arm=-1)  # (n_arms, combined_dim)
+                encoded_list.append(X_enc)
+            X_all = np.vstack(encoded_list)  # (n_probes*n_arms, combined_dim)
+
+            raw_diag = compute_diagnostics(self.model, X=X_all)
+            # raw_diag["metrics"] is a pandas DataFrame with columns [...metrics...]
+            metrics_df = raw_diag["metrics"]
+            # Build tidy DataFrame with probe/arm columns
+            if len(metrics_df) != n_probes * n_arms:
+                logger.warning("diagnostics_probes: unexpected metrics length vs n_probes*n_arms")
+            probes = np.repeat(np.arange(n_probes, dtype=int), n_arms)
+            arms = np.tile(np.arange(n_arms, dtype=int), n_probes)
+            out_df = pd.DataFrame({"probe_idx": probes, "arm": arms})
+            out_df = pd.concat([out_df, metrics_df], axis=1)
+
+            diag["meta"]["model"] = [raw_diag["meta"]]
+            diag["metrics"] = out_df
+            diag["acceptance"] = raw_diag["acceptance"]
+        else:
+            # Separate models: run per-arm and build tidy DataFrame with probe/arm columns
+            df_list: List[pd.DataFrame] = []
+            diag["meta"]["model"] = []
+            for a in range(n_arms):
+                model_a = self.models[a]
+                diag_a = compute_diagnostics(model_a, X=X_probes)
+                diag["meta"]["model"].append(diag_a["meta"])
+                metrics_df_a = diag_a["metrics"]
+                df_a = pd.DataFrame({"probe_idx": np.arange(n_probes, dtype=int), "arm": a})
+                df_a = pd.concat([df_a, metrics_df_a], axis=1)
+                df_list.append(df_a)
+                for move, move_acceptance in diag_a["acceptance"].items():
+                    if move not in diag["acceptance"]:
+                        diag["acceptance"][move] = MoveAcceptance(selected=0, proposed=0, accepted=0)
+                    diag["acceptance"][move] = diag["acceptance"][move].combine(move_acceptance)
+            # This dataframe is of different sort order than the one from the non-separate models
+            # This is fine for most purposes; the caller should not rely on the order
+            diag["metrics"] = pd.concat(df_list, ignore_index=True)
+
+        diag["meta"]["n_probes"] = n_probes
+        diag["meta"]["n_arms"] = n_arms
+        diag["meta"]["n_post"] = n_post
+
+        return diag
     
     def choose_arm(self, x: Union[np.ndarray, List[float]], **kwargs) -> int:
         """
