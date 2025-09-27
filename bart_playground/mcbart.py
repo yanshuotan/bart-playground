@@ -26,8 +26,8 @@ class BARTActor:
     def posterior_predict(self, X):
         return self.model.posterior_predict(X)
         
-    def posterior_f(self, X):
-        return self.model.posterior_f(X)
+    def posterior_f(self, X, backtransform=True):
+        return self.model.posterior_f(X, backtransform=backtransform)
     
     def posterior_sample(self, X, schedule: Callable[[int], float]):
         # Use default backtransform behavior
@@ -135,9 +135,9 @@ class MultiChainBART:
         preds_list = ray.get(preds_futures)
         return np.concatenate(preds_list, axis=1)
 
-    def posterior_f(self, X):
+    def posterior_f(self, X, backtransform=True):
         """Get posterior distribution of f(x) from all instances."""
-        preds_futures = [actor.posterior_f.remote(X) for actor in self.bart_actors]
+        preds_futures = [actor.posterior_f.remote(X, backtransform=backtransform) for actor in self.bart_actors]
         preds_list = ray.get(preds_futures)
         return np.concatenate(preds_list, axis=1)
     
