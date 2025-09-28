@@ -91,6 +91,16 @@ class MultiChainBART:
         print(f"Created {n_ensembles} BARTActor(s) using BART class: {bart_class.__name__}")
         
     @property
+    def is_fitted(self):
+        """Check if the MultiChainBART model is fitted by checking all actors' models."""
+        if not self.bart_actors:
+            return False
+
+        # Check if all actors are fitted
+        all_attrs = ray.get([actor.get_attributes.remote() for actor in self.bart_actors])
+        return all(attrs.get('is_fitted', False) for attrs in all_attrs)
+
+    @property
     def _trace_length(self):
         """Get the trace length from the first actor's model."""
         if self.bart_actors:
@@ -136,7 +146,10 @@ class MultiChainBART:
         return np.concatenate(preds_list, axis=1)
 
     def posterior_f(self, X, backtransform=True):
-        """Get posterior distribution of f(x) from all instances."""
+        """Get posterior distribution of f(x) from all instances.
+
+        Returns an array of shape (n_rows, ndpost_per_chain * n_ensembles).
+        """
         preds_futures = [actor.posterior_f.remote(X, backtransform=backtransform) for actor in self.bart_actors]
         preds_list = ray.get(preds_futures)
         return np.concatenate(preds_list, axis=1)
