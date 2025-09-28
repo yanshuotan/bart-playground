@@ -366,7 +366,11 @@ class BARTTSAgent(BanditAgent):
             if not self.is_model_fitted:
                 return 0
             # Use any one model to infer posterior range
-            return len(list(self.model.range_post))
+            n_post_per_chain = len(list(self.model.range_post))
+            # If using MultiChainBART, effective posterior samples equal per-chain times number of ensembles
+            if isinstance(self.model, MultiChainBART):
+                return int(n_post_per_chain * self.model.n_ensembles)
+            return int(n_post_per_chain)
         except Exception:
             return 0
 
@@ -524,6 +528,9 @@ class DefaultBARTTSAgent(BARTTSAgent):
             for arm in range(n_arms):
                 model = self.models[arm]
                 f = model.posterior_f(X_probes, backtransform=True)  # (n_probes, n_post)
+                n_post_model = int(f.shape[1])
+                if n_post_model != n_post:
+                    logger.error(f"posterior_f produced {n_post_model} draws for arm {arm}, expected {n_post}")
                 draws[:, :, arm] = f.T  # (n_post, n_probes)
             return draws, n_post
 
