@@ -1,4 +1,4 @@
-from .bart import BART, DefaultBART, ProbitBART, LogisticBART
+from .bart import BART, DefaultBART, ProbitBART, LogisticBART, OWLBART, ProbitOWLBART
 from .DataGenerator import DataGenerator
 from .moves import all_moves, Change, Grow, Prune, Swap
 from .params import Tree, Parameters
