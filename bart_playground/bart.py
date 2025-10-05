@@ -3,7 +3,7 @@ from typing import Optional
 from scipy.stats import norm
 
 from .samplers import Sampler, DefaultSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
-from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
+from .priors import ComprehensivePrior, ProbitOWLPrior, ProbitPrior, LogisticPrior, OWLPrior
 from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor
 
 
@@ -392,7 +392,7 @@ class LogisticBART(BART):
         for k in range(labels.shape[1]):
             y_labels[:, k] = self.preprocessor.backtransform_y(labels[:, k])
         return y_labels
-
+    
 class OWLBART(LogisticBART):
     """
     Weighted Logistic BART implementation.
@@ -401,7 +401,7 @@ class OWLBART(LogisticBART):
                  tree_beta: float=2.0, 
                  c: float = 0.0, d: float = 0.0,
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
-                 random_state=42, temperature=1.0):
+                 random_state=42, temperature=1.0, treatment=None, reward=None):
         preprocessor = ClassificationPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = OWLPrior(n_trees, tree_alpha, tree_beta, c, d, treatment, reward, rng)
@@ -410,6 +410,14 @@ class OWLBART(LogisticBART):
                                generator=rng, tol=tol, temp_schedule=temp_schedule)
         self.sampler : LogisticSampler
         super(LogisticBART, self).__init__(preprocessor, sampler, ndpost, nskip)
+        
+    def fit(self, X, y, reward=None):
+        if hasattr(self.sampler.prior, "likelihood"):
+            if reward is not None:
+                self.sampler.prior.likelihood.reward = reward
+        self.sampler.prior.likelihood.treatment = y
+        super().fit(X, y)
+
 
 class ProbitOWLBART(ProbitBART):
     """
@@ -422,9 +430,23 @@ class ProbitOWLBART(ProbitBART):
                  random_state=42, temperature=1.0, treatment=None, reward=None):
         preprocessor = ClassificationPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
-        prior = ProbitOWLPrior(n_trees, tree_alpha, tree_beta, c, d, treatment, reward, rng)
+        prior = ProbitOWLPrior(n_trees=n_trees,
+    tree_alpha=tree_alpha,
+    tree_beta=tree_beta,
+    c=c,
+    d=d,
+    treatment=treatment,
+    reward=reward,
+    generator=rng)
         temp_schedule = self._check_temperature(temperature)
         sampler = ProbitSampler(prior=prior, proposal_probs=proposal_probs, 
                                generator=rng, tol=tol, temp_schedule=temp_schedule)
         self.sampler : ProbitSampler
         super(ProbitBART, self).__init__(preprocessor, sampler, ndpost, nskip)
+
+    def fit(self, X, y, reward=None):
+        if hasattr(self.sampler.prior, "likelihood"):
+            if reward is not None:
+                self.sampler.prior.likelihood.reward = reward
+        self.sampler.prior.likelihood.treatment = y
+        super().fit(X, y)
