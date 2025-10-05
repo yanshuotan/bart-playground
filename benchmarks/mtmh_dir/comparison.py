@@ -3,6 +3,9 @@ import pandas as pd
 import bartz
 from stochtree import BARTModel
 from bart_playground import *
+# Add logging configuration before importing arviz
+import logging
+logging.getLogger('arviz.preview').setLevel(logging.WARNING)
 import arviz as az
 import time
 from sklearn.model_selection import train_test_split
@@ -16,54 +19,86 @@ def _gelman_rubin_single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, propo
     # MultiBART
     chains_mtmh = []
     rmse_chains_mtmh = []
+    split_prob_chains_mtmh = []
     for i in range(n_chains):
         bart = MultiBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
                          proposal_probs=proposal_probs_mtmh, multi_tries=10, random_state=seed*100+i, dirichlet_prior=True)
         bart.fit(X_train, y_train, quietly=True)
         sigmas = [trace.global_params['eps_sigma2'] for trace in bart.sampler.trace]
+        split_probs = [trace.global_params['s'] for trace in bart.sampler.trace]
         preds = bart.posterior_f(X_test, backtransform=True)
         rmses = [root_mean_squared_error(y_test, preds[:, k]) for k in range(preds.shape[1])]
         chains_mtmh.append(sigmas)
         rmse_chains_mtmh.append(rmses)
+        split_prob_chains_mtmh.append(split_probs)
+
+    # Sigma2 Rhat
     chains_array = np.array(chains_mtmh)
     idata = az.from_dict(posterior={"eps_sigma2": chains_array})
     rhat = az.rhat(idata, var_names=["eps_sigma2"])
     rhat_mtmh = float(rhat["eps_sigma2"])
+
     # RMSE Rhat
     rmse_array = np.array(rmse_chains_mtmh)
     idata_rmse = az.from_dict(posterior={"test_rmse": rmse_array})
     rhat_rmse = az.rhat(idata_rmse, var_names=["test_rmse"])
     rhat_mtmh_rmse = float(rhat_rmse["test_rmse"])
 
+    # Split probability Rhat
+    split_prob_array = np.array(split_prob_chains_mtmh)  # shape: (n_chains, n_samples, n_features)
+    split_prob_array = split_prob_array.transpose(2, 0, 1)  # shape: (n_features, n_chains, n_samples)
+    rhat_split_probs = []
+    for j in range(split_prob_array.shape[0]):
+        idata_split = az.from_dict(posterior={f"split_prob_feature_{j}": split_prob_array[j]})
+        rhat_split = az.rhat(idata_split, var_names=[f"split_prob_feature_{j}"])
+        rhat_split_probs.append(float(rhat_split[f"split_prob_feature_{j}"]))
+    rhat_mtmh_split_prob = np.mean(rhat_split_probs)
+
     # DefaultBART
     chains_default = []
     rmse_chains_default = []
+    split_prob_chains_default = []
     for i in range(n_chains):
         bart_default = DefaultBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
                                   proposal_probs=proposal_probs_default, random_state=seed*100+i, dirichlet_prior=True)
         bart_default.fit(X_train, y_train, quietly=True)
         sigmas = [trace.global_params['eps_sigma2'] for trace in bart_default.sampler.trace]
+        split_probs = [trace.global_params['s'] for trace in bart_default.sampler.trace]
         preds = bart_default.posterior_f(X_test, backtransform=True)
         rmses = [root_mean_squared_error(y_test, preds[:, k]) for k in range(preds.shape[1])]
         chains_default.append(sigmas)
         rmse_chains_default.append(rmses)
+        split_prob_chains_default.append(split_probs)
+
+    # Sigma2 Rhat
     chains_array = np.array(chains_default)
     idata = az.from_dict(posterior={"eps_sigma2": chains_array})
     rhat = az.rhat(idata, var_names=["eps_sigma2"])
     rhat_default = float(rhat["eps_sigma2"])
+
     # RMSE Rhat
     rmse_array = np.array(rmse_chains_default)
     idata_rmse = az.from_dict(posterior={"test_rmse": rmse_array})
     rhat_rmse = az.rhat(idata_rmse, var_names=["test_rmse"])
     rhat_default_rmse = float(rhat_rmse["test_rmse"])
 
-    return rhat_mtmh, rhat_default, rhat_mtmh_rmse, rhat_default_rmse
+    # Split probability Rhat
+    split_prob_array = np.array(split_prob_chains_default)  # shape: (n_chains, n_samples, n_features)
+    split_prob_array = split_prob_array.transpose(2, 0, 1)  # shape: (n_features, n_chains, n_samples)
+    rhat_split_probs = []
+    for j in range(split_prob_array.shape[0]):
+        idata_split = az.from_dict(posterior={f"split_prob_feature_{j}": split_prob_array[j]})
+        rhat_split = az.rhat(idata_split, var_names=[f"split_prob_feature_{j}"])
+        rhat_split_probs.append(float(rhat_split[f"split_prob_feature_{j}"]))
+    rhat_default_split_prob = np.mean(rhat_split_probs)
+
+    return rhat_mtmh, rhat_default, rhat_mtmh_rmse, rhat_default_rmse,  rhat_mtmh_split_prob, rhat_default_split_prob
 
 def gelman_rubin_r_compare(
     X, y,
-    n_runs=5, n_chains=4,
+    n_runs=10, n_chains=4,
     ndpost=1000, nskip=200, n_trees=100,
-    n_jobs=1
+    n_jobs=-2
 ):
     proposal_probs_mtmh = {"multi_grow": 0.25, "multi_prune": 0.25, "multi_change": 0.4, "multi_swap": 0.1}
     proposal_probs_default = {"grow": 0.25, "prune": 0.25, "change": 0.4, "swap": 0.1}
@@ -72,12 +107,14 @@ def gelman_rubin_r_compare(
             seed, X, y, n_chains, ndpost, nskip, n_trees, proposal_probs_mtmh, proposal_probs_default
         ) for seed in range(n_runs)
     )
-    rhat_mtmh, rhat_default, rhat_mtmh_rmse, rhat_default_rmse = zip(*results)
+    rhat_mtmh, rhat_default, rhat_mtmh_rmse, rhat_default_rmse, rhat_mtmh_split_prob, rhat_default_split_prob = zip(*results)
     df = pd.DataFrame({
         "MultiBART_Rhat_Sigma2": rhat_mtmh,
-        "DefaultBART_Rhat_Sigma2": rhat_default,
         "MultiBART_Rhat_RMSE": rhat_mtmh_rmse,
-        "DefaultBART_Rhat_RMSE": rhat_default_rmse
+        "MultiBART_Rhat_SplitProb": rhat_mtmh_split_prob,
+        "DefaultBART_Rhat_Sigma2": rhat_default,
+        "DefaultBART_Rhat_RMSE": rhat_default_rmse,
+        "DefaultBART_Rhat_SplitProb": rhat_default_split_prob
     })
     return df
 
