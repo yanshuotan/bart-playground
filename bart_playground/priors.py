@@ -577,6 +577,10 @@ class OWLLikelihood(LogisticLikelihood):
         super().__init__(c, d, parent)
         self.treatment = treatment
         self.reward = reward
+        self.latents = None
+
+    def set_latents(self, latents):
+        self.latents = latents
 
     def compute_weights(self):
         """
@@ -584,6 +588,8 @@ class OWLLikelihood(LogisticLikelihood):
         y: Binary treatment variable (-1 or 1)
         R: Reward (continuous; larger values are more desirable)
         """
+        print("treatment:", self.treatment)
+        print("reward:", self.reward)
         y = self.treatment
         R = self.reward
         p = np.mean(y == 1)
@@ -609,7 +615,7 @@ class OWLPrior:
             d = n_trees/(a0 ** 2)
         
         self.tree_prior = LogisticTreesPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self)
-        self.likelihood = OWLLikelihood(c, d, parent=self, treatment=None, reward=None)
+        self.likelihood = OWLLikelihood(c, d, parent=self, treatment=treatment, reward=reward)
         
         # Placeholders for values reused in resampling
         self.rh = None  
@@ -621,18 +627,18 @@ class OWLPrior:
         self.tree_prior.set_latents(latents)
         self.likelihood.set_latents(latents)
 
-class ProbitOWLPrior:
+class ProbitOWLPrior(ProbitPrior):
     """
     BART Prior for weighted probit classification tasks.
     """
-    def __init__(self, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, treatment=None, reward=None, generator=np.random.default_rng()):
+    def __init__(self, n_trees=25, tree_alpha=0.95, tree_beta=2.0, c=0.0, d=0.0, f_k=2.0, treatment=None, reward=None, generator=np.random.default_rng()):
         if c == 0.0 or d == 0.0:
             a0 = 3.5 / math.sqrt(2)
             c = n_trees/(a0 ** 2) + 0.5
             d = n_trees/(a0 ** 2)
         
-        self.tree_prior = ProbitPrior(n_trees, tree_alpha, tree_beta, c, d, generator, parent=self)
-        self.likelihood = OWLLikelihood(c, d, parent=self, treatment=None, reward=None)
+        super().__init__(n_trees, tree_alpha, tree_beta, f_k, generator)
+        self.likelihood = OWLLikelihood(c, d, parent=self, treatment=treatment, reward=reward)
         
         # Placeholders for values reused in resampling
         self.rh = None  
