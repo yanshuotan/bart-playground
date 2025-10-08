@@ -295,60 +295,6 @@ class Tree:
             other.evals.copy() if other.evals is not None else None
         )
 
-    @classmethod
-    def new_with_random_split(cls, dataX=None, possible_thresholds=None, generator=None, dirichlet_s=None):
-        """
-        Create a new tree with a random initial split instead of just a root node.
-        
-        Parameters:
-        - dataX: Input data matrix
-        - possible_thresholds: Dictionary of possible threshold values for each variable
-        - generator: Random number generator
-        - dirichlet_s: Dirichlet probabilities for variable selection (if None, uniform)
-        
-        Returns:
-        - Tree: A new tree with random initial split
-        """
-        if dataX is None or generator is None:
-            raise ValueError("dataX and generator must be provided for random split initialization")
-        
-        # Start with basic tree structure
-        vars = np.full(Tree.default_size, -2, dtype=np.int32)
-        float_dtype = dataX.dtype if dataX is not None else np.float32
-        thresholds = np.full(Tree.default_size, np.nan, dtype=float_dtype)
-        leaf_vals = np.full(Tree.default_size, np.nan, dtype=float_dtype)
-        
-        # Select random variable for split
-        n_vars = dataX.shape[1]
-        split_var = fast_choice_with_weights(generator, np.arange(n_vars), weights=dirichlet_s)
-        # Select random threshold for the chosen variable
-        threshold = fast_choice(generator, possible_thresholds[split_var])
-        
-        # Set up the tree structure with initial split
-        vars[0] = split_var  # Root is a split node
-        thresholds[0] = threshold
-        vars[1] = -1  # Left child is leaf
-        vars[2] = -1  # Right child is leaf
-        
-        # Initialize leaf values (will be resampled later)
-        leaf_vals[1] = 0.0  # Left leaf
-        leaf_vals[2] = 0.0  # Right leaf
-        
-        new_tree = cls(
-            dataX,
-            vars, thresholds, leaf_vals, 
-            n=None, leaf_ids=None, evals=None
-        )
-        
-        # Initialize and update caching arrays
-        new_tree._init_caching_arrays()
-        new_tree.update_n()
-
-        if not new_tree.n[1] > 0 or not new_tree.n[2] > 0:
-            new_tree = cls.new_with_random_split(dataX, possible_thresholds, generator, dirichlet_s)
-
-        return new_tree
-
     def copy(self):
         return Tree.from_existing(self)
 

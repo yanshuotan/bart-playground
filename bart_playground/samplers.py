@@ -409,7 +409,7 @@ class MultiSampler(Sampler):
         self.global_prior = prior.global_prior
         self.likelihood = prior.likelihood
         self.multi_tries = multi_tries
-        super().__init__(prior, proposal_probs, generator, temp_schedule)
+        super().__init__(prior, proposal_probs, generator, temp_schedule, tol)
         # --- Add move statistics ---
         self.move_selected_counts = {k: 0 for k in self.proposals}
         self.move_success_counts = {k: 0 for k in self.proposals}

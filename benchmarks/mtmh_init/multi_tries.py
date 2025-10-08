@@ -1,6 +1,9 @@
 from bart_playground import *
 import numpy as np
 import pandas as pd
+# Add logging configuration before importing arviz
+import logging
+logging.getLogger('arviz.preview').setLevel(logging.WARNING)
 import arviz as az
 import time
 from sklearn.model_selection import train_test_split
@@ -16,21 +19,18 @@ def _single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, proposal_probs_mtm
     train_time = None
     for i in range(n_chains):
         t0 = time.time()
-        preprocessor = DefaultPreprocessor()
-        data = preprocessor.fit_transform(X_train, y_train)
-        rng = np.random.default_rng(seed*1000+i)
-        random_trees_uniform = create_random_init_trees(
+        _, _, _, _, random_trees = generate_data_from_defaultbart_prior(
+            X=X_train,
             n_trees=n_trees,
-            dataX=data.X,
-            possible_thresholds=preprocessor.thresholds,
-            generator=rng
+            random_state=seed*1000+i,
+            return_latent=True
         )
         bart = MultiBART(
             ndpost=ndpost, nskip=nskip, n_trees=n_trees,
             proposal_probs=proposal_probs_mtmh,
             multi_tries=multi_tries,
             random_state=seed*100+i, 
-            init_trees=random_trees_uniform
+            init_trees=random_trees
         )
         bart.fit(X_train, y_train, quietly=True)
         if i == 0:

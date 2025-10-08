@@ -3,6 +3,9 @@ import pandas as pd
 import bartz
 from stochtree import BARTModel
 from bart_playground import *
+# Add logging configuration before importing arviz
+import logging
+logging.getLogger('arviz.preview').setLevel(logging.WARNING)
 import arviz as az
 import time
 from sklearn.model_selection import train_test_split
@@ -17,18 +20,15 @@ def _gelman_rubin_single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, propo
     chains_mtmh = []
     rmse_chains_mtmh = []
     for i in range(n_chains):
-        preprocessor = DefaultPreprocessor()
-        data = preprocessor.fit_transform(X_train, y_train)
-        rng = np.random.default_rng(seed*1000+i)
-        random_trees_uniform = create_random_init_trees(
+        _, _, _, _, random_trees = generate_data_from_defaultbart_prior(
+            X=X_train,
             n_trees=n_trees,
-            dataX=data.X,
-            possible_thresholds=preprocessor.thresholds,
-            generator=rng
+            random_state=seed*1000+i,
+            return_latent=True
         )
         bart = MultiBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
                          proposal_probs=proposal_probs_mtmh, multi_tries=10, 
-                         random_state=seed*100+i, init_trees=random_trees_uniform)
+                         random_state=seed*100+i, init_trees=random_trees)
         bart.fit(X_train, y_train, quietly=True)
         sigmas = [trace.global_params['eps_sigma2'] for trace in bart.sampler.trace]
         preds = bart.posterior_f(X_test, backtransform=True)
@@ -49,18 +49,15 @@ def _gelman_rubin_single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, propo
     chains_default = []
     rmse_chains_default = []
     for i in range(n_chains):
-        preprocessor = DefaultPreprocessor()
-        data = preprocessor.fit_transform(X_train, y_train)
-        rng = np.random.default_rng(seed*1000+i)
-        random_trees_uniform = create_random_init_trees(
+        _, _, _, _, random_trees = generate_data_from_defaultbart_prior(
+            X=X_train,
             n_trees=n_trees,
-            dataX=data.X,
-            possible_thresholds=preprocessor.thresholds,
-            generator=rng
+            random_state=seed*1000+i,
+            return_latent=True
         )
         bart_default = DefaultBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
-                                  proposal_probs=proposal_probs_default, 
-                                  random_state=seed*100+i, init_trees=random_trees_uniform)
+                                  proposal_probs=proposal_probs_default,
+                                  random_state=seed*100+i, init_trees=random_trees)
         bart_default.fit(X_train, y_train, quietly=True)
         sigmas = [trace.global_params['eps_sigma2'] for trace in bart_default.sampler.trace]
         preds = bart_default.posterior_f(X_test, backtransform=True)
@@ -116,21 +113,18 @@ def _bart_mse_single_run(seed, X, y, n_skip, n_post, n_trees):
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=seed)
 
-    preprocessor = DefaultPreprocessor()
-    data = preprocessor.fit_transform(X_train, y_train)
-    rng = np.random.default_rng(seed*100)
-    random_trees_uniform = create_random_init_trees(
+    _, _, _, _, random_trees = generate_data_from_defaultbart_prior(
+        X=X_train,
         n_trees=n_trees,
-        dataX=data.X,
-        possible_thresholds=preprocessor.thresholds,
-        generator=rng
+        random_state=seed*1000,
+        return_latent=True
     )
 
     # bart_mtmh
     t0 = time.time()
     proposal_probs_mtmh = {"multi_grow": 0.25, "multi_prune": 0.25, "multi_change": 0.4, "multi_swap": 0.1}
     bart_mtmh = MultiBART(ndpost=n_post, nskip=n_skip, n_trees=n_trees, proposal_probs=proposal_probs_mtmh, 
-                          multi_tries=10, random_state=seed, init_trees=random_trees_uniform)
+                          multi_tries=10, random_state=seed, init_trees=random_trees)
     bart_mtmh.fit(X_train, y_train, quietly=True)
     train_time["bart_mtmh"] = time.time() - t0
 
@@ -138,7 +132,7 @@ def _bart_mse_single_run(seed, X, y, n_skip, n_post, n_trees):
     t0 = time.time()
     proposal_probs_default = {"grow": 0.25, "prune": 0.25, "change": 0.4, "swap": 0.1}
     bart = DefaultBART(ndpost=n_post, nskip=n_skip, n_trees=n_trees, proposal_probs=proposal_probs_default, 
-                       random_state=seed, init_trees=random_trees_uniform)
+                       random_state=seed, init_trees=random_trees)
     bart.fit(X_train, y_train, quietly=True)
     train_time["bart"] = time.time() - t0
 
