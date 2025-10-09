@@ -24,14 +24,14 @@ class BART:
         self.is_fitted = False
         self.data = None
 
-    def fit(self, X, y, quietly = False):
+    def fit(self, X, y, sample_weight=None, quietly=False):
         """
         Fit the BART model.
         """
         self.data = self.preprocessor.fit_transform(X, y)
         self.sampler.add_data(self.data)
         self.sampler.add_thresholds(self.preprocessor.thresholds)
-        self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly, n_skip=self.nskip)
+        self.trace = self.sampler.run(self.ndpost + self.nskip, sample_weight, quietly=quietly, n_skip=self.nskip)
         self.is_fitted = True
     
     def update_fit(self, X, y, add_ndpost=20, add_nskip=10, quietly=False):
@@ -393,41 +393,41 @@ class LogisticBART(BART):
             y_labels[:, k] = self.preprocessor.backtransform_y(labels[:, k])
         return y_labels
     
-class OWLBART(LogisticBART):
-    """
-    Weighted Logistic BART implementation.
-    """
-    def __init__(self, ndpost=1000, nskip=100, n_trees=25, tree_alpha: float=0.95,
-                 tree_beta: float=2.0, 
-                 c: float = 0.0, d: float = 0.0,
-                 proposal_probs=default_proposal_probs, tol=100, max_bins=100,
-                 random_state=42, temperature=1.0, treatment=None, reward=None):
-        preprocessor = ClassificationPreprocessor(max_bins=max_bins)
-        rng = np.random.default_rng(random_state)
-        prior = OWLPrior(n_trees, tree_alpha, tree_beta, c, d, treatment, reward, rng)
-        temp_schedule = self._check_temperature(temperature)
-        sampler = LogisticSampler(prior=prior, proposal_probs=proposal_probs, 
-                               generator=rng, tol=tol, temp_schedule=temp_schedule)
-        self.sampler : LogisticSampler
-        super(LogisticBART, self).__init__(preprocessor, sampler, ndpost, nskip)
+# class OWLBART(LogisticBART):
+#     """
+#     Weighted Logistic BART implementation.
+#     """
+#     def __init__(self, ndpost=1000, nskip=100, n_trees=25, tree_alpha: float=0.95,
+#                  tree_beta: float=2.0, 
+#                  c: float = 0.0, d: float = 0.0,
+#                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
+#                  random_state=42, temperature=1.0, treatment=None, reward=None):
+#         preprocessor = ClassificationPreprocessor(max_bins=max_bins)
+#         rng = np.random.default_rng(random_state)
+#         prior = OWLPrior(n_trees, tree_alpha, tree_beta, c, d, treatment, reward, rng)
+#         temp_schedule = self._check_temperature(temperature)
+#         sampler = LogisticSampler(prior=prior, proposal_probs=proposal_probs, 
+#                                generator=rng, tol=tol, temp_schedule=temp_schedule)
+#         self.sampler : LogisticSampler
+#         super(LogisticBART, self).__init__(preprocessor, sampler, ndpost, nskip)
         
-    def fit(self, X, y, reward=None):
-        if hasattr(self.sampler.prior, "likelihood"):
-            if reward is not None:
-                self.sampler.prior.likelihood.reward = reward
-        self.sampler.prior.likelihood.treatment = y
-        super().fit(X, y)
+#     def fit(self, X, y, reward=None):
+#         if hasattr(self.sampler.prior, "likelihood"):
+#             if reward is not None:
+#                 self.sampler.prior.likelihood.reward = reward
+#         self.sampler.prior.likelihood.treatment = y
+#         super().fit(X, y)
 
 
 class ProbitOWLBART(ProbitBART):
     """
     Weighted Probit BART implementation.
     """
-    def __init__(self, ndpost=1000, nskip=100, n_trees=25, tree_alpha: float=0.95,
-                 tree_beta: float=2.0, 
-                 c: float = 0.0, d: float = 0.0,
+    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95,
+                 tree_beta: float=2.0,
+                 f_k=2.0,
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
-                 random_state=42, temperature=1.0, treatment=None, reward=None):
+                 random_state=42, temperature=1.0, quick_decay: bool = False):
         preprocessor = ClassificationPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ProbitOWLPrior(n_trees=n_trees,
@@ -444,9 +444,19 @@ class ProbitOWLBART(ProbitBART):
         self.sampler : ProbitSampler
         super(ProbitBART, self).__init__(preprocessor, sampler, ndpost, nskip)
 
-    def fit(self, X, y, reward=None):
-        if hasattr(self.sampler.prior, "likelihood"):
-            if reward is not None:
-                self.sampler.prior.likelihood.reward = reward
-        self.sampler.prior.likelihood.treatment = y
-        super().fit(X, y)
+    def fit(self, X, y, A, quietly=False):
+        # if hasattr(self.sampler.prior, "likelihood"):
+        #     if reward is not None:
+        #         self.sampler.prior.likelihood.reward = reward
+        # self.sampler.prior.likelihood.treatment = y
+        weights = self._calculate_weights(y, A)
+        super().fit(X, y, sample_weight=weights, quietly=quietly)
+
+
+    def _calculate_weights(self, y, A):
+        # Calculate weights based on treatment and reward
+        weights = np.ones_like(y, dtype=float)
+        treated = (A == 1)
+        control = (A == 0)
+        # Calculate sample weights FILL IN
+        return weights

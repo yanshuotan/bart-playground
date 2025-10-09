@@ -358,6 +358,7 @@ class ProbitSampler(Sampler):
         return Z
 
     def one_iter(self, current, temp, return_trace=False):
+        ### TODO: Change to add sample weights. See fix-temperature branch
         """
         Perform one iteration of the sampler.
         """

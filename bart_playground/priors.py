@@ -27,6 +27,9 @@ def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_s
     """
     Numba-optimized function to resample leaf values using leaf_ids and sample_n_in_node.
     """
+    ### TODO: Update to include sampel weights. Probably need to update:
+    # - _get_resid_all
+    # - sample_n_in_node -> weighted_sample_n_in_node
     node_counts = len(sample_n_in_node)
     resid_all, leaves = _get_resid_all(leaf_ids, node_counts, residuals)
         
@@ -73,6 +76,8 @@ def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps
     Numba-optimized function to calculate log marginal likelihood when there is only one tree.
     sample_n_in_node is the number of samples in each node, which is not limited to the samples counts in the leaves.
     """
+    ### TODO: Update to include sampel weights
+
     # Calculate counts for each leaf
     node_counts = len(sample_n_in_node)
     resid_all, leaves = _get_resid_all(leaf_ids, node_counts, resids)
@@ -150,6 +155,7 @@ class TreesPrior:
         self.quick_decay = quick_decay
                 
     def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
+        ### Change signature to add sample weights
         """
         Resample the values of the leaf nodes for the specified trees.
         
@@ -175,6 +181,7 @@ class TreesPrior:
             tree = bart_params.trees[tree_ids[0]]
             leaf_ids = tree.leaf_ids
             return _single_tree_resample_leaf_vals(
+                ### TODO: Change to add sample weights
                 leaf_ids,
                 tree.n,
                 residuals,
@@ -377,6 +384,7 @@ class BARTLikelihood:
         return np.ones(len(data_y))
 
     def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
+        ### TODO: Change signature to add sample weights
         """
         Calculate the log marginal likelihood of the trees in a BART model.
 
@@ -411,6 +419,7 @@ class BARTLikelihood:
             # For single tree, we can use the optimized function with leaf_ids
             tree = bart_params.trees[tree_ids[0]]
             return _single_tree_log_marginal_lkhd_numba(
+                ### TODO: Add sample weights
                 tree.leaf_ids, 
                 tree.n,
                 resids, 
