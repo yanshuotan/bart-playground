@@ -1,12 +1,12 @@
 import numpy as np
-from typing import List, Optional, Dict, Any, Union, Tuple
+from typing import List, Optional, Dict, Any, Union, Tuple, Sequence
 from bart_playground.bandit.agents.agent import BanditAgent
 from enum import Enum
 class SillyAgent(BanditAgent):
     """
     A simple agent that selects arms randomly.
     """
-    def __init__(self, n_arms: int, n_features: int, random_state: Optional[int] = None) -> None:
+    def __init__(self, n_arms: int, n_features: int, random_state: Optional[int] = None, probabilities: Optional[Sequence[float]] = None) -> None:
         """
         Initialize the agent.
         
@@ -16,6 +16,14 @@ class SillyAgent(BanditAgent):
         """
         self.random_state = random_state
         self.rng = np.random.default_rng(self.random_state)
+        # Optional per-arm probabilities
+        self._probabilities: Optional[np.ndarray] = None
+        if probabilities is not None:
+            p = np.asarray(list(probabilities), dtype=float)
+            if p.shape[0] != n_arms:
+                raise ValueError("SillyAgent: probabilities length must equal n_arms")
+            s = float(np.sum(p))
+            self._probabilities = (p / s).astype(float)
         super().__init__(n_arms, n_features)
     
     def choose_arm(self, x: np.ndarray, **kwargs: Dict[str, Any]) -> int:
@@ -28,7 +36,9 @@ class SillyAgent(BanditAgent):
         Returns:
             int: The randomly selected arm index.
         """
-        return self.rng.integers(0, self.n_arms)
+        if self._probabilities is not None:
+            return int(self.rng.choice(self.n_arms, p=self._probabilities))
+        return int(self.rng.integers(0, self.n_arms))
     
     def update_state(self, arm: int, x: np.ndarray, y: float) -> "SillyAgent":
         """
