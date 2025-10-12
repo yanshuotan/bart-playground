@@ -223,7 +223,7 @@ class BARTTSAgent(BanditAgent):
             self._post_idx_pos += 1
             return k
         else: # Re-initialize the queue
-            logger.warning(f'Posterior index queue exhausted ({self.n_post} samples used), re-initializing.')
+            logger.info(f'Posterior index queue exhausted ({self.n_post} samples used), re-initializing.')
             self._reset_post_queue()
             return self._next_post_index()
 

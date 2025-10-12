@@ -131,6 +131,6 @@ def calculate_policy_values(simulation_results: dict[str, dict[str, NDArray[Any]
             print(f"Warning: Zero denominator for agent {agent_name}")
         
         agent_results[agent_name] = V_hat
-        print(f"Estimated policy value for {agent_name}: {V_hat:.4f}")
     
+    print("Done estimating policy values.")
     return agent_results
