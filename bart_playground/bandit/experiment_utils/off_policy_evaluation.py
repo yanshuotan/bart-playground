@@ -57,6 +57,10 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
         print(f"Simulating agent: {agent_name}")
         
         pi_t_values: NDArray[Any] = np.zeros(n_draw)
+        # Determine number of arms for this agent
+        n_arms: int = int(getattr(agent, 'n_arms'))
+        # Store per-time probabilities of selecting each arm (counts / n_choices_per_iter)
+        agent_actions: NDArray[Any] = np.zeros((n_draw, n_arms), dtype=float)
         
         iterator = tqdm(range(n_draw), desc=f"Simulating {agent_name}") if show_progress else range(n_draw)
         
@@ -67,19 +71,24 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
             
             # Get agent's action multiple times and calculate probability
             correct_choices = 0
+            counts = np.zeros(n_arms, dtype=int)
             for _ in range(n_choices_per_iter):
                 agent_action = agent.choose_arm(x_t)
+                counts[agent_action] += 1
                 if agent_action == a_t:
                     correct_choices += 1
             
             # Calculate pi_t as proportion of correct choices
             pi_t_values[t] = correct_choices / n_choices_per_iter
+            # Record per-arm selection frequency at time t
+            agent_actions[t, :] = counts.astype(float) / float(n_choices_per_iter)
             
             # Update agent state
             _ = agent.update_state(a_t, x_t, r_t)
         
         result_dict: dict[str, NDArray[Any] | BanditAgent] = {
             'actions': actions,
+            'agent_actions': agent_actions,
             'pi_t': pi_t_values,
             'rewards': rewards
         }
