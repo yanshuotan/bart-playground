@@ -279,6 +279,98 @@ class DefaultBART(BART):
         prob_0 = 1 - prob_1
         return np.column_stack([prob_0, prob_1])
 
+    def feature_inclusion_probability(self):
+        """
+        Compute posterior inclusion probability for each feature.
+
+        For each posterior draw k in range_post, mark 1 if feature i is used
+        at least once as a split variable in any tree (hist_k[i] > 0), else 0.
+        Returns the average over posterior draws.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (p,) where p is the number of features.
+        """
+        if not self.is_fitted or self.data is None:
+            raise ValueError("Model must be fitted before computing inclusion probability.")
+
+        p = self.data.X.shape[1]
+        probs = np.zeros(p, dtype=float)
+
+        for k in self.range_post:
+            # trace[k] is Parameters for regression BART
+            hist = self.trace[k].vars_histogram
+            if not hist:
+                continue
+            for var_idx, count in hist.items():
+                if 0 <= var_idx < p and count > 0:
+                    probs[var_idx] += 1.0
+
+        probs /= float(self.ndpost)
+        return probs
+
+    def feature_inclusion_frequency(self, normalize: str = 'split'):
+        """
+        Compute feature inclusion frequency (VIP-style) across posterior draws.
+
+        Parameters
+        ----------
+        normalize : str, default 'split'
+            - 'split': aggregate counts across draws then divide by total split count.
+            - 'per_draw': normalize each draw's histogram to sum 1, then average over draws.
+
+        Returns
+        -------
+        np.ndarray
+            Array of shape (p,) with frequencies summing to 1 when normalize='split'.
+        """
+        if not self.is_fitted or self.data is None:
+            raise ValueError("Model must be fitted before computing inclusion frequency.")
+
+        if normalize not in ('split', 'per_draw'):
+            raise ValueError("normalize must be one of {'split', 'per_draw'}.")
+
+        p = self.data.X.shape[1]
+        freq = np.zeros(p, dtype=float)
+
+        if normalize == 'split':
+            total_splits = 0.0
+            for k in self.range_post:
+                hist = self.trace[k].vars_histogram
+                if not hist:
+                    continue
+                for var_idx, count in hist.items():
+                    if 0 <= var_idx < p and count > 0:
+                        freq[var_idx] += float(count)
+                        total_splits += float(count)
+            if total_splits > 0.0:
+                freq /= total_splits
+            else:
+                # no splits observed; return zeros
+                freq[:] = 0.0
+            return freq
+
+        # per_draw: average normalized-per-draw histograms
+        draws_count = 0
+        for k in self.range_post:
+            hist = self.trace[k].vars_histogram
+            if not hist:
+                continue
+            draw_total = float(sum(hist.values()))
+            if draw_total <= 0.0:
+                continue
+            for var_idx, count in hist.items():
+                if 0 <= var_idx < p and count > 0:
+                    freq[var_idx] += float(count) / draw_total
+            draws_count += 1
+
+        if draws_count > 0:
+            freq /= float(draws_count)
+        else:
+            freq[:] = 0.0
+        return freq
+
 class ProbitBART(BART):
     """
     Binary BART implementation using Albert-Chib data augmentation and probit link.

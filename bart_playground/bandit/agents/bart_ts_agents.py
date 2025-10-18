@@ -47,6 +47,9 @@ class BARTTSAgent(BanditAgent):
         self.encoder = BanditEncoder(self.n_arms, self.n_features, self.encoding)
         self.combined_dim = self.encoder.combined_dim
         
+        # Number of Thompson-sampling draws per decision step (can be overridden by callers)
+        self.choices_per_iter: int = 1
+
         # Model setup
         self.model_factory = model_factory
         self.models : list[BART] = []
@@ -109,8 +112,8 @@ class BARTTSAgent(BanditAgent):
             return self._enough_data(rewards)
         
     def _ndpost_needed(self, max_needed: int) -> int:
-        """Determine the number of posterior samples needed for the next refresh. At most self.ndpost."""
-        return int(min(self.max_ndpost, max_needed))
+        """Determine the number of posterior samples needed for the next refresh. At most self.max_ndpost."""
+        return int(min(self.max_ndpost, max_needed * self.choices_per_iter))
     
     def _refresh_model(self) -> None:
         """Re-fit the model from scratch using all historical data."""
