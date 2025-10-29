@@ -1,11 +1,49 @@
 from joblib import Parallel, delayed
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import root_mean_squared_error
-import pickle
 import numpy as np
 from bart_playground import *
 
-def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, notebook):
+def count_leaves_in_trees(trace_record):
+    """Count leaves (vars == -1) in all trees of a single trace record and return average"""
+    total_leaves = 0
+    total_trees = len(trace_record.trees)
+    
+    for tree in trace_record.trees:
+        # Count number of -1s in vars (leaf nodes)
+        leaves_count = np.sum(np.array(tree.vars) == -1)
+        total_leaves += leaves_count
+    
+    # Return average number of leaves per tree
+    return total_leaves / total_trees
+
+def calculate_tree_depth(tree):
+    """Calculate tree depth as ceil(log2(position_of_last_-1)) - 1"""
+    vars_array = np.array(tree.vars)
+    
+    # Find positions of all -1s (leaf nodes)
+    leaf_positions = np.where(vars_array == -1)[0]
+    
+    # Get the last position of -1
+    last_leaf_position = leaf_positions[-1]
+    
+    # Calculate depth
+    depth = int(np.ceil(np.log2(last_leaf_position + 2))) - 1
+    
+    return depth
+
+def calculate_avg_depth_per_trace(trace_record):
+    """Calculate average tree depth for all trees in a trace record"""
+    total_depth = 0
+    total_trees = len(trace_record.trees)
+    
+    for tree in trace_record.trees:
+        tree_depth = calculate_tree_depth(tree)
+        total_depth += tree_depth
+    
+    return total_depth / total_trees
+
+def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tree_beta):
     """Run a single experiment with different train-test split"""
     
     # Use different random_state for train test split
@@ -22,14 +60,12 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, notebook):
                     proposal_probs=proposal_probs_default, random_state=0)
     bart_default.fit(X_train, y_train)
     
-    # Extract and save default BART results instead of the model
+    # Extract default BART results
     sigmas_default = [trace.global_params['eps_sigma2'] for trace in bart_default.sampler.trace]
     preds_default = bart_default.posterior_f(X_test, backtransform=True)
     rmses_default = [root_mean_squared_error(y_test, preds_default[:, k]) for k in range(preds_default.shape[1])]
-    
-    # Save default BART results
-    np.save(f'store/{notebook}_sigmas_default_run{run_id}.npy', np.array(sigmas_default))
-    np.save(f'store/{notebook}_rmses_default_run{run_id}.npy', np.array(rmses_default))
+    leaves_default = [count_leaves_in_trees(trace) for trace in bart_default.sampler.trace]
+    depths_default = [calculate_avg_depth_per_trace(trace) for trace in bart_default.sampler.trace]
     
     # Train MTMH BART model
     proposal_probs_mtmh = {
@@ -39,26 +75,71 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, notebook):
         'multi_swap': 0.1
     }
     bart_mtmh = MultiBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
-                    proposal_probs=proposal_probs_mtmh, multi_tries=m_tries, random_state=0)
+                    proposal_probs=proposal_probs_mtmh, multi_tries=m_tries, 
+                    tree_alpha=tree_alpha, tree_beta=tree_beta, # Only for mtmh prior
+                    random_state=0)
     bart_mtmh.fit(X_train, y_train)
     
-    # Extract and save MTMH BART results
+    # Extract MTMH BART results
     sigmas_mtmh = [trace.global_params['eps_sigma2'] for trace in bart_mtmh.sampler.trace]
     preds_mtmh = bart_mtmh.posterior_f(X_test, backtransform=True)
     rmses_mtmh = [root_mean_squared_error(y_test, preds_mtmh[:, k]) for k in range(preds_mtmh.shape[1])]
+    leaves_mtmh = [count_leaves_in_trees(trace) for trace in bart_mtmh.sampler.trace]
+    depths_mtmh = [calculate_avg_depth_per_trace(trace) for trace in bart_mtmh.sampler.trace]
     
-    # Save MTMH BART results
-    np.save(f'store/{notebook}_sigmas_mtmh_run{run_id}.npy', np.array(sigmas_mtmh))
-    np.save(f'store/{notebook}_rmses_mtmh_run{run_id}.npy', np.array(rmses_mtmh))
-    
-    return run_id
+    # Return results as dictionary instead of saving individual files
+    return {
+        'run_id': run_id,
+        'default': {
+            'sigmas': np.array(sigmas_default),
+            'preds': np.array(preds_default),
+            'rmses': np.array(rmses_default),
+            'leaves': np.array(leaves_default),
+            'depths': np.array(depths_default)
+        },
+        'mtmh': {
+            'sigmas': np.array(sigmas_mtmh),
+            'preds': np.array(preds_mtmh),
+            'rmses': np.array(rmses_mtmh),
+            'leaves': np.array(leaves_mtmh),
+            'depths': np.array(depths_mtmh)
+        }
+    }
 
-def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook, m_tries=10, n_runs=5, n_jobs=-1):
+def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook, tree_alpha=0.95, tree_beta=2.0, m_tries=10, n_runs=5, n_jobs=-1):
     """Run parallel experiments with different train-test splits"""
     
     results = Parallel(n_jobs=n_jobs, verbose=10)(
-        delayed(run_experiment)(run_id, X, y, ndpost, nskip, n_trees, m_tries, notebook)
+        delayed(run_experiment)(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tree_beta)
         for run_id in range(n_runs)
     )
+    
+    # Combine all results into structured arrays
+    combined_results = {
+        'default': {
+            'sigmas': np.array([r['default']['sigmas'] for r in results]),
+            'preds': np.array([r['default']['preds'] for r in results]),
+            'rmses': np.array([r['default']['rmses'] for r in results]),
+            'leaves': np.array([r['default']['leaves'] for r in results]),
+            'depths': np.array([r['default']['depths'] for r in results])
+        },
+        'mtmh': {
+            'sigmas': np.array([r['mtmh']['sigmas'] for r in results]),
+            'preds': np.array([r['mtmh']['preds'] for r in results]),
+            'rmses': np.array([r['mtmh']['rmses'] for r in results]),
+            'leaves': np.array([r['mtmh']['leaves'] for r in results]),
+            'depths': np.array([r['mtmh']['depths'] for r in results])
+        },
+        'metadata': {
+            'n_runs': n_runs,
+            'ndpost': ndpost,
+            'nskip': nskip,
+            'n_trees': n_trees,
+            'm_tries': m_tries
+        }
+    }
+    
+    # Save as single compressed file
+    np.savez_compressed(f'store/{notebook}.npz', **combined_results)
     
     return results
