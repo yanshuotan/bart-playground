@@ -247,7 +247,8 @@ class PipelineBART(BART):
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, eps_nu: float=3, 
                  specification="linear", multi_proposal_probs=default_proposal_probs, 
                  proposal_probs=default_proposal_probs, tol=100, 
-                 max_bins=100, random_state=42, temperature=1.0, multi_tries=[10, 5]):
+                 max_bins=100, random_state=42, temperature=1.0, multi_tries=10, dirichlet_prior=False, 
+                 quick_decay: bool = False, init_trees=None):
         """
         Initialize the PipelineBART model.
 
@@ -271,7 +272,7 @@ class PipelineBART(BART):
         rng = np.random.default_rng(random_state)
 
         # Initialize prior
-        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, eps_nu, specification, rng)
+        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay)
 
         # Initialize temperature schedule
         temp_schedule = self._check_temperature(temperature)
@@ -283,7 +284,8 @@ class PipelineBART(BART):
             generator=rng,
             temp_schedule=temp_schedule,
             tol=1,
-            multi_tries=multi_tries
+            multi_tries=multi_tries, 
+            init_trees=init_trees
         )
 
         # Initialize DefaultSampler
@@ -312,11 +314,12 @@ class PipelineBART(BART):
         self.data = self.preprocessor.fit_transform(X, y)
         self.multi_sampler.add_data(self.data)
         self.multi_sampler.add_thresholds(self.preprocessor.thresholds)
+        self.multi_iter = multi_iter
 
         # Step 2: Run MultiSampler
         if not quietly:
-            print(f"Running MultiSampler for {multi_iter + self.nskip} iterations...")
-        self.multi_sampler.run(multi_iter + self.nskip, quietly=quietly, n_skip=self.nskip)
+            print(f"Running MultiSampler for {self.multi_iter + self.nskip} iterations...")
+        self.multi_sampler.run(self.multi_iter + self.nskip, quietly=quietly, n_skip=self.nskip)
 
         # Step 3: Get the final state from MultiSampler
         final_state = self.multi_sampler.trace[-1]
@@ -331,6 +334,19 @@ class PipelineBART(BART):
             print(f"Running DefaultSampler for {self.ndpost} iterations...")
         self.trace = self.multi_sampler.trace[:-1] + self.sampler.run(self.ndpost, quietly=quietly)
         self.is_fitted = True
+
+    def posterior_f(self, X, backtransform=True):
+        """
+        Get the posterior distribution of f(x) for each row in X.
+        """
+        preds = np.zeros((X.shape[0], self.multi_iter + self.ndpost))
+        for k in range(self.multi_iter + self.ndpost):
+            y_eval = self.trace[k].evaluate(X)
+            if backtransform:
+                preds[:, k] = self.preprocessor.backtransform_y(y_eval)
+            else:
+                preds[:, k] = y_eval
+        return preds
 
 
 class ProbitBART(BART):
