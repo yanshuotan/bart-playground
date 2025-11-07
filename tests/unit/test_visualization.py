@@ -10,8 +10,8 @@ from bart_playground import Dataset
 class TestVisualizeTree(unittest.TestCase):
     def setUp(self):
         X, y = np.random.rand(100, 5), np.random.rand(100)
-        dataset = Dataset(X, y, None)
-        self.tree = Tree(data=dataset)
+        dataset = Dataset(X, y)
+        self.tree = Tree.new(dataX=dataset.X)
         self.tree.vars = np.array([0, 1, -1, -1, -1, -2, -2, -2], dtype=int)
         self.tree.thresholds = np.array([0.5, 0.7, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan])
         self.tree.leaf_vals = np.array([np.nan, np.nan, -1.0, 1.0, 2.0, np.nan, np.nan, np.nan])
