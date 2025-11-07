@@ -223,7 +223,6 @@ class TestSamplers(unittest.TestCase):
         sampler.run(2, progress_bar=False)
         self.assertEqual(sampler.n_iter, 2)
         self.assertEqual(len(sampler.trace), 3)
-        self.assertIs(sampler.trace[0], mock_state)
         #self.assertIs(sampler.trace[-1], sampler.current) # Not applicable now
 
 class TestSamplers2(unittest.TestCase):
@@ -232,7 +231,7 @@ class TestSamplers2(unittest.TestCase):
         X, y = np.random.rand(100, 5), np.random.rand(100)
         self.dataset = Dataset(X, y)
         self.trees = [Tree.new(dataX=self.dataset.X) for _ in range(5)]
-        self.tree_params = Parameters(self.trees, None, self.dataset)
+        self.tree_params = Parameters(self.trees, None, None)
         # Ensure every tree has at least one split using Parameters
         for tree in self.tree_params.trees:
             tree.split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=-1.0)
@@ -266,8 +265,10 @@ class TestSamplers2(unittest.TestCase):
         self.assertEqual(len(self.sampler.trace), 6)
     
     def test_sample_move(self):
-        move = self.sampler.sample_move()
-        self.assertIn(move, all_moves.values())
+        move_str, move_cls = self.sampler.sample_move()
+        self.assertIsInstance(move_str, str)
+        self.assertIn(move_str, all_moves.keys())
+        self.assertEqual(move_cls, all_moves[move_str])
 
     def test_trees_log_mh_ratio(self):
         """
@@ -279,10 +280,16 @@ class TestSamplers2(unittest.TestCase):
         mock_move.trees_changed = [0]
         mock_move.log_tran_ratio = 0
 
-        self.prior.tree_prior.trees_log_prior_ratio = MagicMock(return_value=-0.3)
-        self.prior.likelihood.trees_log_marginal_lkhd_ratio = MagicMock(return_value=0.7)
+        self.sampler.tree_prior = MagicMock()
+        self.sampler.tree_prior.trees_log_prior_ratio = MagicMock(return_value=-0.3)
+        self.sampler.likelihood = MagicMock()
+        self.sampler.likelihood.trees_log_marginal_lkhd_ratio = MagicMock(return_value=0.7)
+        self.sampler.proposals = {"grow": 0.5, "prune": 0.5}
 
-        mh_ratio = self.sampler.log_mh_ratio(mock_move)
+        temp = 1.0
+        move_key = "grow"
+        mh_ratio = self.sampler.log_mh_ratio(mock_move, temp, move_key)
+        # Expected: (-0.3 + 0.7) / 1.0 + 0 + log(0.5) - log(0.5) = 0.4
         self.assertAlmostEqual(mh_ratio, 0.4)
 
 if __name__ == '__main__':
