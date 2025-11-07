@@ -33,9 +33,9 @@ if __name__ == "__main__":
     
     file_name = "profile_bart_generator"
     # Output files (use variables instead of hard-coded inline names)
-    profile_path = f"test/generators/{file_name}.prof"
-    dot_path = f"test/generators/{file_name}.dot"
-    png_path = f"test/generators/{file_name}.png"
+    profile_path = f"test/output/{file_name}.prof"
+    dot_path = f"test/output/{file_name}.dot"
+    png_path = f"test/output/{file_name}.png"
 
     # Profile the call and dump stats to file
     profiler = cProfile.Profile()
