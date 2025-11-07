@@ -25,6 +25,7 @@ bart_playground/bandit/baselines
 
 benchmarks/*.csv
 tests/output/*
+tests/*.md
 *.pkl
 
 /benchmarks/

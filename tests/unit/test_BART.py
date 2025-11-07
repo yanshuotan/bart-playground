@@ -2,7 +2,6 @@ import cProfile
 import pstats
 import os
 import unittest
-import bartz
 import numpy as np
 from sklearn.model_selection import train_test_split
 from bart_playground import *
