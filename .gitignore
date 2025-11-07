@@ -16,6 +16,7 @@ scripts/
 
 benchmarks/*.csv
 tests/output/*
+tests/*.md
 *.pkl
 
 /benchmarks/

@@ -8,6 +8,13 @@ from bart_playground import DefaultBART  # our bart implementation
 import bartz  # bartz package
 
 
+pytestmark = [
+    pytest.mark.benchmark,
+    pytest.mark.slow,
+    pytest.mark.requires_pmlb,
+    pytest.mark.requires_bartz,
+]
+
 # --- Helper: Gelman-Rubin (PSRF) statistic ---
 def gelman_rubin(chains):
     """

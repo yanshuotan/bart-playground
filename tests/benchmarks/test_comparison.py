@@ -15,6 +15,12 @@ import math
 import numpy as np
 import pytest
 
+pytestmark = [
+    pytest.mark.benchmark,
+    pytest.mark.slow,
+    pytest.mark.requires_bartz,
+]
+
 # Imports from bart_playground
 from bart_playground import DefaultBART, DefaultPreprocessor, DataGenerator
 # (The Tree and Parameters classes are part of bart_playground as provided.)
