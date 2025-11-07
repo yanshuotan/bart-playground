@@ -152,6 +152,9 @@ class TreesPrior:
         self.generator = generator
         # If True, use quick decay parameterization for split probabilities
         self.quick_decay = quick_decay
+        if quick_decay:
+            if tree_alpha <= 0.0 or tree_alpha >= 0.5:
+                raise ValueError("tree_alpha must be between 0.0 and 0.5 for quick decay parameterization. See Rockova and Saha (2018) for more details.")
                 
     def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """

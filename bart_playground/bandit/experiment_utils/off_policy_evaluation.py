@@ -20,14 +20,14 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
         data: Dictionary containing 'context', 'action', and 'reward' arrays
         agents: List of bandit agents to evaluate
         agent_names: Optional list of agent names
-        n_choices_per_iter: Number of choose_arm calls per iteration to calculate pi_t probability
+        n_choices_per_iter: Number of choose_arm calls per iteration to calculate agent_actions probability
         show_progress: Whether to show progress bar
         return_final_states: Whether to return final states of agents
     
     Returns:
         Dict containing simulation results for each agent:
-        - 'actions': array of logged actions
-        - 'pi_t': array of policy probabilities (proportion of correct choices out of n_choices_per_iter)
+        - 'actions': array of logged actions (0-indexed)
+        - 'agent_actions': per-time per-arm selection frequency (counts / n_choices_per_iter)
         - 'rewards': array of rewards
         - 'final_state': agent's final state (if return_final_states=True)
     """
@@ -56,7 +56,6 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
         agent_name = agent_names[agent_idx]
         print(f"Simulating agent: {agent_name}")
         
-        pi_t_values: NDArray[Any] = np.zeros(n_draw)
         # Determine number of arms for this agent
         n_arms: int = int(getattr(agent, 'n_arms'))
         # Store per-time probabilities of selecting each arm (counts / n_choices_per_iter)
@@ -69,17 +68,12 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
             a_t = int(actions[t])
             r_t = float(rewards[t])
             
-            # Get agent's action multiple times and calculate probability
-            correct_choices = 0
+            # Get agent's action multiple times and track per-arm frequencies
             counts = np.zeros(n_arms, dtype=int)
             for _ in range(n_choices_per_iter):
                 agent_action = agent.choose_arm(x_t)
                 counts[agent_action] += 1
-                if agent_action == a_t:
-                    correct_choices += 1
             
-            # Calculate pi_t as proportion of correct choices
-            pi_t_values[t] = correct_choices / n_choices_per_iter
             # Record per-arm selection frequency at time t
             agent_actions[t, :] = counts.astype(float) / float(n_choices_per_iter)
             
@@ -87,9 +81,8 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
             _ = agent.update_state(a_t, x_t, r_t)
         
         result_dict: dict[str, NDArray[Any] | BanditAgent] = {
-            'actions': actions,
-            'agent_actions': agent_actions,
-            'pi_t': pi_t_values,
+            'actions': actions, # This is the real action that was in the data
+            'agent_actions': agent_actions, # This is the action that the agent chose
             'rewards': rewards
         }
         
@@ -116,18 +109,21 @@ def calculate_policy_values(simulation_results: dict[str, dict[str, NDArray[Any]
     agent_results: dict[str, float] = {}
     
     for agent_name, results in simulation_results.items():
-        pi_t = results['pi_t']
         rewards = results['rewards']
         actions = results['actions']
-        
+        agent_actions = results['agent_actions']
+
         # Cast to ensure proper types
-        pi_t_arr: NDArray[Any] = np.array(pi_t)
         rewards_arr: NDArray[Any] = np.array(rewards)
-        actions_arr: NDArray[Any] = np.array(actions)
-        
+        actions_arr: NDArray[Any] = np.array(actions).astype(int)
+        agent_actions_arr: NDArray[Any] = np.array(agent_actions)
+
+        # Reconstruct pi_t as the probability of the logged action under the target policy
+        pi_t_arr: NDArray[Any] = agent_actions_arr[np.arange(len(actions_arr)), actions_arr]
+
         # Extract propensity scores for logged actions
-        propensity_values: NDArray[Any] = np.array([propensity_scores[t, int(actions_arr[t])] for t in range(len(actions_arr))])
-        
+        propensity_values: NDArray[Any] = propensity_scores[np.arange(len(actions_arr)), actions_arr]
+
         # Calculate importance weights: w_t = pi_t / p_t
         importance_weights: NDArray[Any] = pi_t_arr / propensity_values
         
