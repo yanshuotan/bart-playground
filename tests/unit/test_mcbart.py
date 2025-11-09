@@ -72,3 +72,24 @@ class TestMultiChainBART:
         m1.clean_up()
         m2.clean_up()
 
+    def test_posterior_sample_uses_internal_rng(self):
+        X, y = _toy_regression(n=20, d=2, rng=3)
+        m = MultiChainBART(n_ensembles=2, random_state=321, ndpost=20, nskip=5, n_trees=10)
+        m.fit(X, y, quietly=True)
+
+        # Simple uniform schedule over trace length
+        trace_length = m._trace_length
+        def schedule(_):
+            return 1.0 / trace_length  # Normalized probability
+
+        s1 = m.posterior_sample(X[:4], schedule)
+        s2 = m.posterior_sample(X[:4], schedule)
+        # They can be equal by chance, but across multiple calls they should not all be equal
+        equal = np.allclose(s1, s2)
+        # Make a few more draws to reduce chance of equality
+        s3 = m.posterior_sample(X[:4], schedule)
+        s4 = m.posterior_sample(X[:4], schedule)
+        any_diff = (not np.allclose(s1, s3)) or (not np.allclose(s1, s4))
+        assert equal is False or any_diff is True
+
+        m.clean_up()

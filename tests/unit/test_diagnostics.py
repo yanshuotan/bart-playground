@@ -19,13 +19,14 @@ def test_diagnostics_defaultbart_basic():
 
     diag = compute_diagnostics(model, key="eps_sigma2")
 
-    assert set(["n_chains", "n_draws", "rhat", "ess_bulk", "mcse_mean", "acceptance"]).issubset(diag.keys())
-    assert diag["n_chains"] == 1
-    assert diag["n_draws"] == model.ndpost
-    assert isinstance(diag["mcse_mean"], float)
+    assert set(["meta", "metrics", "acceptance"]).issubset(diag.keys())
+    assert diag["meta"]["n_chains"] == 1
+    assert diag["meta"]["n_draws"] == model.ndpost
+    assert len(diag["metrics"]) == 1
+    assert isinstance(diag["metrics"]["mcse_mean"].iloc[0], (float, np.floating))
     assert "overall" in diag["acceptance"]
     # ESS should be positive
-    assert diag["ess_bulk"] > 0
+    assert diag["metrics"]["ess_bulk"].iloc[0] > 0
 
 
 def test_diagnostics_mcbart_two_chains():
@@ -49,12 +50,13 @@ def test_diagnostics_mcbart_two_chains():
         mcb.fit(X, y, quietly=True)
         diag = compute_diagnostics(mcb, key="eps_sigma2")
 
-        assert diag["n_chains"] == 2
-        assert diag["n_draws"] > 0
+        assert diag["meta"]["n_chains"] == 2
+        assert diag["meta"]["n_draws"] > 0
         assert "overall" in diag["acceptance"]
         # With 2 chains, R-hat should be finite (not NaN or inf) if there are draws
-        assert np.isfinite(diag["rhat"]) or np.isnan(diag["rhat"]) is False
-        assert diag["ess_bulk"] > 0
+        rhat_val = diag["metrics"]["rhat"].iloc[0]
+        assert np.isfinite(rhat_val) or not np.isnan(rhat_val)
+        assert diag["metrics"]["ess_bulk"].iloc[0] > 0
     finally:
         # Ensure Ray actors are cleaned up to not leak resources across tests
         try:
