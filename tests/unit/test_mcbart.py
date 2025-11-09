@@ -78,8 +78,9 @@ class TestMultiChainBART:
         m.fit(X, y, quietly=True)
 
         # Simple uniform schedule over trace length
+        trace_length = m._trace_length
         def schedule(_):
-            return 1.0
+            return 1.0 / trace_length  # Normalized probability
 
         s1 = m.posterior_sample(X[:4], schedule)
         s2 = m.posterior_sample(X[:4], schedule)

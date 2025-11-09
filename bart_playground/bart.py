@@ -101,6 +101,7 @@ class BART:
             preds[:, i] = self.predict_trace(k, X, backtransform=backtransform)
         return preds
     
+    # WeightSchedule: Callable that takes a trace index k and returns a normalized probability (sum over all k must equal 1.0)
     WeightSchedule = Callable[[int], float]
     def posterior_sample(self, X, schedule: WeightSchedule, backtransform=True):
         """
