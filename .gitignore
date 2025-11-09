@@ -15,6 +15,7 @@ scripts/
 .cursor/*
 
 benchmarks/*.csv
+tests/unit/plan/*
 tests/output/*
 tests/*.md
 *.pkl
