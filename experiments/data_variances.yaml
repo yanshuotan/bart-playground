@@ -1,0 +1,12 @@
+high_lei_candes:
+  required_noise_for_snr_1: 1.1325760133123972
+  signal_variance: 1.1325760133123972
+linear_additive:
+  required_noise_for_snr_1: 2.93002601238077
+  signal_variance: 2.93002601238077
+low_lei_candes:
+  required_noise_for_snr_1: 1.1346110175539412
+  signal_variance: 1.1346110175539412
+piecewise_linear_kunzel:
+  required_noise_for_snr_1: 752.3774518347544
+  signal_variance: 752.3774518347544
