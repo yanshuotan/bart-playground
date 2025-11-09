@@ -144,7 +144,7 @@ class Tree:
         self.leaf_vals: NDArray[Float32Or64] = leaf_vals
 
         self.n: NDArray[np.int32] = n
-        self.leaf_ids: NDArray[Union[np.int16, np.int32]] = leaf_ids
+        self.leaf_ids: NDArray[np.int32] = leaf_ids
         self.evals: NDArray[Float32Or64] = evals
         
         # Store float dtype
@@ -204,7 +204,7 @@ class Tree:
             other.thresholds.copy(), 
             other.leaf_vals.copy(),
             other.n.copy() if copy_cache else None,
-            other.node_indicators.copy() if copy_cache else None,
+            other.leaf_ids.copy() if copy_cache else None,
             other.evals.copy() if copy_cache else None
         )
 
@@ -212,12 +212,18 @@ class Tree:
         return Tree.from_existing(self, copy_cache=copy_cache)
 
     def traverse_tree(self, X: np.ndarray) -> np.ndarray:
-        return traverse_tree_numba(
-            self.vars, 
-            self.thresholds, 
-            np.array(self.split_nodes, dtype=np.int64), 
-            X
-        )
+        """
+        Traverse the tree to find the leaf nodes for a given input data matrix.
+
+        Parameters:
+        - X: np.ndarray
+            Input data (2D array).
+
+        Returns:
+        - int
+            Index of the leaf node.
+        """
+        return _traverse_tree_numba(X, self.vars, self.thresholds)
 
     def evaluate(self, X: Optional[np.ndarray]=None) -> NDArray[Float32Or64]:
         """
@@ -525,7 +531,7 @@ class Tree:
 
     def update_data(self, dataX: np.ndarray) -> None:
         """
-        Replace the stored feature matrix, extend node-indicator arrays for any newly
+        Replace the stored feature matrix, extend leaf_ids array for any newly
         appended rows, and refresh per-node counts & cached outputs.
 
         Parameters
@@ -539,22 +545,27 @@ class Tree:
 
         self.dataX = dataX
 
-        # Update node-indicators
+        # Update leaf_ids
         if old_n == 0:
             # first time: init
             self._init_caching_arrays() 
         else:
-            # extending existing indicators
-            cols = self.node_indicators.shape[1]
-            new_inds = np.zeros((n_new, cols), dtype=bool)
-            new_inds[:, 0] = True         # i.e. all new samples start at root
-            self.node_indicators = np.vstack([self.node_indicators, new_inds])
+            # extending existing leaf_ids
+            new_leaf_ids = np.zeros(n_new, dtype=np.int32)  # all new samples start at root
+            self.leaf_ids = np.concatenate([self.leaf_ids, new_leaf_ids])
+            self.n[0] += n_new  # Update the count of samples at the root node
             
         # Refresh counts & outputs only for the affected rows
         update_range = np.arange(old_n, new_n)
-        self.update_n(X_range=update_range)
+        self.update_n_append(dataX[update_range])
         self.update_outputs()
-        
+
+    @property
+    def vars_histogram(self):
+        hist = Counter(self.vars)
+        return hist
+
+
 class Parameters:
     """
     Represents the parameters of the BART model.
@@ -603,7 +614,7 @@ class Parameters:
         # because they only contain numerical values (which are immutable)
         return Parameters(trees=copied_trees, 
                           global_params=self.global_params.copy(), # shallow copy suffices
-                          cache=self.cache)
+                          cache=self.cache.copy() if self.cache is not None else None)
     
     def update_data(self, X_new):
         """
