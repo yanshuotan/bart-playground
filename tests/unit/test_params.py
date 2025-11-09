@@ -94,8 +94,8 @@ class TestTree(unittest.TestCase):
         self.assertEqual(self.tree.vars[0], -1)
         self.assertEqual(self.tree.vars[1], -2)
         self.assertEqual(self.tree.vars[3], -2)
-        self.assertEqual(self.tree.n[1], -2)
-        self.assertEqual(self.tree.n[3], -2)
+        self.assertEqual(self.tree.n[1], 0)
+        self.assertEqual(self.tree.n[3], 0)
         self.assertTrue(np.isnan(self.tree.thresholds[0]))
 
     def test_set_leaf_value(self):

@@ -23,7 +23,11 @@ class TestMoves(unittest.TestCase):
         # Create dataset and parameters
         self.dataset = Dataset(self.X, self.y)
         self.trees = [Tree.new(dataX=self.dataset.X) for _ in range(5)]
-        self.params = Parameters(self.trees, None, None)
+        
+        self.global_params = {
+            "eps_sigma2": 1.0,  # Using fixed value for testing
+        }
+        self.params = Parameters(self.trees, self.global_params, None)
         self.rng = np.random.default_rng(42)  # Use fixed seed for reproducibility
 
     def test_grow_move(self):
