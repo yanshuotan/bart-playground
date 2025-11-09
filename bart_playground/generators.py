@@ -143,11 +143,17 @@ def generate_data_from_defaultbart_prior(
         return X, y, f, sigma2, trees
     return X, y
     
-def generate_data_heatmap(**kwargs) -> str:
+def generate_data_heatmap(output_dir: str | None = None, **kwargs) -> str:
     """
     Generate a heatmap of the DefaultBART prior f(x) for p=2.
+
+    Returns:
+    --------
+    str
+        Path to the generated heatmap file.
     """
-    res = generate_defaultbart_prior_with_cov(p=2, return_latent=True, **kwargs)
+    n = kwargs.pop('n', 10000)  # Extract n from kwargs, default to 10000
+    res = generate_defaultbart_prior_with_cov(n, p=2, return_latent=True, **kwargs)
     X, y, f, sigma2, trees = res # type: ignore
     
     import matplotlib
@@ -155,6 +161,11 @@ def generate_data_heatmap(**kwargs) -> str:
     # Use a non-interactive backend for headless environments
     matplotlib.use('Agg')
     import os
+    
+    # Set default output directory if not provided
+    if output_dir is None:
+        # Use tests/output as default, relative to project root
+        output_dir = 'tests/output'
 
     def _sum_trees(obs):
         return np.sum([t.evaluate(obs) for t in trees], axis=0)
@@ -181,8 +192,9 @@ def generate_data_heatmap(**kwargs) -> str:
         ax.set_title(title)
         ax.set_xlabel('x1')
         ax.set_ylabel('x2')
-        out_dir = os.path.join(os.path.dirname(__file__))
-        out_path = os.path.join(out_dir, '../test/generators', filename)
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        out_path = os.path.join(output_dir, filename)
         fig.savefig(out_path, bbox_inches='tight')
         plt.close(fig)
         return out_path

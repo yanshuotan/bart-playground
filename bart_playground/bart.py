@@ -73,8 +73,8 @@ class BART:
         
         # Run the sampler for additional iterations
         new_trace = self.sampler.continue_run(additional_iters, new_data=self.data, quietly=quietly)
+        # Previous samples are treated as burn-in (via nskip adjustment above), so only the latest posterior samples are kept.
         self.trace = new_trace
-        # self.trace = self.trace + new_trace[1:]
         
         return self
     
