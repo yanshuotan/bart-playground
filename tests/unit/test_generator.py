@@ -4,7 +4,7 @@ import cProfile
 import shutil
 import subprocess
 
-from bart_playground.generators import generate_defaultbart_prior_with_cov
+from bart_playground.generators import generate_defaultbart_prior_with_cov, generate_data_heatmap
 
 def _default_params_call(n, p):
     return generate_defaultbart_prior_with_cov(
@@ -26,6 +26,19 @@ def test_all_close():
     assert f.shape == (n,)
     assert np.allclose(np.sum([t.evaluate(X) for t in trees], axis=0), f)
 
+def _cleanup(path):
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+def test_generate_data_heatmap():
+    out_path = generate_data_heatmap(output_dir='tests/output')
+    assert isinstance(out_path, str)
+    assert os.path.exists(out_path)
+    _cleanup(out_path)
+
 if __name__ == "__main__":
     # Parameters
     n = 20000
@@ -33,9 +46,9 @@ if __name__ == "__main__":
     
     file_name = "profile_bart_generator"
     # Output files (use variables instead of hard-coded inline names)
-    profile_path = f"test/output/{file_name}.prof"
-    dot_path = f"test/output/{file_name}.dot"
-    png_path = f"test/output/{file_name}.png"
+    profile_path = f"tests/output/{file_name}.prof"
+    dot_path = f"tests/output/{file_name}.dot"
+    png_path = f"tests/output/{file_name}.png"
 
     # Profile the call and dump stats to file
     profiler = cProfile.Profile()

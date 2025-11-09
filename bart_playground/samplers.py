@@ -122,6 +122,8 @@ class Sampler(ABC):
             temp = self.temp_schedule(iter)
             backup_current = None
             if iter >= n_skip:
+                # backup_current is a cache-free copy of current_state (the input to this iteration), which equals the previous iteration's output. 
+                # We keep it to replace the last trace without caches before appending the new state from this iteration.
                 if isinstance(current_state, list):
                     # If current is a list (e.g., in LogisticSampler), copy each category
                     backup_current = [c.copy(copy_cache=False) for c in current_state]
@@ -134,6 +136,7 @@ class Sampler(ABC):
             
             if iter >= n_skip:
                 if len(self.trace) > 0:
+                    # Replace last trace element with the cache-free copy of the previous iteration's output.
                     self.trace[-1] = backup_current
                 self.trace.append(current_state)
         
