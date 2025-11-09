@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bart_playground"
+version = "0.1.1"
+description = "A fast and modular implementation of BART"
+readme = "README.md"
+requires-python = ">=3.7"
+license = {text = "MIT"}
+authors = [
+    {name = "Yan Shuo Tan", email = "yanshuo@nus.edu.sg"}
+]
+keywords = ["bart", "bayesian", "regression", "classification", "bandits"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "scikit-learn",
+    "numba",
+    "arviz",
+    "pydantic",
+    "tqdm",
+    "graphviz",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "xgboost",
+    "bartz",
+    "pmlb",
+]
+viz = [
+    "matplotlib",
+]
+parallel = [
+    "ray[default]",
+]
+
+[project.urls]
+Homepage = "https://github.com/yanshuotan/bart-playground"
+Repository = "https://github.com/yanshuotan/bart-playground"
+Issues = "https://github.com/yanshuotan/bart-playground/issues"
+
+[tool.setuptools]
+packages = ["bart_playground"]
+
+[tool.setuptools.package-data]
+"*" = ["*.txt", "*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.pytest.ini_options.markers]
+benchmark = "benchmark tests (slow, optional)"
+slow = "slow tests"
+requires_bartz = "requires bartz library"
+requires_pmlb = "requires pmlb library"
+
