@@ -10,15 +10,26 @@ This package is in early development and is **not production-ready**. The API is
 
 ## Installation
 
-### Using Conda (Recommended)
+
+### Using pip (More Flexible)
+
+Use this method to install with flexible version requirements:
+
+```bash
+pip install -e .
+```
+
+This installs the latest versions that satisfy the minimum requirements in [pyproject.toml](pyproject.toml), which should work but have not been extensively tested. 
+
+###  Using Conda (For Reproducibility)
+
+Use this method to install the exact dependency versions during development:
 
 ```bash
 conda env create -f environment.yml
 conda activate bartts
 pip install -e .
 ```
-
-**Python Version**: Requires Python 3.9 or higher. Local development and testing primarily use Python 3.11. CI tests against Python 3.9, 3.10, 3.11, and 3.12.
 
 ## Quickstart
 

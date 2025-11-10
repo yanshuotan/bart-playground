@@ -7,15 +7,22 @@ name = "bart_playground"
 version = "0.2.0.dev1"
 description = "A fast and modular implementation of BART"
 readme = "README.md"
-requires-python = ">=3.9"
-license = {text = "MIT"}
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+# Authors listed in alphabetical order by last name
 authors = [
-    {name = "Yan Shuo Tan", email = "yanshuo@nus.edu.sg"}
+    {name = "Ruizhe Deng", email = "drizmiz@outlook.com"},
+    {name = "Sumetha Loganathan", email = "sumetha.loganathan@u.nus.edu"},
+    {name = "Hengrui Luo", email = "hl180@rice.edu"},
+    {name = "Yankai Pei", email = "e1124549@u.nus.edu"},
+    {name = "Omer Ronen", email = "omer_ronen@berkeley.edu"},
+    {name = "Theo Saarinen", email = "theo_s@berkeley.edu"},
+    {name = "Yan Shuo Tan", email = "yanshuo@nus.edu.sg"},
+    {name = "Tianyi Zhuang", email = "e0950116@u.nus.edu"},
 ]
 keywords = ["bart", "bayesian", "regression", "classification", "bandits"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -25,15 +32,15 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "numpy",
-    "scipy",
-    "pandas",
-    "scikit-learn",
-    "numba",
-    "arviz",
-    "pydantic",
-    "tqdm",
-    "graphviz",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "pandas>=2.1",
+    "scikit-learn>=1.5",
+    "numba>=0.60",
+    "arviz>=0.18",
+    "pydantic>=2.0,<3",
+    "tqdm>=4.66",
+    "graphviz>=0.20",
 ]
 
 [project.optional-dependencies]
