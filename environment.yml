@@ -1,0 +1,19 @@
+name: bartts
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy=2.3.*
+  - scipy=1.16.*
+  - pandas=2.3.*
+  - scikit-learn=1.7.*
+  - numba=0.62.*
+  - arviz=0.22.*
+  - pydantic=2.11.*
+  - tqdm=4.67.*
+  - matplotlib
+  - python-graphviz=0.21.*
+  - pip:
+      - ray[default]

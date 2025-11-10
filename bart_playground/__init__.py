@@ -8,7 +8,8 @@ from .util import DefaultPreprocessor, Dataset
 from .visualization import visualize_tree
 from .xgb_init import fit_and_init_trees, _xgb_json_to_tree
 
-
+import logging
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART",
            "Change", "Grow", "Prune", "Swap", 

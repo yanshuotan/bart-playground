@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bart_playground"
+version = "0.2.0.dev1"
+description = "A fast and modular implementation of BART"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+# Authors listed in alphabetical order by last name
+authors = [
+    {name = "Ruizhe Deng", email = "drizmiz@outlook.com"},
+    {name = "Sumetha Loganathan", email = "sumetha.loganathan@u.nus.edu"},
+    {name = "Hengrui Luo", email = "hl180@rice.edu"},
+    {name = "Yankai Pei", email = "e1124549@u.nus.edu"},
+    {name = "Omer Ronen", email = "omer_ronen@berkeley.edu"},
+    {name = "Theo Saarinen", email = "theo_s@berkeley.edu"},
+    {name = "Yan Shuo Tan", email = "yanshuo@nus.edu.sg"},
+    {name = "Tianyi Zhuang", email = "e0950116@u.nus.edu"},
+]
+keywords = ["bart", "bayesian", "regression", "classification", "bandits"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "pandas>=2.1",
+    "scikit-learn>=1.5",
+    "numba>=0.60",
+    "arviz>=0.18",
+    "pydantic>=2.0,<3",
+    "tqdm>=4.66",
+    "graphviz>=0.20",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "xgboost",
+    "ray[default]",
+]
+test-full = [
+    "pytest",
+    "xgboost",
+    "bartz",
+    "pmlb",
+    "ray[default]",
+]
+viz = [
+    "matplotlib",
+]
+parallel = [
+    "ray[default]",
+]
+
+[project.urls]
+Homepage = "https://github.com/yanshuotan/bart-playground"
+Repository = "https://github.com/yanshuotan/bart-playground"
+Issues = "https://github.com/yanshuotan/bart-playground/issues"
+
+[tool.setuptools]
+packages = ["bart_playground"]
+
+[tool.setuptools.package-data]
+"*" = ["*.txt", "*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "benchmark: benchmark tests (slow, optional)",
+    "slow: slow tests",
+    "requires_bartz: requires bartz library",
+    "requires_pmlb: requires pmlb library",
+]
+
