@@ -14,5 +14,6 @@ dependencies:
   - pydantic
   - tqdm
   - matplotlib
+  - python-graphviz
   - pip:
       - ray[default]

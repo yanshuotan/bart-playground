@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bart_playground"
-version = "0.1.1"
+version = "0.2.0.dev1"
 description = "A fast and modular implementation of BART"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "Yan Shuo Tan", email = "yanshuo@nus.edu.sg"}
@@ -15,11 +15,10 @@ authors = [
 keywords = ["bart", "bayesian", "regression", "classification", "bandits"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Intended Audience :: Science/Research",
@@ -41,8 +40,14 @@ dependencies = [
 test = [
     "pytest",
     "xgboost",
+    "ray[default]",
+]
+test-full = [
+    "pytest",
+    "xgboost",
     "bartz",
     "pmlb",
+    "ray[default]",
 ]
 viz = [
     "matplotlib",
@@ -67,10 +72,10 @@ testpaths = ["tests/unit"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-
-[tool.pytest.ini_options.markers]
-benchmark = "benchmark tests (slow, optional)"
-slow = "slow tests"
-requires_bartz = "requires bartz library"
-requires_pmlb = "requires pmlb library"
+markers = [
+    "benchmark: benchmark tests (slow, optional)",
+    "slow: slow tests",
+    "requires_bartz: requires bartz library",
+    "requires_pmlb: requires pmlb library",
+]
 

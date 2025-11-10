@@ -18,7 +18,7 @@ conda activate bartts
 pip install -e .
 ```
 
-Requires Python 3.11.
+**Python Version**: Requires Python 3.9 or higher. Local development and testing primarily use Python 3.11. CI tests against Python 3.9, 3.10, 3.11, and 3.12.
 
 ## Quickstart
 
