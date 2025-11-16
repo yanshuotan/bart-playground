@@ -304,8 +304,9 @@ class DefaultBART(BART):
             hist = self.trace[k].vars_histogram
             if not hist:
                 continue
-            for var_idx, count in hist.items():
-                if 0 <= var_idx < p and count > 0:
+            # Counter only contains keys with count > 0, so no need to check count
+            for var_idx in hist.keys():
+                if 0 <= var_idx < p:
                     probs[var_idx] += 1.0
 
         probs /= float(self.ndpost)
@@ -342,7 +343,7 @@ class DefaultBART(BART):
                 if not hist:
                     continue
                 for var_idx, count in hist.items():
-                    if 0 <= var_idx < p and count > 0:
+                    if 0 <= var_idx < p:
                         freq[var_idx] += float(count)
                         total_splits += float(count)
             if total_splits > 0.0:
@@ -362,7 +363,7 @@ class DefaultBART(BART):
             if draw_total <= 0.0:
                 continue
             for var_idx, count in hist.items():
-                if 0 <= var_idx < p and count > 0:
+                if 0 <= var_idx < p:
                     freq[var_idx] += float(count) / draw_total
             draws_count += 1
 
