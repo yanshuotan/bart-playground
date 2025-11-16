@@ -60,6 +60,12 @@ class BARTActor:
     def apply(self, func, *args, **kwargs):
         return func(self.model, *args, **kwargs)
 
+    def feature_inclusion_frequency(self, normalize: str = "split"):
+        """
+        Return per-feature inclusion frequency for this actor's model.
+        """
+        return self.model.feature_inclusion_frequency(normalize=normalize)
+
 class MultiChainBART:
     """
     Multi-chain BART model that runs multiple BART chains in parallel using Ray.
@@ -197,6 +203,19 @@ class MultiChainBART:
         """
         futures = [actor.apply.remote(func, *args, **kwargs) for actor in self.bart_actors]
         return ray.get(futures)
+
+    def feature_inclusion_frequency(self, normalize: str = "split") -> np.ndarray:
+        """
+        Aggregate per-feature inclusion frequency across chains.
+
+        Each actor computes its own normalized frequency vector; we average them.
+        """
+        per_chain = ray.get(
+            [actor.feature_inclusion_frequency.remote(normalize) for actor in self.bart_actors]
+        )
+        if not per_chain:
+            return np.zeros(0, dtype=float)
+        return np.mean(np.stack(per_chain, axis=0), axis=0)
 
     def clean_up(self):
         for actor in self.bart_actors:

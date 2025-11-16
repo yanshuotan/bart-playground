@@ -235,7 +235,7 @@ class BARTTSAgent(BanditAgent):
         Compute chain-level MCMC diagnostics for the underlying model.
         """
         if not self.is_model_fitted or self.n_post <= 0:
-            return { }
+            return {}
         return compute_diagnostics(self.model, key=key)
 
     def diagnostics_probes(self, X_probes: np.ndarray) -> Dict[str, Any]:
@@ -300,7 +300,55 @@ class BARTTSAgent(BanditAgent):
         diag["meta"]["n_post"] = n_post
 
         return diag
-    
+
+    def feature_inclusion(self) -> Dict[str, Any]:
+        """
+        Compute per-feature inclusion statistics based on the current posterior.
+
+        Only support:
+          * regression BART (non-logistic)
+          * separate models encoding (one model per arm, native covariates)
+        """
+        if self.is_logistic:
+            raise NotImplementedError(
+                "feature_inclusion is only implemented for regression BARTTSAgent."
+            )
+        if not self.separate_models:
+            raise NotImplementedError(
+                "feature_inclusion currently only supports encoding='separate'."
+            )
+
+        # In the separate-models setup, we have one model per arm, each seeing the
+        # original covariates. We compute a per-arm inclusion frequency and then
+        # average across arms to get a single per-feature vector.
+        P = self.n_features
+        per_arm_inclusion: List[np.ndarray] = []
+
+        for model_any in self.models:
+            freq_func = getattr(model_any, "feature_inclusion_frequency")
+            freq = freq_func("split")
+            per_arm_inclusion.append(freq)
+
+        stacked = np.stack(per_arm_inclusion, axis=0)  # (n_arms, P)
+        inclusion = np.mean(stacked, axis=0)  # (P,)
+
+        feature_idx = np.arange(P, dtype=int)
+        df = pd.DataFrame(
+            {
+                "feature_idx": feature_idx,
+                "inclusion": inclusion,
+            }
+        )
+
+        meta: Dict[str, Any] = {
+            "n_features": P,
+            "n_arms": self.n_arms,
+            "encoding": self.encoding,
+            "n_post": int(self.n_post),
+        }
+
+        return {"meta": meta, "metrics": df}
+
     def choose_arm(self, x: Union[np.ndarray, List[float]], **kwargs) -> int:
         """
         Choose an arm based on input features x.
@@ -313,7 +361,7 @@ class BARTTSAgent(BanditAgent):
         """
         # Random selection during initial phase
         if self.t < self.initial_random_selections or not self.is_model_fitted:
-            return self.rng.integers(0, self.n_arms)
+            return int(self.rng.integers(0, self.n_arms))
         
         # Use BART model for arm selection
         action_estimates = self._get_action_estimates(x)

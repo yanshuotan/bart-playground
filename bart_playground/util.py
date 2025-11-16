@@ -241,7 +241,7 @@ class GIG:
         """
         Devroye (2014) logistic-transform sampler for GIG(eta, chi, psi).
         Parametrized as GIG(eta, chi, psi) where:
-        p \propto x^{eta-1} exp(-1/2 * (chi/x + psi*x)) for x > 0.
+        p \\propto x^{eta-1} exp(-1/2 * (chi/x + psi*x)) for x > 0.
         Equivalent to geninvgauss(eta, b, scale) where:
         b = sqrt(chi * psi) and scale = sqrt(chi / psi).
         """

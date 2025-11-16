@@ -93,3 +93,21 @@ class TestMultiChainBART:
         assert equal is False or any_diff is True
 
         m.clean_up()
+
+    def test_feature_inclusion_frequency(self):
+        X, y = _toy_regression(n=40, d=3, rng=4)
+        m = MultiChainBART(n_ensembles=3, random_state=777, ndpost=40, nskip=10, n_trees=15)
+        m.fit(X, y, quietly=True)
+
+        freq = m.feature_inclusion_frequency("split")
+        assert freq.shape == (X.shape[1],)
+        assert np.all(freq >= 0.0)
+        total = float(freq.sum())
+        assert total > 0.0
+        np.testing.assert_allclose(total, 1.0, atol=1e-6)
+
+        # Deterministic when the model state does not change
+        freq2 = m.feature_inclusion_frequency("split")
+        np.testing.assert_allclose(freq, freq2, atol=0, rtol=0)
+
+        m.clean_up()
