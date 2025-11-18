@@ -23,7 +23,8 @@ class BARTTSAgent(BanditAgent):
     def __init__(self, n_arms: int, n_features: int, model_factory: Callable,
                  initial_random_selections: int = 10,
                  random_state: int = 42,
-                 encoding: str = 'multi') -> None:
+                 encoding: str = 'multi',
+                 refresh_schedule: str = 'log') -> None:
         """
         Initialize the RefreshBART agent.
         
@@ -34,10 +35,16 @@ class BARTTSAgent(BanditAgent):
             initial_random_selections (int): Number of initial random selections before using model
             random_state (int): Random seed
             encoding (str): Encoding strategy ('multi', 'one-hot', 'separate', 'native')
+            refresh_schedule (str): Strategy to control model refresh frequency:
+                - 'log': Standard (default). Refresh when ceil(8*log(t)) jumps. Aggressive early, scarce later.
+                - 'sqrt': Balanced. Refresh when ceil(0.57*sqrt(t)) jumps. Smoother early phase.
+                - 'hybrid': Sqrt -> Log. Reduced early overhead, standard late behavior.
+                - 'rev_hybrid': Log -> Sqrt. Aggressive early learning, maintained alertness later.
         """
         super().__init__(n_arms, n_features)
         
         self.t = 1  # Time step counter
+        self.refresh_schedule = refresh_schedule
         self.initial_random_selections = initial_random_selections
         self.random_state = random_state
         self.rng = np.random.default_rng(self.random_state)
@@ -191,10 +198,36 @@ class BARTTSAgent(BanditAgent):
         
         return action_estimates
 
-    @staticmethod
-    def _refresh_idx(t: int) -> int:
+    def _refresh_idx(self, t: int) -> int:
         """Determine the time step at which the model should be refreshed."""
-        return int(np.ceil(8 * np.log(t)))
+        # Total number of refreshes at time t is normalized to ~56 at t=10k steps.
+        if self.refresh_schedule == 'log':
+            # Original: Aggressive early (t<100), very sparse late.
+            return int(np.ceil(8.0 * np.log(t)))
+            
+        elif self.refresh_schedule == 'sqrt':
+            # Balanced: Smoother early phase, consistent updates later.
+            return int(np.ceil(0.57 * np.sqrt(t)))
+            
+        elif self.refresh_schedule == 'hybrid':
+            # Hybrid (Switch @ 100): Sqrt -> Log
+            # Mitigates early overhead (Sqrt), then switches to efficient Log decay.
+            if t <= 100:
+                return int(np.ceil(1.848 * np.sqrt(t)))
+            else:
+                return int(np.ceil(9.240 * np.log(t) - 24.072))
+                
+        elif self.refresh_schedule == 'rev_hybrid':
+            # Rev-Hybrid (Switch @ 200): Log -> Sqrt
+            # Maintains aggressive early learning (Log), but keeps "alertness" later (Sqrt).
+            # Best for non-stationary or hard-to-converge environments.
+            if t <= 200:
+                return int(np.ceil(3.620 * np.log(t)))
+            else:
+                return int(np.ceil(0.512 * np.sqrt(t) + 11.940))
+                
+        else:
+            raise ValueError(f"Unknown refresh_schedule: {self.refresh_schedule}")
 
     def _should_refresh(self) -> bool:
         """Check if model should be refreshed based on time step."""
@@ -505,7 +538,8 @@ class DefaultBARTTSAgent(BARTTSAgent):
                  n_chains: int = 1,
                  tree_alpha: float = 0.95,
                  tree_beta: float = 2.0,
-                 quick_decay: bool = False) -> None:
+                 quick_decay: bool = False,
+                 refresh_schedule: str = 'log') -> None:
         
         if n_chains > 1:
             # Use MultiChainBART for ensemble modeling
@@ -537,7 +571,7 @@ class DefaultBARTTSAgent(BARTTSAgent):
             )
         
         super().__init__(n_arms, n_features, model_factory,
-                         initial_random_selections, random_state, encoding)
+                         initial_random_selections, random_state, encoding, refresh_schedule)
 
     def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
         """

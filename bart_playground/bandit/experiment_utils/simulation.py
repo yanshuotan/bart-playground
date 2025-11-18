@@ -3,6 +3,7 @@ from tqdm import tqdm
 import time, logging
 import pandas as pd
 import math
+import resource
 from typing import Callable, Optional
 
 sim_logger = logging.getLogger(__name__)
@@ -146,7 +147,12 @@ def simulate(
         elif draw_idx == n_draws:  # Always log the final draw
             should_log = True
             
-        if should_log:   
+        if should_log:
+                try:
+                    rss_gb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 ** 2)
+                    sim_logger.info(f"Resident Set Size={rss_gb:.2f} GB")
+                except Exception:
+                    pass
                 df = pd.DataFrame({
                     "AgentName":       agent_names,
                     "CumRegret":   cum_regrets[draw, :],
