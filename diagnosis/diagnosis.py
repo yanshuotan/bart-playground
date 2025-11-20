@@ -3,41 +3,23 @@ import matplotlib.pyplot as plt
 from statsmodels.tsa.stattools import kpss, acf
 import warnings
 
-def segmented_kpss_test(chain, segment_length=100, regression='c', alpha=0.05):
+def segmented_kpss_test(chain, window_length=100, step=5, regression='c', alpha=0.05):
     """
-    Perform segmented KPSS test to detect MCMC convergence
-    
-    Parameters:
-    -----------
-    chain : array-like
-        MCMC chain samples
-    segment_length : int
-        Length of each segment
-    regression : str
-        Type of regression ('c' for constant, 'ct' for constant and trend)
-    alpha : float
-        Significance level
-        
-    Returns:
-    --------
-    dict : convergence results
+    Perform sliding window KPSS test to detect MCMC convergence.
+    Window always ends at chain tail, start moves forward by step.
     """
     chain = np.array(chain)
     n_samples = len(chain)
-    n_segments = n_samples // segment_length
-    
     results = []
-    
-    for i in range(n_segments):
-        start = i * segment_length
-        end = (i + 1) * segment_length
-        segment = chain[start:end]
-        
-        # KPSS test - tests null hypothesis of stationarity
+
+    # Sliding window: window always ends at chain tail, start moves from 0 to n_samples - window_length
+    for start in range(0, n_samples - window_length + 1, step):
+        end = n_samples
+        window = chain[end-1:start:-1] # Window from end to start, reversed
         try:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=UserWarning)
-                kpss_stat, pvalue, lags, critical_values = kpss(segment, regression=regression)
+                kpss_stat, pvalue, lags, critical_values = kpss(window, regression=regression)
             
             # If p-value is at boundary (0.1), assume it's actually higher (more stationary)
             if pvalue >= 0.1:
@@ -47,57 +29,52 @@ def segmented_kpss_test(chain, segment_length=100, regression='c', alpha=0.05):
             # If KPSS fails, assume non-stationary
             kpss_stat = np.nan
             pvalue = 0.01
-        
-        # For KPSS, we want to NOT reject null (p > alpha means stationary/converged)
-        converged = pvalue > alpha
-        
+        rejected = pvalue < alpha
         results.append({
-            'segment': i,
-            'end_iter': end,
+            'start': start,
+            'end': end,
             'kpss_stat': kpss_stat,
             'pvalue': pvalue,
-            'converged': converged
+            'rejected': rejected
         })
-    
-    # Find convergence point (3 consecutive converged segments)
+
+    # Find convergence point: first occurrence of 3 consecutive rejected windows from the tail
     convergence_iter = None
-    for i in range(len(results) - 2):
-        if all(results[j]['converged'] for j in range(i, i+3)):
-            convergence_iter = results[i+2]['end_iter']
+    for i in range(len(results) - 1, 1, -1):
+        if all(results[j]['rejected'] for j in range(i, i-3, -1)):
+            convergence_iter = results[i-2]['start']
             break
-    
+
     # Plot diagnostics
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    
+
     # Chain trace
     ax1.plot(chain)
-    if convergence_iter:
-        ax1.axvline(convergence_iter, color='red', linestyle='--', 
-                   label=f'Convergence at {convergence_iter}')
+    if convergence_iter is not None:
+        ax1.axvline(convergence_iter, color='red', linestyle='--',
+                    label=f'Convergence at {convergence_iter}')
     ax1.set_title('MCMC Trace')
     ax1.set_xlabel('Iteration')
     ax1.legend()
-    
-    # P-values by segment
-    end_iters = [r['end_iter'] for r in results]
+
+    # P-values by window start
+    starts = [r['start'] for r in results]
     pvalues = [r['pvalue'] for r in results]
-    converged_status = [r['converged'] for r in results]
-    
-    colors = ['green' if c else 'red' for c in converged_status]
-    ax2.scatter(end_iters, pvalues, c=colors)
+    colors = ['red' if r['rejected'] else 'green' for r in results]
+    ax2.scatter(starts, pvalues, c=colors)
     ax2.axhline(alpha, color='red', linestyle='--', label=f'α = {alpha}')
-    ax2.set_title('KPSS p-values by Segment')
-    ax2.set_xlabel('End Iteration')
+    ax2.set_title('KPSS p-values by Window Start')
+    ax2.set_xlabel('Window Start')
     ax2.set_ylabel('p-value')
     ax2.legend()
-    
+
     plt.tight_layout()
     plt.show()
-    
+
     return {
         'converged': convergence_iter is not None,
         'convergence_iteration': convergence_iter,
-        'convergence_rate': np.mean([r['converged'] for r in results]),
+        'rejection_rate': np.mean([r['rejected'] for r in results]),
         'results': results
     }
 

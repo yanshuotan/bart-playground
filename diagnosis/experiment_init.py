@@ -59,10 +59,8 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tr
     
     # Train default BART model
     proposal_probs_default = {
-        'grow': 0.25,
-        'prune': 0.25,
-        'change': 0.4,
-        'swap': 0.1
+        'grow': 0.5,
+        'prune': 0.5
     }
     bart_default = DefaultBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
                     proposal_probs=proposal_probs_default, random_state=0, init_trees=random_trees)
@@ -77,10 +75,8 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tr
     
     # Train MTMH BART model
     proposal_probs_mtmh = {
-        'multi_grow': 0.25,
-        'multi_prune': 0.25,
-        'multi_change': 0.4,
-        'multi_swap': 0.1
+        'multi_grow': 0.5,
+        'multi_prune': 0.5
     }
     bart_mtmh = MultiBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
                           proposal_probs=proposal_probs_mtmh, multi_tries=m_tries, 
