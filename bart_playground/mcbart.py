@@ -66,6 +66,10 @@ class BARTActor:
         """
         return self.model.feature_inclusion_frequency(normalize=normalize)
 
+    def get_params(self):
+        """Proxy to get params from the underlying model."""
+        return self.model.get_params()
+
 class MultiChainBART:
     """
     Multi-chain BART model that runs multiple BART chains in parallel using Ray.
@@ -221,4 +225,15 @@ class MultiChainBART:
         for actor in self.bart_actors:
             ray.kill(actor)
         print("Ray Actors have been cleaned up.")
+        
+    def get_params(self) -> Dict[str, Any]:
+        """Get parameters from the first actor and add ensemble info."""
+        if not self.bart_actors:
+            return {}
+        # Get params from the first actor
+        base_params : Dict[str, Any] = ray.get(self.bart_actors[0].get_params.remote())
+        # Add ensemble-level params
+        base_params["n_ensembles"] = self.n_ensembles
+        base_params["model_type"] = f"MultiChainBART({base_params.get('model_type', 'Unknown')})"
+        return base_params
         

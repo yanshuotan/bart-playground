@@ -257,7 +257,7 @@ class GlobalParamPrior:
 
     def fit_hyperparameters(self, data):
         """Fit the prior hyperparameters to the data"""
-        self.eps_lambda = self._fit_eps_lambda(data)
+        self.eps_lambda = self._fit_eps_lambda(data, self.specification)
         
     def init_global_params(self, data):
         """
@@ -323,7 +323,7 @@ class GlobalParamPrior:
         s = self.generator.dirichlet(s_alpha / p + vars_histogram_array)
         return s
     
-    def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:
+    def _fit_eps_lambda(self, data : Dataset, specification: str) -> float:
         """
         Compute the lambda parameter for the noise variance prior.
         Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.

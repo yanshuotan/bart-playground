@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from typing import Callable, List, Union, Tuple, cast, Optional, Dict, Any
+from typing import Callable, List, Union, Tuple, cast, Optional, Dict, Any, Set
 import logging
 from abc import abstractmethod
 from bart_playground.bart import DefaultBART, LogisticBART, BART
@@ -10,6 +10,27 @@ from bart_playground.bandit.experiment_utils.encoder import BanditEncoder
 from bart_playground.diagnostics import compute_diagnostics, MoveAcceptance
 
 logger = logging.getLogger(__name__)
+
+def _prepare_bart_kwargs(default_kwargs: Dict[str, Any], 
+                         user_kwargs: Optional[Dict[str, Any]]) -> Tuple[int, Dict[str, Any]]:
+    """
+    Helper to merge default and user kwargs
+    """
+    merged = dict(default_kwargs)
+    if user_kwargs:
+        merged.update(user_kwargs)
+        
+    # If quick_decay is True and tree_alpha is not specified, default tree_alpha to 0.4
+    if merged.get("quick_decay", False) and "tree_alpha" not in merged:
+        merged["tree_alpha"] = 0.4
+        
+    # Pop ndpost to use as base for the lambda default
+    base_ndpost = int(merged.pop("ndpost", 1000))
+    
+    # Ensure random_state is not in kwargs to avoid collision with explicit arg
+    merged.pop("random_state", None)
+    
+    return base_ndpost, merged
 
 class BARTTSAgent(BanditAgent):
     """
@@ -84,6 +105,9 @@ class BARTTSAgent(BanditAgent):
         self._post_indices = []
         self._post_idx_pos = 0
         
+        # Flag for logging model params once
+        self._has_logged_params = False
+        
     @property
     def model(self):
         return self.models[0]
@@ -154,6 +178,14 @@ class BARTTSAgent(BanditAgent):
                 self.model = new_model
 
             self.is_model_fitted = True
+            
+            # Log model parameters on first successful fit
+            if not self._has_logged_params:
+                params = self.model.get_params()
+                logger.info(f"First model refresh complete. Effective model parameters:")
+                for k, v in params.items():
+                    logger.info(f"  - {k}: {v}")
+                self._has_logged_params = True
 
             # Reset sequential posterior index queue
             self._reset_post_queue()
@@ -529,45 +561,36 @@ class DefaultBARTTSAgent(BARTTSAgent):
     When n_chains > 1, uses MultiChainBART for ensemble modeling.
     """
     def __init__(self, n_arms: int, n_features: int,
-                 ndpost: int = 1000, nskip: int = 100,
-                 n_trees: int = 200,
-                 dirichlet_prior: bool = False,
                  initial_random_selections: int = 10,
                  random_state: int = 42,
                  encoding: str = 'multi',
                  n_chains: int = 1,
-                 tree_alpha: float = 0.95,
-                 tree_beta: float = 2.0,
-                 quick_decay: bool = False,
-                 refresh_schedule: str = 'log') -> None:
+                 refresh_schedule: str = 'log',
+                 bart_kwargs: Optional[Dict[str, Any]] = None) -> None:
+        
+        default_bart_kwargs: Dict[str, Any] = {
+            "ndpost": 1000,
+            "nskip": 100,
+            "specification": "naive",
+            "eps_nu": 1.0
+        }
+        
+        base_ndpost, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)
         
         if n_chains > 1:
-            # Use MultiChainBART for ensemble modeling
-            model_factory = lambda new_ndpost=ndpost: MultiChainBART(
+            # ndpost may be changed in the run, so we use a lambda function to ensure it's passed to the model
+            model_factory = lambda new_ndpost=base_ndpost: MultiChainBART(
                 n_ensembles=n_chains,
                 bart_class=DefaultBART,
-                n_trees=n_trees,
-                ndpost=new_ndpost,
-                nskip=nskip,
                 random_state=random_state,
-                proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
-                dirichlet_prior=dirichlet_prior,
-                tree_alpha=tree_alpha,
-                tree_beta=tree_beta,
-                quick_decay=quick_decay
+                ndpost=new_ndpost,
+                **merged_bart_kwargs
             )
         else:
-            # Use single DefaultBART instance
-            model_factory = lambda new_ndpost=ndpost: DefaultBART(
-                n_trees=n_trees,
-                ndpost=new_ndpost,
-                nskip=nskip,
+            model_factory = lambda new_ndpost=base_ndpost: DefaultBART(
                 random_state=random_state,
-                proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1},
-                dirichlet_prior=dirichlet_prior,
-                tree_alpha=tree_alpha,
-                tree_beta=tree_beta,
-                quick_decay=quick_decay
+                ndpost=new_ndpost,
+                **merged_bart_kwargs
             )
         
         super().__init__(n_arms, n_features, model_factory,
@@ -625,23 +648,28 @@ class LogisticBARTTSAgent(BARTTSAgent):
     Refresh BART agent for binary outcomes using logistic regression.
     """
     def __init__(self, n_arms: int, n_features: int,
-                 ndpost: int = 1000, nskip: int = 100,
-                 n_trees: int = 200,
                  initial_random_selections: int = 10,
                  random_state: int = 42,
-                 encoding: str = 'native') -> None:
+                 encoding: str = 'native',
+                 refresh_schedule: str = 'log',
+                 bart_kwargs: Optional[Dict[str, Any]] = None) -> None:
         if n_arms > 2 and encoding == 'native':
             raise NotImplementedError("RefreshLogisticBARTAgent: native encoding currently only supports n_arms = 2.")
         
-        model_factory = lambda new_ndpost=ndpost: LogisticBART(
-            n_trees=n_trees,
-            ndpost=new_ndpost,
-            nskip=nskip,
+        default_bart_kwargs: Dict[str, Any] = {
+            "ndpost": 1000,
+            "nskip": 100,
+        }
+        
+        base_ndpost, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)
+        
+        model_factory = lambda new_ndpost=base_ndpost: LogisticBART(
             random_state=random_state,
-            proposal_probs={"grow": 0.4, "prune": 0.4, "change": 0.1, "swap": 0.1}
+            ndpost=new_ndpost,
+            **merged_bart_kwargs
         )
         super().__init__(n_arms, n_features, model_factory,
-                         initial_random_selections, random_state, encoding)
+                         initial_random_selections, random_state, encoding, refresh_schedule)
 
     def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
         """

@@ -1,6 +1,6 @@
 from warnings import warn
 import numpy as np
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, Any
 from scipy.stats import norm
 
 from .samplers import Sampler, DefaultSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
@@ -24,6 +24,10 @@ class BART:
         self.trace = []
         self.is_fitted = False
         self.data = None
+
+    def get_params(self) -> Dict[str, Any]:
+        """Get effective parameters for this model instance."""
+        return {"ndpost": self.ndpost, "nskip": self.nskip}
 
     def fit(self, X, y, quietly = False):
         """
@@ -268,6 +272,24 @@ class DefaultBART(BART):
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
         
+    def get_params(self) -> Dict[str, Any]:
+        """Get all effective parameters for this model instance."""
+        return {
+            "model_type": "DefaultBART",
+            "ndpost": self.ndpost,
+            "nskip": self.nskip,
+            "n_trees": self.sampler.tree_prior.n_trees,
+            "tree_alpha": self.sampler.tree_prior.alpha,
+            "tree_beta": self.sampler.tree_prior.beta,
+            "f_k": self.sampler.tree_prior.f_k,
+            "eps_nu": self.sampler.prior.global_prior.eps_nu,
+            "eps_q": self.sampler.prior.global_prior.eps_q,
+            "specification": self.sampler.prior.global_prior.specification,
+            "dirichlet_prior": self.sampler.prior.global_prior.dirichlet_prior,
+            "quick_decay": self.sampler.tree_prior.quick_decay,
+            "proposal_probs": self.sampler.proposals
+        }
+        
     def predict_proba(self, X):
         """
         DefaultBART doesn't support classification probabilities.
@@ -474,6 +496,21 @@ class LogisticBART(BART):
                                generator=rng, tol=tol, temp_schedule=temp_schedule)
         self.sampler : LogisticSampler
         super().__init__(preprocessor, sampler, ndpost, nskip)
+
+    def get_params(self) -> Dict[str, Any]:
+        """Get all effective parameters for this model instance."""
+        return {
+            "model_type": "LogisticBART",
+            "ndpost": self.ndpost,
+            "nskip": self.nskip,
+            "n_trees": self.sampler.tree_prior.n_trees,
+            "tree_alpha": self.sampler.tree_prior.alpha,
+            "tree_beta": self.sampler.tree_prior.beta,
+            "c": self.sampler.tree_prior.c,
+            "d": self.sampler.tree_prior.d,
+            "quick_decay": self.sampler.tree_prior.quick_decay,
+            "proposal_probs": self.sampler.proposals
+        }
         
     @property
     def n_categories(self):
