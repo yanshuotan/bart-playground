@@ -74,6 +74,7 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tr
     pipeline_bart = PipelineBART(ndpost=ndpost-multi_iter, nskip=nskip, n_trees=n_trees, 
                                  multi_proposal_probs=proposal_probs_mtmh,
                                  proposal_probs=proposal_probs_default,
+                                 tol=1,
                                  tree_alpha=tree_alpha, tree_beta=tree_beta,
                                  multi_tries=m_tries, random_state=0, init_trees=random_trees)
     pipeline_bart.fit(X_train, y_train, multi_iter=multi_iter)
@@ -88,7 +89,7 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tr
     max_depths_pipeline = [depth[1] for depth in depths_pipeline]
 
     # Train default BART model
-    bart_default = DefaultBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
+    bart_default = DefaultBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees, tol=1,
                     proposal_probs=proposal_probs_default, random_state=0, init_trees=random_trees)
     bart_default.fit(X_train, y_train)
     
@@ -102,7 +103,7 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tr
     max_depths_default = [depth[1] for depth in depths_default]
 
     # Train MTMH BART model
-    bart_mtmh = MultiBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
+    bart_mtmh = MultiBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees, tol=1,
                     proposal_probs=proposal_probs_mtmh, multi_tries=m_tries, 
                     tree_alpha=tree_alpha, tree_beta=tree_beta, # Only for mtmh prior
                     random_state=0, init_trees=random_trees)

@@ -166,6 +166,7 @@ def _simulate_split_leaf(dataX, vars, thresholds, node_id, var, threshold, origi
     n_nodes = len(vars)
     left_child = node_id * 2 + 1
     right_child = node_id * 2 + 2
+    threshold = np.float32(threshold)
     
     # Create new arrays for the hypothetical tree state
     max_needed_size = 2 * n_nodes if right_child >= n_nodes else n_nodes
