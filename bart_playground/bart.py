@@ -5,7 +5,7 @@ from scipy.stats import norm
 
 from .samplers import Sampler, DefaultSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
 from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
-from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor
+from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor, Dataset
 
 
 class BART:
@@ -33,11 +33,20 @@ class BART:
         """
         Fit the BART model.
         """
-        self.data = self.preprocessor.fit_transform(X, y)
+        data = self.preprocessor.fit_transform(X, y)
+        return self.fit_with_data(data, quietly=quietly)
+    
+    def fit_with_data(self, data: Dataset, preprocessor: Preprocessor, quietly=False):
+        """
+        Fit the BART model using a preprocessed dataset.
+        """
+        self.data = data
+        self.preprocessor = preprocessor
         self.sampler.add_data(self.data)
         self.sampler.add_thresholds(self.preprocessor.thresholds)
         self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly, n_skip=self.nskip)
         self.is_fitted = True
+        return self
     
     def update_fit(self, X, y, add_ndpost=20, quietly=False):
         """
@@ -62,15 +71,24 @@ class BART:
             self.fit(X_combined, y_combined, quietly=quietly)
             return self
 
+        updated_data = self.preprocessor.update_transform(X, y, self.data)
+        return self.update_fit_with_data(updated_data, add_ndpost=add_ndpost, quietly=quietly)
+    
+    def update_fit_with_data(self, data: Dataset,
+     preprocessor: Preprocessor, add_ndpost=20, quietly=False):
+        """
+        Update an existing fitted model with a new preprocessed dataset.
+        """
+        if self.data is None or not self.is_fitted:
+            return self.fit_with_data(data, preprocessor, quietly=quietly)
         additional_iters = add_ndpost
         # Set all previous iterations as burn-in
         self.nskip += self.ndpost
         # Set new add_ndpost iterations as post-burn-in
         self.ndpost = add_ndpost
-        
-        # Update the dataset using the appropriate preprocessor method
-        self.data = self.preprocessor.update_transform(X, y, self.data)
-            
+
+        self.data = data
+        self.preprocessor = preprocessor
         # Update thresholds 
         # if needed TODO
         self.sampler.add_thresholds(self.preprocessor.thresholds)
@@ -258,13 +276,14 @@ class BART:
             self.trace[k] = None
 
 class DefaultBART(BART):
+    preprocessor_class = DefaultPreprocessor
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, dirichlet_prior=False, quick_decay: bool = False):
-        preprocessor = DefaultPreprocessor(max_bins=max_bins)
+        preprocessor = self.preprocessor_class(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
                              eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay)
@@ -399,13 +418,14 @@ class ProbitBART(BART):
     """
     Binary BART implementation using Albert-Chib data augmentation and probit link.
     """
+    preprocessor_class = ClassificationPreprocessor
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95,
                  tree_beta: float=2.0,
                  f_k=2.0,
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, quick_decay: bool = False):
-        preprocessor = ClassificationPreprocessor(max_bins=max_bins)
+        preprocessor = self.preprocessor_class(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ProbitPrior(n_trees, tree_alpha, tree_beta, f_k, rng, quick_decay=quick_decay)
         temp_schedule = self._check_temperature(temperature)
@@ -483,12 +503,14 @@ class LogisticBART(BART):
     """
     Logistic BART implementation using logistic link function.
     """
+    preprocessor_class = ClassificationPreprocessor
+
     def __init__(self, ndpost=1000, nskip=100, n_trees=25, tree_alpha: float=0.95,
                  tree_beta: float=2.0, 
                  c: float = 0.0, d: float = 0.0,
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, quick_decay: bool = False):
-        preprocessor = ClassificationPreprocessor(max_bins=max_bins)
+        preprocessor = self.preprocessor_class(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = LogisticPrior(n_trees, tree_alpha, tree_beta, c, d, rng, quick_decay=quick_decay)
         temp_schedule = self._check_temperature(temperature)

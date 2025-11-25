@@ -1,8 +1,10 @@
+import copy
 import numpy as np
 import ray
-from typing import Callable, Any, List, Dict
+from typing import Callable, Any, List, Dict, Optional
 from .bart import DefaultBART 
 from .serializer import bart_to_json
+from .util import Dataset
 
 @ray.remote
 class BARTActor:
@@ -11,13 +13,13 @@ class BARTActor:
         # Each actor gets its own BART instance, initialized with a unique random state.
         self.model = bart_class(random_state=random_state, **kwargs)
 
-    def fit(self, X, y, quietly=False):
-        self.model.fit(X, y, quietly=quietly)
+    def fit(self, dataset, preprocessor, quietly=False):
+        self.model.fit_with_data(dataset, preprocessor, quietly=quietly)
         # We don't need to return the model itself, as its state is maintained within the actor.
         return True # Return a success signal
 
-    def update_fit(self, X, y, add_ndpost=20, quietly=False):
-        self.model.update_fit(X, y, add_ndpost=add_ndpost, quietly=quietly)
+    def update_fit(self, dataset, preprocessor, add_ndpost=20, quietly=False):
+        self.model.update_fit_with_data(dataset, preprocessor, add_ndpost=add_ndpost, quietly=quietly)
         return True # Return a success signal
 
     def predict(self, X):
@@ -79,6 +81,8 @@ class MultiChainBART:
         self.n_ensembles = n_ensembles
         self.bart_class = bart_class
         self.ndpost = ndpost
+        self._driver_preprocessor = bart_class.preprocessor_class(max_bins=kwargs.get('max_bins', 100))
+        self._dataset: Optional[Dataset] = None
         
         # Initialize Ray. ignore_reinit_error is useful in interactive environments.
         if not ray.is_initialized():
@@ -131,17 +135,28 @@ class MultiChainBART:
     def fit(self, X, y, quietly=False):
         """Fit all BART instances in parallel using Ray actors."""
         # This is a non-blocking call. It returns futures immediately.
-        fit_futures = [actor.fit.remote(X, y, quietly) for actor in self.bart_actors]
+        dataset = self._driver_preprocessor.fit_transform(X, y)
+        data_ref, prep_ref = self._share_dataset(dataset)
+        fit_futures = [actor.fit.remote(data_ref, prep_ref, quietly) for actor in self.bart_actors]
         # This is a blocking call that waits for all actors to finish their fit.
         ray.get(fit_futures)
+        return self
     
     def update_fit(self, X, y, add_ndpost=20, quietly=False):
         """
         Update all BART instances in parallel with very low overhead.
         This sends a command to the existing actors without process creation.
         """
-        update_futures = [actor.update_fit.remote(X, y, add_ndpost, quietly) for actor in self.bart_actors]
+        if self._dataset is None:
+            return self.fit(X, y, quietly=quietly)
+        updated_dataset = self._driver_preprocessor.update_transform(X, y, self._dataset)
+        data_ref, prep_ref = self._share_dataset(updated_dataset)
+        update_futures = [
+            actor.update_fit.remote(data_ref, prep_ref, add_ndpost, quietly)
+            for actor in self.bart_actors
+        ]
         ray.get(update_futures)
+        return self
 
     def predict(self, X):
         """Predict using all BART instances and average the results."""
@@ -236,4 +251,10 @@ class MultiChainBART:
         base_params["n_ensembles"] = self.n_ensembles
         base_params["model_type"] = f"MultiChainBART({base_params.get('model_type', 'Unknown')})"
         return base_params
+
+    def _share_dataset(self, dataset: Dataset):
+        self._dataset = dataset
+        data_ref = ray.put(dataset)
+        preproc_ref = ray.put(self._driver_preprocessor)
+        return data_ref, preproc_ref
         

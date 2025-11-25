@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from bart_playground.mcbart import MultiChainBART
+from bart_playground.util import Dataset
 
 
 def _toy_regression(n=40, d=3, rng=None):
@@ -109,5 +110,25 @@ class TestMultiChainBART:
         # Deterministic when the model state does not change
         freq2 = m.feature_inclusion_frequency("split")
         np.testing.assert_allclose(freq, freq2, atol=0, rtol=0)
+
+        m.clean_up()
+
+    def test_shared_dataset_reference_reused(self):
+        X, y = _toy_regression(n=20, d=2, rng=5)
+        m = MultiChainBART(n_ensembles=2, random_state=42, ndpost=20, nskip=5, n_trees=8)
+        m.fit(X, y, quietly=True)
+
+        assert m._dataset is not None
+        dataset: Dataset = m._dataset
+
+        transformed = m._driver_preprocessor.transform(X, y)
+        np.testing.assert_allclose(dataset.X, transformed.X)
+        np.testing.assert_allclose(dataset.y, transformed.y)
+
+        old_dataset = m._dataset
+        m.update_fit(X[:5], y[:5], add_ndpost=5, quietly=True)
+        updated_dataset: Dataset = m._dataset
+        assert updated_dataset is not old_dataset
+        assert updated_dataset.n == transformed.n + 5
 
         m.clean_up()
