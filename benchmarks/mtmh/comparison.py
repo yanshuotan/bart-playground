@@ -3,6 +3,9 @@ import pandas as pd
 import bartz
 from stochtree import BARTModel
 from bart_playground import *
+# Add logging configuration before importing arviz
+import logging
+logging.getLogger('arviz.preview').setLevel(logging.WARNING)
 import arviz as az
 import time
 from sklearn.model_selection import train_test_split
@@ -18,7 +21,8 @@ def _gelman_rubin_single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, propo
     rmse_chains_mtmh = []
     for i in range(n_chains):
         bart = MultiBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
-                         proposal_probs=proposal_probs_mtmh, multi_tries=10, random_state=seed*100+i)
+                         proposal_probs=proposal_probs_mtmh, tol=1,
+                         multi_tries=10, random_state=seed*100+i)
         bart.fit(X_train, y_train, quietly=True)
         sigmas = [trace.global_params['eps_sigma2'] for trace in bart.sampler.trace]
         preds = bart.posterior_f(X_test, backtransform=True)
@@ -40,7 +44,8 @@ def _gelman_rubin_single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, propo
     rmse_chains_default = []
     for i in range(n_chains):
         bart_default = DefaultBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
-                                  proposal_probs=proposal_probs_default, random_state=seed*100+i)
+                                  proposal_probs=proposal_probs_default, tol=1,
+                                  random_state=seed*100+i)
         bart_default.fit(X_train, y_train, quietly=True)
         sigmas = [trace.global_params['eps_sigma2'] for trace in bart_default.sampler.trace]
         preds = bart_default.posterior_f(X_test, backtransform=True)
@@ -61,9 +66,9 @@ def _gelman_rubin_single_run(seed, X, y, n_chains, ndpost, nskip, n_trees, propo
 
 def gelman_rubin_r_compare(
     X, y,
-    n_runs=5, n_chains=4,
+    n_runs=8, n_chains=4,
     ndpost=1000, nskip=200, n_trees=100,
-    n_jobs=1
+    n_jobs=-1
 ):
     proposal_probs_mtmh = {"multi_grow": 0.25, "multi_prune": 0.25, "multi_change": 0.4, "multi_swap": 0.1}
     proposal_probs_default = {"grow": 0.25, "prune": 0.25, "change": 0.4, "swap": 0.1}
@@ -99,14 +104,14 @@ def _bart_mse_single_run(seed, X, y, n_skip, n_post, n_trees):
     # bart_mtmh
     t0 = time.time()
     proposal_probs_mtmh = {"multi_grow": 0.25, "multi_prune": 0.25, "multi_change": 0.4, "multi_swap": 0.1}
-    bart_mtmh = MultiBART(ndpost=n_post, nskip=n_skip, n_trees=n_trees, proposal_probs=proposal_probs_mtmh, multi_tries=10, random_state=seed)
+    bart_mtmh = MultiBART(ndpost=n_post, nskip=n_skip, n_trees=n_trees, proposal_probs=proposal_probs_mtmh, multi_tries=10, tol=1, random_state=seed)
     bart_mtmh.fit(X_train, y_train, quietly=True)
     train_time["bart_mtmh"] = time.time() - t0
 
     # bart_default
     t0 = time.time()
     proposal_probs_default = {"grow": 0.25, "prune": 0.25, "change": 0.4, "swap": 0.1}
-    bart = DefaultBART(ndpost=n_post, nskip=n_skip, n_trees=n_trees, proposal_probs=proposal_probs_default, random_state=seed)
+    bart = DefaultBART(ndpost=n_post, nskip=n_skip, n_trees=n_trees, proposal_probs=proposal_probs_default, tol=1, random_state=seed)
     bart.fit(X_train, y_train, quietly=True)
     train_time["bart"] = time.time() - t0
 
@@ -207,7 +212,7 @@ def _bart_mse_single_run(seed, X, y, n_skip, n_post, n_trees):
         "train_time": train_time
     }
 
-def bart_mse_comparison(X, y, n_runs=10, n_skip=100, n_post=100, n_trees=100, n_jobs=1):
+def bart_mse_comparison(X, y, n_runs=8, n_skip=100, n_post=100, n_trees=100, n_jobs=-1):
     results_list = Parallel(n_jobs=n_jobs)(
         delayed(_bart_mse_single_run)(seed, X, y, n_skip, n_post, n_trees) for seed in range(n_runs)
     )
