@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from typing import Callable, List, Union, Tuple, cast, Optional, Dict, Any, Set
+from typing import Callable, List, Union, Tuple, cast, Optional, Dict, Any
 import logging
 from abc import abstractmethod
 from bart_playground.bart import DefaultBART, LogisticBART, BART
@@ -8,6 +8,12 @@ from bart_playground.mcbart import MultiChainBART
 from bart_playground.bandit.agents.agent import BanditAgent
 from bart_playground.bandit.experiment_utils.encoder import BanditEncoder
 from bart_playground.diagnostics import compute_diagnostics, MoveAcceptance
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +26,9 @@ def _prepare_bart_kwargs(default_kwargs: Dict[str, Any],
     if user_kwargs:
         merged.update(user_kwargs)
         
-    # If quick_decay is True and tree_alpha is not specified, default tree_alpha to 0.4
+    # If quick_decay is True and tree_alpha is not specified, default tree_alpha to 0.45
     if merged.get("quick_decay", False) and "tree_alpha" not in merged:
-        merged["tree_alpha"] = 0.4
+        merged["tree_alpha"] = 0.45
         
     # Pop ndpost to use as base for the lambda default
     base_ndpost = int(merged.pop("ndpost", 1000))
@@ -189,6 +195,32 @@ class BARTTSAgent(BanditAgent):
 
             # Reset sequential posterior index queue
             self._reset_post_queue()
+            
+            # Memory tracking after refresh
+            if PSUTIL_AVAILABLE:
+                try:
+                    process = psutil.Process()
+                    mem_main = process.memory_info().rss / (1024 ** 2)  # MB
+                    
+                    # Include memory from child processes (e.g., Ray actors)
+                    # Handle race condition where child processes may exit during iteration
+                    mem_children_bytes = 0
+                    for child in process.children(recursive=True):
+                        try:
+                            mem_children_bytes += child.memory_info().rss
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                            
+                    mem_children = mem_children_bytes / (1024 ** 2)
+                    mem_total = mem_main + mem_children
+                    
+                    if mem_children > 0:
+                        logger.info(f"Memory: {mem_total:.1f} MB (main: {mem_main:.1f} MB, workers: {mem_children:.1f} MB)")
+                    else:
+                        logger.info(f"Memory: {mem_total:.1f} MB")
+                except Exception:
+                    # Don't let memory logging crash the agent
+                    pass
 
         except Exception:
             logger.exception('Failed to refresh model; keeping previous model(s) in place')
