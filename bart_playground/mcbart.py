@@ -14,13 +14,14 @@ class BARTActor:
         self.model = bart_class(random_state=random_state, **kwargs)
 
     def fit(self, dataset, preprocessor, quietly=False):
-        self.model.fit_with_data(dataset, preprocessor, quietly=quietly)
-        # We don't need to return the model itself, as its state is maintained within the actor.
-        return True # Return a success signal
+        self.model.preprocessor = preprocessor
+        self.model.fit_with_data(dataset, quietly=quietly)
+        return True
 
     def update_fit(self, dataset, preprocessor, add_ndpost=20, quietly=False):
-        self.model.update_fit_with_data(dataset, preprocessor, add_ndpost=add_ndpost, quietly=quietly)
-        return True # Return a success signal
+        self.model.preprocessor = preprocessor
+        self.model.update_fit_with_data(dataset, add_ndpost=add_ndpost, quietly=quietly)
+        return True
 
     def predict(self, X):
         return self.model.predict(X)

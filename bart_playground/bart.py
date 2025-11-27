@@ -36,12 +36,11 @@ class BART:
         data = self.preprocessor.fit_transform(X, y)
         return self.fit_with_data(data, quietly=quietly)
     
-    def fit_with_data(self, data: Dataset, preprocessor: Preprocessor, quietly=False):
+    def fit_with_data(self, data: Dataset, quietly=False):
         """
         Fit the BART model using a preprocessed dataset.
         """
         self.data = data
-        self.preprocessor = preprocessor
         self.sampler.add_data(self.data)
         self.sampler.add_thresholds(self.preprocessor.thresholds)
         self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly, n_skip=self.nskip)
@@ -74,13 +73,12 @@ class BART:
         updated_data = self.preprocessor.update_transform(X, y, self.data)
         return self.update_fit_with_data(updated_data, add_ndpost=add_ndpost, quietly=quietly)
     
-    def update_fit_with_data(self, data: Dataset,
-     preprocessor: Preprocessor, add_ndpost=20, quietly=False):
+    def update_fit_with_data(self, data: Dataset, add_ndpost=20, quietly=False):
         """
         Update an existing fitted model with a new preprocessed dataset.
         """
         if self.data is None or not self.is_fitted:
-            return self.fit_with_data(data, preprocessor, quietly=quietly)
+            return self.fit_with_data(data, quietly=quietly)
         additional_iters = add_ndpost
         # Set all previous iterations as burn-in
         self.nskip += self.ndpost
@@ -88,9 +86,6 @@ class BART:
         self.ndpost = add_ndpost
 
         self.data = data
-        self.preprocessor = preprocessor
-        # Update thresholds 
-        # if needed TODO
         self.sampler.add_thresholds(self.preprocessor.thresholds)
         
         # Run the sampler for additional iterations
