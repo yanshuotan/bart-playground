@@ -8,12 +8,36 @@ from .util import Dataset
 
 @ray.remote
 class BARTActor:
-    """A Ray Actor to hold and manage a single stateful BART instance."""
-    def __init__(self, bart_class, random_state, **kwargs):
-        # Each actor gets its own BART instance, initialized with a unique random state.
-        self.model = bart_class(random_state=random_state, **kwargs)
+    """A Ray Actor that can hold multiple stateful BART instances (one per arm)."""
+    def __init__(self, bart_class, random_state, n_models: int = 1, **kwargs):
+        self._bart_class = bart_class
+        self._kwargs = dict(kwargs)
+        self._n_models = int(n_models)
+        seed_seq = random_state if isinstance(random_state, np.random.SeedSequence) else np.random.SeedSequence(int(random_state))
+        self._seeds = seed_seq.spawn(self._n_models)
+        self.models = [
+            bart_class(random_state=s, **self._kwargs)
+            for s in self._seeds
+        ]
+        self._active = 0
+
+    def set_active_model(self, model_id: int):
+        self._active = int(model_id)
+        return True
+
+    @property
+    def model(self):
+        return self.models[self._active]
+
+    def _reinit_active_model(self):
+        """Re-build the active BART instance from scratch (fresh sampler state)."""
+        self.models[self._active] = self._bart_class(
+            random_state=self._seeds[self._active],
+            **self._kwargs,
+        )
 
     def fit(self, dataset, preprocessor, quietly=False):
+        self._reinit_active_model()
         self.model.preprocessor = preprocessor
         self.model.fit_with_data(dataset, quietly=quietly)
         return True
@@ -71,39 +95,73 @@ class BARTActor:
 
     def get_params(self):
         """Proxy to get params from the underlying model."""
-        return self.model.get_params()
+        base = self.model.get_params()
+        base["n_models"] = self._n_models
+        return base
+
+    def set_ndpost(self, ndpost: int):
+        nd = int(ndpost)
+        self._kwargs["ndpost"] = nd
+        for m in self.models:
+            m.ndpost = nd
+        return True
 
 class MultiChainBART:
     """
     Multi-chain BART model that runs multiple BART chains in parallel using Ray.
     This allows for efficient, low-overhead updates.
     """
-    def __init__(self, n_ensembles, bart_class=DefaultBART, random_state=42, ndpost=1000, **kwargs):
-        self.n_ensembles = n_ensembles
+    def __init__(self, n_ensembles, bart_class=DefaultBART, random_state=42, ndpost=1000, n_models: int = 1, **kwargs):
+        self.n_ensembles = int(n_ensembles)
         self.bart_class = bart_class
-        self.ndpost = ndpost
+        self.ndpost = int(ndpost)
+        self.n_models = int(n_models)
         self._driver_preprocessor = bart_class.preprocessor_class(max_bins=kwargs.get('max_bins', 100))
         self._dataset: Optional[Dataset] = None
+        self._active = 0
         
         # Initialize Ray. ignore_reinit_error is useful in interactive environments.
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
 
         # Initialize parent random state for chain picking
-        self.rng = np.random.default_rng(random_state)
+        parent_seed = random_state if isinstance(random_state, np.random.SeedSequence) else np.random.SeedSequence(int(random_state))
+        self.rng = np.random.default_rng(parent_seed)
 
         # Generate children random states for reproducibility
-        def _make_child_states(master_seed: int, chain_id: int) -> np.random.SeedSequence:
-            return np.random.SeedSequence(master_seed, spawn_key=(chain_id,))
-
-        child_states = [_make_child_states(int(random_state), i) for i in range(n_ensembles)]
+        child_states = parent_seed.spawn(self.n_ensembles)
 
         # Create stateful actors. Each actor will build and hold one BART instance.
         self.bart_actors: List[Any] = [
-            BARTActor.remote(bart_class, random_state=seed_sequence, ndpost=ndpost, **kwargs)  # type: ignore
+            BARTActor.remote(
+                bart_class,
+                random_state=seed_sequence,
+                n_models=self.n_models,
+                ndpost=self.ndpost,
+                **kwargs,
+            )  # type: ignore
             for seed_sequence in child_states
         ]
-        print(f"Created {n_ensembles} BARTActor(s) using BART class: {bart_class.__name__}")
+        print(f"Created {self.n_ensembles} BARTActor(s) using {bart_class.__name__} with {self.n_models} model(s) each.")
+
+    def set_active_model(self, model_id: int):
+        idx = int(model_id)
+        self._active = idx
+        ray.get([actor.set_active_model.remote(idx) for actor in self.bart_actors])
+        return self
+
+    def set_ndpost(self, ndpost: int):
+        self.ndpost = int(ndpost)
+        ray.get([actor.set_ndpost.remote(self.ndpost) for actor in self.bart_actors])
+        return self
+
+    def __len__(self):
+        return max(1, self.n_models)
+
+    def __getitem__(self, i: int):
+        if not (0 <= i < len(self)):
+            raise IndexError("model index out of range")
+        return self.set_active_model(i)
         
     @property
     def is_fitted(self):

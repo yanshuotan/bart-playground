@@ -86,9 +86,15 @@ class BARTTSAgent(BanditAgent):
 
         # Model setup
         self.model_factory = model_factory
-        self.models : list[BART] = []
         if self.encoding == 'separate':
-            self.models = [model_factory() for _ in range(n_arms)]
+            first_model = model_factory()
+            if isinstance(first_model, MultiChainBART) and getattr(first_model, "n_models", 1) == self.n_arms:
+                self.models = first_model
+            else:
+                models: list[BART] = [first_model]
+                for _ in range(1, n_arms):
+                    models.append(model_factory())
+                self.models = models
         else:
             self.models = [model_factory()]
         
@@ -124,7 +130,7 @@ class BARTTSAgent(BanditAgent):
     @property
     def separate_models(self) -> bool:
         return self.encoding == 'separate'
-    
+
     @staticmethod
     def _enough_data(outcomes, min_obs=5):
         """Check if we have enough data for the initial fit."""
@@ -163,24 +169,33 @@ class BARTTSAgent(BanditAgent):
             # Determine maximum number of actions until next refresh
             max_needed = self._steps_until_next_refresh(self.t)
             if self.separate_models:
-                # Train separate models for each arm
-                new_models: list[BART] = []
-                for arm in range(self.n_arms):
-                    arm_mask = np.array(self.all_arms) == arm
-                    X_arm = X[arm_mask]
-                    y_arm = y[arm_mask]
-                    model = self.model_factory(self._ndpost_needed(max_needed)) 
-                    model.fit(X_arm, y_arm, quietly=True)
-                    new_models.append(model)
+                use_multichain = isinstance(self.models, MultiChainBART) and getattr(self.models, "n_models", 1) == self.n_arms
+                if use_multichain:
+                    ndpost_need = self._ndpost_needed(max_needed)
+                    self.models.set_ndpost(ndpost_need)
+                    for arm in range(self.n_arms):
+                        arm_mask = np.array(self.all_arms) == arm
+                        X_arm = X[arm_mask]
+                        y_arm = y[arm_mask]
+                        self.models[arm].fit(X_arm, y_arm, quietly=True)
+                else:
+                    # Train separate models for each arm
+                    new_models: list[BART] = []
+                    for arm in range(self.n_arms):
+                        arm_mask = np.array(self.all_arms) == arm
+                        X_arm = X[arm_mask]
+                        y_arm = y[arm_mask]
+                        model = self.model_factory(self._ndpost_needed(max_needed)) 
+                        model.fit(X_arm, y_arm, quietly=True)
+                        new_models.append(model)
 
-                # Only replace if all fits succeeded
-                self.models = new_models
+                    # Only replace if all fits succeeded
+                    self.models = new_models
 
             else:
                 new_model = self.model_factory(self._ndpost_needed(max_needed)) 
                 new_model.fit(X, y, quietly=True)
-
-            # Only replace on success
+                # Only replace on success
                 self.model = new_model
 
             self.is_model_fitted = True
@@ -238,6 +253,9 @@ class BARTTSAgent(BanditAgent):
                     post_sample = post_sample.flatten()
                 elif self.encoding == 'separate':
                     post_sample = post_sample[:, 1]
+            # Ensure scalar output for single-row input (i.e. separate encoding)
+            if np.ndim(post_sample) > 0 and post_sample.size == 1:
+                return float(post_sample.flat[0])
             return post_sample
         
         # Use a precomputed, non-repeating posterior draw index
@@ -254,8 +272,9 @@ class BARTTSAgent(BanditAgent):
             for arm in range(self.n_arms):
                 if self.is_model_fitted:
                     model = self.models[arm]
-                    post_val = _eval_at(model, x, k)
-                    action_estimates[arm] = _reformat(post_val)
+                    post_val = _eval_at(model, x, k)          # e.g. shape (1,) or (1, n_cat)
+                    post_val = _reformat(post_val)            # 仍然是 array
+                    action_estimates[arm] = float(np.ravel(post_val)[0])
                 else:
                     logger.warning(f'Model for arm {arm} is not fitted, returning 0.0')
                     action_estimates[arm] = 0.0
@@ -421,9 +440,8 @@ class BARTTSAgent(BanditAgent):
         P = self.n_features
         per_arm_inclusion: List[np.ndarray] = []
 
-        for model_any in self.models:
-            freq_func = getattr(model_any, "feature_inclusion_frequency")
-            freq = freq_func("split")
+        for arm in range(self.n_arms):
+            freq = self.models[arm].feature_inclusion_frequency("split")
             per_arm_inclusion.append(freq)
 
         stacked = np.stack(per_arm_inclusion, axis=0)  # (n_arms, P)
@@ -616,6 +634,7 @@ class DefaultBARTTSAgent(BARTTSAgent):
                 bart_class=DefaultBART,
                 random_state=random_state,
                 ndpost=new_ndpost,
+                n_models=(n_arms if encoding == 'separate' else 1),
                 **merged_bart_kwargs
             )
         else:
@@ -666,8 +685,7 @@ class DefaultBARTTSAgent(BARTTSAgent):
             # Separate models per arm
             draws = np.zeros((n_post, n_probes, n_arms), dtype=float)
             for arm in range(n_arms):
-                model = self.models[arm]
-                f = model.posterior_f(X_probes, backtransform=True)  # (n_probes, n_post)
+                f = self.models[arm].posterior_f(X_probes, backtransform=True)  # (n_probes, n_post)
                 n_post_model = int(f.shape[1])
                 if n_post_model != n_post:
                     logger.error(f"posterior_f produced {n_post_model} draws for arm {arm}, expected {n_post}")
@@ -750,8 +768,7 @@ class LogisticBARTTSAgent(BARTTSAgent):
             # Separate logistic models per arm; use P(y=1|x) as arm value
             draws = np.zeros((n_post, n_probes, n_arms), dtype=float)
             for arm in range(n_arms):
-                model = cast(LogisticBART, self.models[arm])
-                prob = model.posterior_predict_proba(X_probes)  # (n_probes, n_post, n_categories)
+                prob = self.models[arm].posterior_predict_proba(X_probes)  # (n_probes, n_post, n_categories)
                 p1 = prob[:, :, 1]  # (n_probes, n_post)
                 draws[:, :, arm] = p1.T
             return draws, n_post
