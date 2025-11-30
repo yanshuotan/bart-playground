@@ -18,9 +18,10 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 def _prepare_bart_kwargs(default_kwargs: Dict[str, Any], 
-                         user_kwargs: Optional[Dict[str, Any]]) -> Tuple[int, Dict[str, Any]]:
+                         user_kwargs: Optional[Dict[str, Any]]) -> Tuple[int, Optional[int], Dict[str, Any]]:
     """
-    Helper to merge default and user kwargs
+    Helper to merge default and user kwargs.
+    Returns: (base_ndpost, user_max_bins, merged_kwargs)
     """
     merged = dict(default_kwargs)
     if user_kwargs:
@@ -30,13 +31,14 @@ def _prepare_bart_kwargs(default_kwargs: Dict[str, Any],
     if merged.get("quick_decay", False) and "tree_alpha" not in merged:
         merged["tree_alpha"] = 0.45
         
-    # Pop ndpost to use as base for the lambda default
+    # Pop dynamic parameters to be explicitly passed to model_factory
     base_ndpost = int(merged.pop("ndpost", 1000))
-    
-    # Ensure random_state is not in kwargs to avoid collision with explicit arg
+    user_max_bins = merged.pop("max_bins", None)
+    if user_max_bins is not None:
+        user_max_bins = int(user_max_bins)
     merged.pop("random_state", None)
     
-    return base_ndpost, merged
+    return base_ndpost, user_max_bins, merged
 
 class BARTTSAgent(BanditAgent):
     """
@@ -120,6 +122,9 @@ class BARTTSAgent(BanditAgent):
         # Flag for logging model params once
         self._has_logged_params = False
         
+        # Fixed max_bins provided by caller (None -> use adaptive rule)
+        self._fixed_max_bins_value: Optional[int] = None
+        
     @property
     def model(self):
         return self.models[0]
@@ -158,12 +163,23 @@ class BARTTSAgent(BanditAgent):
         """Determine the number of posterior samples needed for the next refresh. At most self.max_ndpost."""
         return int(min(self.max_ndpost, max_needed * self.choices_per_iter))
     
+    def _current_max_bins(self) -> int:
+        """Return the max_bins value to use for the next refresh."""
+        if self._fixed_max_bins_value is not None:
+            return int(self._fixed_max_bins_value)
+        bins = np.ceil(0.2 * max(self.t, 1)).astype(int)
+        # soft cap at 2000 to avoid excessive quantile generation
+        return int(min(2000, max(100, bins)))
+    
     def _refresh_model(self) -> None:
         """Re-fit the model from scratch using all historical data."""
         logger.info(f't = {self.t} - re-training BART model from scratch')
 
         X = np.array(self.all_encoded_features)
         y = np.array(self.all_rewards)
+        current_max_bins = self._current_max_bins()
+        if self._fixed_max_bins_value is None:
+            logger.debug(f"Adaptive max_bins={current_max_bins} at t={self.t}")
 
         try:
             # Determine maximum number of actions until next refresh
@@ -185,7 +201,7 @@ class BARTTSAgent(BanditAgent):
                         arm_mask = np.array(self.all_arms) == arm
                         X_arm = X[arm_mask]
                         y_arm = y[arm_mask]
-                        model = self.model_factory(self._ndpost_needed(max_needed)) 
+                        model = self.model_factory(self._ndpost_needed(max_needed), max_bins=current_max_bins) 
                         model.fit(X_arm, y_arm, quietly=True)
                         new_models.append(model)
 
@@ -193,7 +209,7 @@ class BARTTSAgent(BanditAgent):
                     self.models = new_models
 
             else:
-                new_model = self.model_factory(self._ndpost_needed(max_needed)) 
+                new_model = self.model_factory(self._ndpost_needed(max_needed), max_bins=current_max_bins) 
                 new_model.fit(X, y, quietly=True)
                 # Only replace on success
                 self.model = new_model
@@ -635,27 +651,33 @@ class DefaultBARTTSAgent(BARTTSAgent):
             "eps_nu": 1.0
         }
         
-        base_ndpost, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)
+        base_ndpost, user_max_bins, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)
         
         if n_chains > 1:
-            # ndpost may be changed in the run, so we use a lambda function to ensure it's passed to the model
-            model_factory = lambda new_ndpost=base_ndpost: MultiChainBART(
-                n_ensembles=n_chains,
-                bart_class=DefaultBART,
-                random_state=random_state,
-                ndpost=new_ndpost,
-                n_models=(n_arms if encoding == 'separate' else 1),
-                **merged_bart_kwargs
-            )
+            def model_factory(new_ndpost=base_ndpost, max_bins=None):
+                return MultiChainBART(
+                    n_ensembles=n_chains,
+                    bart_class=DefaultBART,
+                    random_state=random_state,
+                    ndpost=new_ndpost,
+                    max_bins=max_bins,
+                    n_models=(n_arms if encoding == 'separate' else 1),
+                    **merged_bart_kwargs
+                )
         else:
-            model_factory = lambda new_ndpost=base_ndpost: DefaultBART(
-                random_state=random_state,
-                ndpost=new_ndpost,
-                **merged_bart_kwargs
-            )
+            def model_factory(new_ndpost=base_ndpost, max_bins=None):
+                return DefaultBART(
+                    random_state=random_state,
+                    ndpost=new_ndpost,
+                    max_bins=max_bins,
+                    **merged_bart_kwargs
+                )
         
         super().__init__(n_arms, n_features, model_factory,
                          initial_random_selections, random_state, encoding, refresh_schedule)
+        
+        if user_max_bins is not None:
+            self._fixed_max_bins_value = user_max_bins
 
     def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
         """
@@ -721,15 +743,20 @@ class LogisticBARTTSAgent(BARTTSAgent):
             "nskip": 100,
         }
         
-        base_ndpost, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)
+        base_ndpost, user_max_bins, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)
         
-        model_factory = lambda new_ndpost=base_ndpost: LogisticBART(
-            random_state=random_state,
-            ndpost=new_ndpost,
-            **merged_bart_kwargs
-        )
+        def model_factory(new_ndpost=base_ndpost, max_bins=None):
+            return LogisticBART(
+                random_state=random_state,
+                ndpost=new_ndpost,
+                max_bins=max_bins,
+                **merged_bart_kwargs
+            )
         super().__init__(n_arms, n_features, model_factory,
                          initial_random_selections, random_state, encoding, refresh_schedule)
+        
+        if user_max_bins is not None:
+            self._fixed_max_bins_value = user_max_bins
 
     def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
         """
