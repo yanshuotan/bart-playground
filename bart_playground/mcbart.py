@@ -64,6 +64,10 @@ class BARTActor:
         """Evaluate prediction at a specific trace index k using the in-actor model."""
         return self.model.predict_trace(k, X, backtransform=backtransform)
 
+    def predict_trace_batch(self, k: int, X, backtransform: bool = True):
+        """Evaluate prediction at trace index k for ALL models in this actor."""
+        return [m.predict_trace(k, X, backtransform) for m in self.models]
+
     def get_attributes(self):
         """Helper to retrieve attributes from the model inside the actor."""
         if self.model.is_fitted:
@@ -252,6 +256,15 @@ class MultiChainBART:
         preds_futures = [actor.predict_trace.remote(k, X, backtransform) for actor in self.bart_actors]
         all_preds = np.array(ray.get(preds_futures))
         return np.mean(all_preds, axis=0)
+
+    def predict_trace_batch(self, k: int, X, backtransform: bool = True):
+        """
+        Predict using a specific trace index for ALL models (arms).
+        Returns: np.ndarray of shape (n_models, ...) averaged across chains.
+        """
+        futures = [a.predict_trace_batch.remote(k, X, backtransform) for a in self.bart_actors]
+        # shape: (n_chains, n_models, ...) -> mean over chains -> (n_models, ...)
+        return np.mean(ray.get(futures), axis=0)
 
     def collect_model_states(self):
         """Return the in-actor BART models."""

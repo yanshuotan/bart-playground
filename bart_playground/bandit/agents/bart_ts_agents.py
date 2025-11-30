@@ -268,16 +268,26 @@ class BARTTSAgent(BanditAgent):
             post_mean_samples = _eval_at(self.model, x_combined, k)
             action_estimates = _reformat(post_mean_samples)
         else:
-            action_estimates = np.zeros(self.n_arms)
-            for arm in range(self.n_arms):
-                if self.is_model_fitted:
-                    model = self.models[arm]
-                    post_val = _eval_at(model, x, k)          # e.g. shape (1,) or (1, n_cat)
-                    post_val = _reformat(post_val)            # 仍然是 array
-                    action_estimates[arm] = float(np.ravel(post_val)[0])
-                else:
-                    logger.warning(f'Model for arm {arm} is not fitted, returning 0.0')
-                    action_estimates[arm] = 0.0
+            # OPTIMIZATION: Use batch prediction if supported by the model (MultiChainBART)
+            use_multichain = isinstance(self.models, MultiChainBART) and getattr(self.models, "n_models", 1) == self.n_arms
+            
+            if use_multichain and self.is_model_fitted and not self.is_logistic:
+                # MultiChainBART batch path
+                # Returns array of shape (n_arms, ...)
+                batch_preds = self.models.predict_trace_batch(k, x, backtransform=True)
+                action_estimates = np.array(batch_preds).flatten()
+            else:
+                # Standard path (loop over arms)
+                action_estimates = np.zeros(self.n_arms)
+                for arm in range(self.n_arms):
+                    if self.is_model_fitted:
+                        model = self.models[arm]
+                        post_val = _eval_at(model, x, k)          # e.g. shape (1,) or (1, n_cat)
+                        post_val = _reformat(post_val) 
+                        action_estimates[arm] = float(np.ravel(post_val)[0])
+                    else:
+                        logger.warning(f'Model for arm {arm} is not fitted, returning 0.0')
+                        action_estimates[arm] = 0.0
         
         return action_estimates
 

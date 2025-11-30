@@ -6,6 +6,7 @@ Auto-generated tests.
 
 import numpy as np
 import ray
+import pytest
 
 from bart_playground.bandit.agents.bart_ts_agents import BARTTSAgent
 from bart_playground.mcbart import MultiChainBART
@@ -199,3 +200,49 @@ def test_actor_count_is_n_chains_not_n_arms_times_n_chains():
     # But should support n_arms models
     assert mc.n_models == n_arms
     assert len(mc) == n_arms
+
+
+def test_batch_prediction_consistency():
+    """Test that batch prediction matches individual prediction."""
+    n_arms = 3
+    agent = _make_agent_with_real_multichain(n_arms=n_arms, n_features=2)
+    
+    # Custom population to ensure ALL arms have data
+    rng = np.random.default_rng(123)
+    for arm in range(n_arms):
+        # Give each arm some observations
+        for _ in range(5):
+            x = rng.random(2)
+            reward = rng.random()
+            agent.update_state(arm, x, reward)
+    
+    agent._refresh_model()
+    
+    # Ensure we have a fitted model
+    assert agent.is_model_fitted
+    mc_model = agent.models
+    
+    # Random probe
+    x = np.random.random((1, 2))
+    k = 0  # trace index
+    
+    # 1. Batch prediction
+    batch_preds = mc_model.predict_trace_batch(k, x)
+    
+    # 2. Individual predictions
+    individual_preds = []
+    for i in range(3):
+        mc_model.set_active_model(i)
+        pred = mc_model.predict_trace(k, x)
+        individual_preds.append(pred)
+    
+    # Compare results
+    # Note: predict_trace usually returns scalar or (1,) for regression separate models
+    # batch_preds should be (n_arms, ...)
+    
+    assert len(batch_preds) == 3
+    for i in range(3):
+        # Allow small floating point differences due to potential aggregation order
+        # though usually they should be identical if deterministic
+        np.testing.assert_allclose(batch_preds[i], individual_preds[i], rtol=1e-6)
+
