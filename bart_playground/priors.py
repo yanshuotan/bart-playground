@@ -252,13 +252,14 @@ class GlobalParamPrior:
         generator: Random number generator
     """
     def __init__(self, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
-                 dirichlet_prior=False):
+                 dirichlet_prior=False, init_sigma2=None):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda : float
         self.specification = specification
         self.generator = generator
         self.dirichlet_prior = dirichlet_prior
+        self.init_sigma2 = init_sigma2
 
     def fit_hyperparameters(self, data):
         """Fit the prior hyperparameters to the data"""
@@ -281,7 +282,10 @@ class GlobalParamPrior:
                 - eps_sigma2 (float): The sampled epsilon sigma squared value.
         """
         self.fit_hyperparameters(data)
-        eps_sigma2 = self._sample_eps_sigma2(data.y)
+        if self.init_sigma2 is not None:
+            eps_sigma2 = self.init_sigma2
+        else:
+            eps_sigma2 = self._sample_eps_sigma2(data.y)
         global_params = {"eps_sigma2": eps_sigma2}
         if self.dirichlet_prior:
             global_params["s"] = np.ones(data.X.shape[1]) / data.X.shape[1]
@@ -470,9 +474,9 @@ class BARTLikelihood:
 class ComprehensivePrior:
     def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, 
                  specification="linear", generator=np.random.default_rng(),
-                 dirichlet_prior=False, quick_decay: bool = False):
+                 dirichlet_prior=False, quick_decay: bool = False, init_sigma2=None):
         self.tree_prior = TreesPrior(int(n_trees), tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
-        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior)
+        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior, init_sigma2)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
 class ProbitPrior:

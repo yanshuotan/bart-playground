@@ -16,4 +16,4 @@ scripts/
 
 benchmarks/**/*.csv
 *.pkl
-diagnosis/store/*.npz
+diagnosis/**/*.npz
