@@ -14,15 +14,20 @@ def fast_choice(generator, array):
         return array[0]
     return array[generator.integers(0, len_arr)]
 
-def fast_choice_with_weights(generator, array, weights):
-    """Fast random selection from an array with given weights."""
+def fast_choice_with_weights(generator, array, weights, cum_weights=None):
+    """Fast random selection from an array with given weights.
+    
+    If cum_weights is provided (precomputed cumsum of weights), it will be used
+    directly to avoid redundant np.cumsum calls.
+    """
     if weights is None:
         return fast_choice(generator, array)
-    assert len(array) == len(weights), "Array and weights must have the same length"
     len_arr = len(array)
     if len_arr == 1:
         return array[0]
-    cum_weights = np.cumsum(weights)
+    # Use precomputed cumsum if available
+    if cum_weights is None:
+        cum_weights = np.cumsum(weights)
     weight_sum = cum_weights[-1]
     U = generator.uniform(0, weight_sum)
     idx = np.searchsorted(cum_weights, U)

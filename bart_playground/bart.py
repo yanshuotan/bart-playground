@@ -338,13 +338,12 @@ class DefaultBART(BART):
 
         for k in self.range_post:
             # trace[k] is Parameters for regression BART
+            # vars_histogram is now a numpy array of shape (p,)
             hist = self.trace[k].vars_histogram
-            if not hist:
+            if hist.size == 0:
                 continue
-            # Counter only contains keys with count > 0, so no need to check count
-            for var_idx in hist.keys():
-                if 0 <= var_idx < p:
-                    probs[var_idx] += 1.0
+            # Mark features that were used at least once
+            probs += (hist > 0).astype(float)
 
         probs /= float(self.ndpost)
         return probs
@@ -376,13 +375,12 @@ class DefaultBART(BART):
         if normalize == 'split':
             total_splits = 0.0
             for k in self.range_post:
+                # vars_histogram is now a numpy array of shape (p,)
                 hist = self.trace[k].vars_histogram
-                if not hist:
+                if hist.size == 0:
                     continue
-                for var_idx, count in hist.items():
-                    if 0 <= var_idx < p:
-                        freq[var_idx] += float(count)
-                        total_splits += float(count)
+                freq += hist.astype(float)
+                total_splits += float(hist.sum())
             if total_splits > 0.0:
                 freq /= total_splits
             else:
@@ -394,14 +392,12 @@ class DefaultBART(BART):
         draws_count = 0
         for k in self.range_post:
             hist = self.trace[k].vars_histogram
-            if not hist:
+            if hist.size == 0:
                 continue
-            draw_total = float(sum(hist.values()))
+            draw_total = float(hist.sum())
             if draw_total <= 0.0:
                 continue
-            for var_idx, count in hist.items():
-                if 0 <= var_idx < p:
-                    freq[var_idx] += float(count) / draw_total
+            freq += hist.astype(float) / draw_total
             draws_count += 1
 
         if draws_count > 0:

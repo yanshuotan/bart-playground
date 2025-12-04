@@ -14,6 +14,8 @@ notebooks/results
 notebooks/bandit/results
 notebooks/bandit/*.png
 notebooks/bandit/data
+notebooks/tmp*
+notebooks/*.md
 bart_playground/bandit/baselines
 .idea/
 .vscode/
@@ -32,5 +34,4 @@ tests/*.md
 
 /benchmarks/
 /experiments/
-/notebooks/
 /legacy/

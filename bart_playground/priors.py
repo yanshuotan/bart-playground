@@ -279,7 +279,9 @@ class GlobalParamPrior:
         eps_sigma2 = self._sample_eps_sigma2(data.y)
         global_params = {"eps_sigma2": eps_sigma2}
         if self.dirichlet_prior:
-            global_params["s"] = np.ones(data.X.shape[1]) / data.X.shape[1]
+            s = np.ones(data.X.shape[1]) / data.X.shape[1]
+            global_params["s"] = s
+            global_params["s_cumsum"] = np.cumsum(s)
         return global_params
     
     def resample_global_params(self, bart_params : Parameters, data_y):
@@ -300,7 +302,9 @@ class GlobalParamPrior:
         global_params = dict({})
         global_params["eps_sigma2"] = self._sample_eps_sigma2(data_y - bart_params.evaluate())
         if self.dirichlet_prior:
-            global_params["s"] = self._resample_s(bart_params)
+            s, s_cumsum = self._resample_s(bart_params)
+            global_params["s"] = s
+            global_params["s_cumsum"] = s_cumsum
         return global_params
     
     def _resample_s(self, bart_params : Parameters):
@@ -311,17 +315,16 @@ class GlobalParamPrior:
             bart_params (Parameters): An instance of the Parameters class containing the data and model parameters for BART.
 
         Returns:
-            numpy.ndarray: Resampled s parameter.
+            tuple: (s, s_cumsum) where s is the resampled probabilities and s_cumsum is the precomputed cumulative sum.
         """
         if not self.dirichlet_prior:
             raise ValueError("Dirichlet prior is not enabled.")
-        vars_histogram = bart_params.vars_histogram
-        p = bart_params.trees[0].dataX.shape[1]
-        vars_histogram_array = np.zeros(p)
-        for var, count in vars_histogram.items():
-            vars_histogram_array[var] = count
+        # vars_histogram now returns numpy array directly
+        vars_histogram_array = bart_params.vars_histogram
+        p = len(vars_histogram_array)
         s = self.generator.dirichlet(self.s_alpha / p + vars_histogram_array)
-        return s
+        s_cumsum = np.cumsum(s)
+        return s, s_cumsum
     
     def _fit_eps_lambda(self, data : Dataset, specification: str) -> float:
         """

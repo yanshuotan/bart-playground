@@ -717,7 +717,11 @@ class Parameters:
 
     @property
     def vars_histogram(self):
-        vars_histogram = sum([tree.vars_histogram for tree in self.trees], Counter())
-        vars_histogram.pop(-2, None)  # Remove the -2 (nonexistent node) from the histogram
-        vars_histogram.pop(-1, None)  # Remove the -1 (leaf node) from the histogram
-        return vars_histogram
+        """Returns numpy array of shape (p,) with counts of each feature used as split variable."""
+        p = self.trees[0].dataX.shape[1]
+        counts = np.zeros(p, dtype=int)
+        for tree in self.trees:
+            valid_vars = tree.vars[tree.vars >= 0]
+            if valid_vars.size > 0:
+                counts += np.bincount(valid_vars, minlength=p)[:p]
+        return counts
