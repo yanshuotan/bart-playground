@@ -195,9 +195,10 @@ class MultiChainBART:
             raise ValueError(f"Not enough posterior samples: {total_iterations} < {self.ndpost} (provided ndpost).")
         return range(total_iterations - self.ndpost, total_iterations)
 
-    def fit(self, X, y, quietly=False):
+    def fit(self, X, y, quietly=False, max_bins: int = None):
         """Fit all BART instances in parallel using Ray actors."""
-        # This is a non-blocking call. It returns futures immediately.
+        if max_bins is not None:
+            self._driver_preprocessor.max_bins = max_bins
         dataset = self._driver_preprocessor.fit_transform(X, y)
         data_ref, prep_ref = self._share_dataset(dataset)
         fit_futures = [actor.fit.remote(data_ref, prep_ref, quietly) for actor in self.bart_actors]

@@ -193,7 +193,7 @@ class BARTTSAgent(BanditAgent):
                         arm_mask = np.array(self.all_arms) == arm
                         X_arm = X[arm_mask]
                         y_arm = y[arm_mask]
-                        self.models[arm].fit(X_arm, y_arm, quietly=True)
+                        self.models[arm].fit(X_arm, y_arm, quietly=True, max_bins=current_max_bins)
                 else:
                     # Train separate models for each arm
                     new_models: list[BART] = []
@@ -645,8 +645,9 @@ class DefaultBARTTSAgent(BARTTSAgent):
                  bart_kwargs: Optional[Dict[str, Any]] = None) -> None:
         
         default_bart_kwargs: Dict[str, Any] = {
-            "ndpost": 1000,
-            "nskip": 100,
+            "ndpost": 500,
+            "nskip": 500,
+            "n_trees": 100,
             "specification": "naive",
             "eps_nu": 1.0
         }
@@ -739,8 +740,9 @@ class LogisticBARTTSAgent(BARTTSAgent):
             raise NotImplementedError("RefreshLogisticBARTAgent: native encoding currently only supports n_arms = 2.")
         
         default_bart_kwargs: Dict[str, Any] = {
-            "ndpost": 1000,
-            "nskip": 100,
+            "ndpost": 500,
+            "nskip": 500,
+            "n_trees": 50
         }
         
         base_ndpost, user_max_bins, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)

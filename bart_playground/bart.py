@@ -540,6 +540,11 @@ class LogisticBART(BART):
         y = y.flatten()
         self.sampler.n_categories = np.unique(y).size
         super().fit(X, y, quietly=quietly)
+
+    def fit_with_data(self, data: Dataset, quietly=False):
+        # data.y is already encoded to 0..K-1 by ClassificationPreprocessor
+        self.sampler.n_categories = int(np.max(data.y)) + 1
+        return super().fit_with_data(data, quietly=quietly)
         
     def posterior_f(self, X, backtransform=True):
         """
