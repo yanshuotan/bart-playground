@@ -16,12 +16,10 @@ def _fit_separate_agent(
     agent = DefaultBARTTSAgent(
         n_arms=n_arms,
         n_features=n_features,
-        ndpost=10,
-        nskip=10,
-        n_trees=20,
         encoding="separate",
         initial_random_selections=0,
         random_state=rng_seed,
+        bart_kwargs={"ndpost": 10, "nskip": 10, "n_trees": 20},
     )
 
     rng = np.random.default_rng(rng_seed)
@@ -67,11 +65,9 @@ def test_feature_inclusion_requires_separate_encoding():
     agent = DefaultBARTTSAgent(
         n_arms=2,
         n_features=2,
-        ndpost=10,
-        nskip=10,
-        n_trees=10,
         encoding="multi",
         initial_random_selections=0,
+        bart_kwargs={"ndpost": 10, "nskip": 10, "n_trees": 10},
     )
 
     with pytest.raises(NotImplementedError):
