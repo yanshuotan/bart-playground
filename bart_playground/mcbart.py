@@ -120,7 +120,10 @@ class MultiChainBART:
         self.bart_class = bart_class
         self.ndpost = int(ndpost)
         self.n_models = int(n_models)
-        self._driver_preprocessor = bart_class.preprocessor_class(max_bins=kwargs.get('max_bins', 100))
+        max_bins_val = kwargs.get('max_bins', 100)
+        if max_bins_val is None:
+            max_bins_val = 100
+        self._driver_preprocessor = bart_class.preprocessor_class(max_bins=max_bins_val)
         self._dataset: Optional[Dataset] = None
         self._active = 0
         

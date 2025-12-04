@@ -279,6 +279,8 @@ class DefaultBART(BART):
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, dirichlet_prior=False, quick_decay: bool = False,
                  s_alpha: float = 2.0):
+        if max_bins is None:
+            max_bins = 100
         preprocessor = self.preprocessor_class(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
@@ -502,6 +504,8 @@ class LogisticBART(BART):
                  c: float = 0.0, d: float = 0.0,
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, quick_decay: bool = False):
+        if max_bins is None:
+            max_bins = 100
         preprocessor = self.preprocessor_class(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = LogisticPrior(n_trees, tree_alpha, tree_beta, c, d, rng, quick_decay=quick_decay)
