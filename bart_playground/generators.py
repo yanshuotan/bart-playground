@@ -65,7 +65,7 @@ def generate_data_from_defaultbart_prior(
     thresholds_by_var = preprocessor.gen_thresholds(X)
 
     # Prior container for consistency with DefaultBART (for f_sigma2)
-    tree_prior = TreesPrior(n_trees=n_trees, tree_alpha=tree_alpha, tree_beta=tree_beta, f_k=f_k, generator=rng, quick_decay=quick_decay)
+    tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, rng, quick_decay=quick_decay)
 
     def p_split(depth: int) -> float:
         if quick_decay:

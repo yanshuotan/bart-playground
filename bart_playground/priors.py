@@ -143,7 +143,7 @@ class TreesPrior:
         f_sigma2 (float): Variance of the leaf parameters.
         generator: Random number generator.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng(), quick_decay: bool = False):
+    def __init__(self, n_trees, tree_alpha, tree_beta, f_k, generator, quick_decay: bool = False):
         self.n_trees = n_trees
         self.alpha = tree_alpha
         self.beta = tree_beta
@@ -246,14 +246,14 @@ class GlobalParamPrior:
         specification (str): Method for initial variance estimate
         generator: Random number generator
     """
-    def __init__(self, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
-                 dirichlet_prior=False):
+    def __init__(self, eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda : float
         self.specification = specification
         self.generator = generator
         self.dirichlet_prior = dirichlet_prior
+        self.s_alpha = s_alpha
 
     def fit_hyperparameters(self, data):
         """Fit the prior hyperparameters to the data"""
@@ -303,7 +303,7 @@ class GlobalParamPrior:
             global_params["s"] = self._resample_s(bart_params)
         return global_params
     
-    def _resample_s(self, bart_params : Parameters, s_alpha=2.0):
+    def _resample_s(self, bart_params : Parameters):
         """
         Resample the split probabilities s.
 
@@ -320,7 +320,7 @@ class GlobalParamPrior:
         vars_histogram_array = np.zeros(p)
         for var, count in vars_histogram.items():
             vars_histogram_array[var] = count
-        s = self.generator.dirichlet(s_alpha / p + vars_histogram_array)
+        s = self.generator.dirichlet(self.s_alpha / p + vars_histogram_array)
         return s
     
     def _fit_eps_lambda(self, data : Dataset, specification: str) -> float:
@@ -465,18 +465,17 @@ class BARTLikelihood:
         return log_lkhd_proposed - log_lkhd_current
 
 class ComprehensivePrior:
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, 
-                 specification="linear", generator=np.random.default_rng(),
-                 dirichlet_prior=False, quick_decay: bool = False):
+    def __init__(self, n_trees, tree_alpha, tree_beta, f_k, eps_q, eps_nu, 
+                 specification, generator, dirichlet_prior, quick_decay, s_alpha):
         self.tree_prior = TreesPrior(int(n_trees), tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
-        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior)
+        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
 class ProbitPrior:
     """
     BART Prior for binary classification tasks.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng(), quick_decay: bool = False):
+    def __init__(self, n_trees, tree_alpha, tree_beta, f_k, generator, quick_decay: bool = False):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
@@ -486,7 +485,7 @@ class LogisticTreesPrior(TreesPrior):
     
     Inherits from TreesPrior and overrides the resample_leaf_vals method to handle logistic regression.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, c = 0.0, d = 0.0, generator=np.random.default_rng(), parent = None, quick_decay: bool = False):
+    def __init__(self, n_trees, tree_alpha, tree_beta, c, d, generator, parent, quick_decay: bool = False):
         """
         Initialize the logistic trees prior with parameters.
         

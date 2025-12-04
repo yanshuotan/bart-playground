@@ -243,7 +243,12 @@ class TestSamplers2(unittest.TestCase):
             tree.split_leaf(0, var=0, threshold=0.5, left_val=1.0, right_val=-1.0)
         self.alpha = 0.5
         self.beta = 0.5
-        self.prior = ComprehensivePrior(n_trees=len(self.trees), tree_alpha=self.alpha, tree_beta=self.beta)
+        rng = np.random.default_rng(42)
+        self.prior = ComprehensivePrior(
+            n_trees=len(self.trees), tree_alpha=self.alpha, tree_beta=self.beta, f_k=2.0,
+            eps_q=0.9, eps_nu=3.0, specification="linear", generator=rng,
+            dirichlet_prior=False, quick_decay=False, s_alpha=2.0
+        )
         # self.prior.fit(self.dataset)
         self.generator = np.random.default_rng(42)
         self.temp_schedule = TemperatureSchedule()
