@@ -44,10 +44,30 @@ def calculate_avg_depth_per_trace(trace_record):
     
     return total_depth / total_trees
 
+def get_feature_split_ratios(trace_list, n_features):
+    ratios_per_trace = []
+    for trace in trace_list:
+        feature_counts = np.zeros(n_features)
+        total_splits = 0
+        for tree in trace.trees:
+            for var in tree.vars:
+                if var >= 0:
+                    feature_counts[var] += 1
+                    total_splits += 1
+        if total_splits > 0:
+            ratios = feature_counts / total_splits
+        else:
+            ratios = np.zeros(n_features)
+        ratios_per_trace.append(ratios)
+    return np.array(ratios_per_trace)
 
-def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tree_beta, store_preds=False):
+
+def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, 
+                   tree_alpha, tree_beta, store_preds=False, n_test_points=None):
     """Run a single experiment with same train-test split but different initial trees"""
     
+    n_features = X.shape[1]
+
     # Use the same train test split
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=42)
 
@@ -77,7 +97,8 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tr
     rmses_mtmh = [root_mean_squared_error(y_test, preds_mtmh[:, k]) for k in range(preds_mtmh.shape[1])]
     leaves_mtmh = [count_leaves_in_trees(trace) for trace in bart_mtmh.sampler.trace]
     depths_mtmh = [calculate_avg_depth_per_trace(trace) for trace in bart_mtmh.sampler.trace]
-    
+    feature_ratios_mtmh = get_feature_split_ratios(bart_mtmh.sampler.trace, n_features)
+
     del bart_mtmh
     gc.collect()
     
@@ -98,6 +119,7 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tr
     rmses_default = [root_mean_squared_error(y_test, preds_default[:, k]) for k in range(preds_default.shape[1])]
     leaves_default = [count_leaves_in_trees(trace) for trace in bart_default.sampler.trace]
     depths_default = [calculate_avg_depth_per_trace(trace) for trace in bart_default.sampler.trace]
+    feature_ratios_default = get_feature_split_ratios(bart_default.sampler.trace, n_features)
 
     del bart_default
     gc.collect()
@@ -109,27 +131,35 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tr
             'sigmas': np.array(sigmas_default),
             'rmses': np.array(rmses_default),
             'leaves': np.array(leaves_default),
-            'depths': np.array(depths_default)
+            'depths': np.array(depths_default),
+            'feature_ratios': feature_ratios_default  # shape: [n_iterations, n_features]
         },
         'mtmh': {
             'sigmas': np.array(sigmas_mtmh),
             'rmses': np.array(rmses_mtmh),
             'leaves': np.array(leaves_mtmh),
-            'depths': np.array(depths_mtmh)
+            'depths': np.array(depths_mtmh),
+            'feature_ratios': feature_ratios_mtmh  # shape: [n_iterations, n_features]
         }
     }
     if store_preds:
-        result['default']['preds'] = np.array(preds_default)
-        result['mtmh']['preds'] = np.array(preds_mtmh)
+        if n_test_points is not None and n_test_points < preds_default.shape[0]:
+            idx = np.random.choice(preds_default.shape[0], n_test_points, replace=False)
+            result['default']['preds'] = np.array(preds_default[idx])
+            result['mtmh']['preds'] = np.array(preds_mtmh[idx])
+        else:
+            result['default']['preds'] = np.array(preds_default)
+            result['mtmh']['preds'] = np.array(preds_mtmh)
     return result
 
 def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook, 
                              tree_alpha=0.95, tree_beta=2.0, m_tries=10, 
-                             n_runs=5, n_jobs=-1, store_preds=False):
+                             n_runs=5, n_jobs=-1, store_preds=True, n_test_points=20):
     """Run parallel experiments with different train-test splits"""
     
     results = Parallel(n_jobs=n_jobs, verbose=10)(
-        delayed(run_experiment)(run_id, X, y, ndpost, nskip, n_trees, m_tries, tree_alpha, tree_beta, store_preds)
+        delayed(run_experiment)(run_id, X, y, ndpost, nskip, n_trees, m_tries, 
+                                tree_alpha, tree_beta, store_preds, n_test_points)
         for run_id in range(n_runs)
     )
     
@@ -139,13 +169,15 @@ def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook,
             'sigmas': np.array([r['default']['sigmas'] for r in results]),
             'rmses': np.array([r['default']['rmses'] for r in results]),
             'leaves': np.array([r['default']['leaves'] for r in results]),
-            'depths': np.array([r['default']['depths'] for r in results])
+            'depths': np.array([r['default']['depths'] for r in results]),
+            'feature_ratios': np.array([r['default']['feature_ratios'] for r in results])
         },
         'mtmh': {
             'sigmas': np.array([r['mtmh']['sigmas'] for r in results]),
             'rmses': np.array([r['mtmh']['rmses'] for r in results]),
             'leaves': np.array([r['mtmh']['leaves'] for r in results]),
-            'depths': np.array([r['mtmh']['depths'] for r in results])
+            'depths': np.array([r['mtmh']['depths'] for r in results]),
+            'feature_ratios': np.array([r['mtmh']['feature_ratios'] for r in results])
         },
         'metadata': {
             'n_runs': n_runs,
