@@ -1,4 +1,4 @@
-*__pycache__
+**/__pycache__/
 *.egg-info/
 .venv
 venv/
@@ -9,11 +9,28 @@ scripts/
 .hydra/hydra.yaml
 .DS_Store
 *.log
+notebooks/deprecated
+notebooks/results
+notebooks/bandit/results
+notebooks/bandit/*.png
+notebooks/bandit/data
+bart_playground/bandit/baselines
+.idea/
+.vscode/
+.cursor/
 
 .vscode/*
 .idea/*
 .cursor/*
 
 benchmarks/**/*.csv
+tests/unit/plan/*
+tests/output/*
+tests/*.md
 *.pkl
-diagnosis/**/*.npz
+*.npz
+
+/benchmarks/
+/experiments/
+/notebooks/
+/legacy/

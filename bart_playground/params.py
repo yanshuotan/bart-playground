@@ -1,3 +1,4 @@
+
 import numpy as np
 from typing import Optional, Union
 from numpy.typing import NDArray
@@ -8,7 +9,7 @@ from .util import fast_choice, fast_choice_with_weights
 # Define generic float types to support both float32 and float64
 Float32Or64 = Union[np.float32, np.float64]
 
-@njit
+@njit(cache=True)
 def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_leaf_id):
     """
     Numba-optimized function to update all node counts and leaf_ids.
@@ -46,7 +47,7 @@ def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresh
 
     return success
 
-@njit
+@njit(cache=True)
 def _update_n_and_leaf_id_numba_copy(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_leaf_id):
     """
     Numba-optimized function to update all node counts and leaf_ids.
@@ -77,7 +78,7 @@ def _update_n_and_leaf_id_numba_copy(starting_node, dataX, append: bool, vars, t
             
     return leaf_ids, n
 
-@njit
+@njit(cache=True)
 def _descendants_numba(node_id: int, vars: NDArray[np.int32]):
     """
     Numba-optimized function to find all descendants of a given node in the tree.
@@ -101,7 +102,7 @@ def _descendants_numba(node_id: int, vars: NDArray[np.int32]):
     
     return subtree_nodes[1:queue_end]
 
-@njit
+@njit(cache=True)
 def _traverse_tree_numba(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray) -> np.ndarray:
     """
     Numba-optimized function to traverse the tree for a given input data matrix.
@@ -126,7 +127,7 @@ def _traverse_tree_numba(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray
     
     return node_ids
 
-@njit
+@njit(cache=True)
 def _traverse_tree_single(X: np.ndarray, vars: np.ndarray, thresholds: np.ndarray, starting_node, n_to_update):
     """
     Numba-optimized function to traverse the tree for a given input data array (1D).
@@ -263,7 +264,7 @@ class Tree:
         vars[0] = -1                      # -1 represents a leaf node
         
         ### Determine float dtype from dataX, default to float32
-        float_dtype = dataX.dtype if dataX is not None else np.float32
+        float_dtype = dataX.dtype if dataX is not None and np.issubdtype(dataX.dtype, np.floating) else np.float32
         
         thresholds = np.full(Tree.default_size, np.nan, dtype=float_dtype)
         leaf_vals = np.full(Tree.default_size, np.nan, dtype=float_dtype)
@@ -280,24 +281,26 @@ class Tree:
         return new_tree
 
     @classmethod
-    def from_existing(cls, other: "Tree"):
+    def from_existing(cls, other: "Tree", copy_cache: bool = True):
         """
         Create a new Tree object by copying data from an existing Tree.
         """
         # Copy all arrays
+        if other.n is None:
+            copy_cache = False  # If n is None, we cannot copy cache arrays
         
         return cls(
             other.dataX,  # dataX is not copied since it's shared across trees
             other.vars.copy(),
             other.thresholds.copy(), 
             other.leaf_vals.copy(),
-            other.n.copy() if other.n is not None else None,
-            other.leaf_ids.copy() if other.leaf_ids is not None else None,
-            other.evals.copy() if other.evals is not None else None
+            other.n.copy() if copy_cache else None,
+            other.leaf_ids.copy() if copy_cache else None,
+            other.evals.copy() if copy_cache else None
         )
 
-    def copy(self):
-        return Tree.from_existing(self)
+    def copy(self, copy_cache: bool = True) -> "Tree":
+        return Tree.from_existing(self, copy_cache=copy_cache)
 
     def traverse_tree(self, X: np.ndarray) -> np.ndarray:
         """
@@ -800,12 +803,12 @@ class Parameters:
             tree.leaf_ids = None
             tree.n = None
             
-    def copy(self, modified_tree_ids=None):
+    def copy(self, modified_tree_ids=None, copy_cache=True):
         if modified_tree_ids is None:
             modified_tree_ids = range(self.n_trees)
         copied_trees = self.trees.copy() # Shallow copy
         for tree_id in modified_tree_ids:
-            copied_trees[tree_id] = self.trees[tree_id].copy()
+            copied_trees[tree_id] = self.trees[tree_id].copy(copy_cache)
         # No need to deep copy global_params and cache
         # because they only contain numerical values (which are immutable)
         return Parameters(trees=copied_trees, 

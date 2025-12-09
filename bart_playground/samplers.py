@@ -101,10 +101,10 @@ class Sampler(ABC):
         # Determine the actual starting state for this MCMC run
         if current is not None:
             current_state = current
-        elif self.trace:  # If self.trace is already populated (e.g., by init_from_xgboost)
-            current_state = self.trace[0]  # Use the pre-loaded state
+        elif self.trace:
+            current_state = self.trace[0]
         else:
-            current_state = self.get_init_state() # Otherwise, generate a new initial state
+            current_state = self.get_init_state()
         
         self.trace = []
         self.n_iter = n_iter
@@ -119,10 +119,24 @@ class Sampler(ABC):
                 print(f"Running iteration {iter}/{n_iter}")
             
             temp = self.temp_schedule(iter)
-            current_state = self.one_iter(current_state, temp, return_trace=False)
-
+            backup_current = None
             if iter >= n_skip:
-                self.clear_last_cache()  # Clear cache of the last trace
+                # backup_current is a cache-free copy of current_state (the input to this iteration), which equals the previous iteration's output. 
+                # We keep it to replace the last trace without caches before appending the new state from this iteration.
+                if isinstance(current_state, list):
+                    # If current is a list (e.g., in LogisticSampler), copy each category
+                    backup_current = [c.copy(copy_cache=False) for c in current_state]
+                elif isinstance(current_state, Parameters):
+                    backup_current = current_state.copy(copy_cache=False)
+                else:
+                    raise ValueError("Invalid current state type")
+
+            current_state = self.one_iter(current_state, temp, return_trace=False)
+            
+            if iter >= n_skip:
+                if len(self.trace) > 0:
+                    # Replace last trace element with the cache-free copy of the previous iteration's output.
+                    self.trace[-1] = backup_current
                 self.trace.append(current_state)
         
         return self.trace
@@ -290,7 +304,7 @@ class DefaultSampler(Sampler):
         """
         Perform one iteration of the sampler.
         """
-        iter_current = current.copy() # First make a copy
+        iter_current = current#.copy() # First make a copy
         iter_trace = [(0, iter_current)]
         for k in range(self.tree_prior.n_trees):
             move_key, move_cls = self.sample_move()

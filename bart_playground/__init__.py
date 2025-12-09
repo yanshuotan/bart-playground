@@ -9,7 +9,8 @@ from .visualization import visualize_tree
 from .xgb_init import fit_and_init_trees, _xgb_json_to_tree
 from .random_init import generate_data_from_defaultbart_prior
 
-
+import logging
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART", "MultiBART", "PipelineBART",
            "Change", "Grow", "Prune", "Swap", 

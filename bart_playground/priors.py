@@ -8,6 +8,10 @@ from .params import Parameters
 from .moves import Move
 from .util import Dataset, GIG
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # Standalone Numba-optimized functions
 
 @njit(cache=True) 
@@ -148,6 +152,9 @@ class TreesPrior:
         self.generator = generator
         # If True, use quick decay parameterization for split probabilities
         self.quick_decay = quick_decay
+        if quick_decay:
+            if tree_alpha <= 0.0 or tree_alpha >= 0.5:
+                raise ValueError("tree_alpha must be between 0.0 and 0.5 for quick decay parameterization. See Rockova and Saha (2018) for more details.")
                 
     def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
         """
@@ -349,6 +356,10 @@ class GlobalParamPrior:
         else:
             raise ValueError("Invalid specification for the noise variance prior.")
         
+        if sigma_hat <= 1e-5:
+            logger.warning(f"Estimated sigma_hat {sigma_hat} is too small, returning a small positive value (1e-5) to avoid numerical issues. Specification: {specification}.")
+            sigma_hat = float(1e-5)
+        
         # chi2.ppf suffices
         c = chi2.ppf(1 - self.eps_q, df=self.eps_nu).item()
         eps_lambda_val = (sigma_hat**2 * c) / self.eps_nu
@@ -371,6 +382,10 @@ class GlobalParamPrior:
         post_alpha = prior_alpha + n / 2
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)
+        # if eps_sigma2[0] <= 1e-8:
+        #     _sim_logger.warning("Sampled eps_sigma2 is non-positive, returning a small positive value to avoid numerical issues.")
+        #     _sim_logger.info(f"Sampled eps_sigma2: {eps_sigma2}, prior_alpha: {prior_alpha}, prior_beta: {prior_beta}, post_alpha: {post_alpha}, post_beta: {post_beta}")
+        #     eps_sigma2[0] = 1e-8
         return eps_sigma2
 
 class BARTLikelihood:
@@ -419,13 +434,19 @@ class BARTLikelihood:
         if len(tree_ids) == 1:
             # For single tree, we can use the optimized function with leaf_ids
             tree = bart_params.trees[tree_ids[0]]
-            return _single_tree_log_marginal_lkhd_numba(
-                tree.leaf_ids, 
-                tree.n,
-                resids, 
-                bart_params.global_params["eps_sigma2"][0], 
-                self.f_sigma2
-            )
+            try:
+                return _single_tree_log_marginal_lkhd_numba(
+                    tree.leaf_ids, 
+                    tree.n,
+                    resids, 
+                    bart_params.global_params["eps_sigma2"][0], 
+                    self.f_sigma2
+                )     
+            except Exception as e:
+                logger.error(f"Error calculating likelihood for tree {tree_ids[0]}: {e}")
+                logger.error(f"Data: {data_y}")
+                logger.error(f"Related information: leaf_ids: {tree.leaf_ids}; sample_n_in_node: {tree.n}; residuals: {resids}; eps_sigma2: {bart_params.global_params['eps_sigma2'][0]}; f_sigma2: {self.f_sigma2}", exc_info=True)
+                raise ValueError("Error calculating likelihood for single tree. Check the tree structure and residuals.")
         else:
             leaf_basis = bart_params.leaf_basis(tree_ids)
             return _trees_log_marginal_lkhd_numba(
