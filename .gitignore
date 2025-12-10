@@ -23,7 +23,7 @@ bart_playground/bandit/baselines
 .idea/*
 .cursor/*
 
-benchmarks/**/*.csv
+*.csv
 tests/unit/plan/*
 tests/output/*
 tests/*.md
