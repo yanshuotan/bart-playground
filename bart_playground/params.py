@@ -9,6 +9,20 @@ from collections import Counter
 Float32Or64 = Union[np.float32, np.float64]
 
 @njit(cache=True)
+def _update_leaf_ids_for_prune(leaf_ids, desc, node_id):
+    """
+    Numba-optimized in-place update of leaf_ids for pruned nodes.
+    """
+    n_samples = leaf_ids.shape[0]
+    n_desc = desc.shape[0]
+    for i in range(n_samples):
+        current = leaf_ids[i]
+        for j in range(n_desc):
+            if current == desc[j]:
+                leaf_ids[i] = node_id
+                break
+
+@njit(cache=True)
 def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_leaf_id):
     """
     Numba-optimized function to update all node counts and leaf_ids.
@@ -205,7 +219,7 @@ class Tree:
             other.leaf_vals.copy(),
             other.n.copy() if copy_cache else None,
             other.leaf_ids.copy() if copy_cache else None,
-            other.evals.copy() if copy_cache else None
+            other.evals  # Lazy: update_outputs() creates new array anyway
         )
 
     def copy(self, copy_cache: bool = True) -> "Tree":
@@ -374,13 +388,16 @@ class Tree:
         
         desc = _descendants_numba(node_id, self.vars)
 
+        # Update leaf_ids using Numba-optimized function
+        if self.cache_exists:
+            _update_leaf_ids_for_prune(self.leaf_ids, desc, node_id)
+
         for this_node in desc:
             self.vars[this_node] = -2  # Mark all descendant nodes as pruned
             self.thresholds[this_node] = self.float_dtype.type(np.nan)
             self.leaf_vals[this_node] = self.float_dtype.type(np.nan)
             if self.cache_exists:
                 self.n[this_node] = 0
-                self.leaf_ids[self.leaf_ids == this_node] = node_id  # Update leaf_ids for pruned nodes
 
         # Turn the original node into a leaf
         self.vars[node_id] = -1
