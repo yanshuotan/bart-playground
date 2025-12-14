@@ -3,6 +3,7 @@ from typing import Optional
 from numpy.typing import NDArray
 from numba import njit
 from collections import Counter
+import logging
 
 @njit
 def _update_n_and_leaf_id_numba(starting_node, dataX, append: bool, vars, thresholds, prev_n, prev_leaf_id):
@@ -138,17 +139,18 @@ class Tree:
         self.leaf_vals: NDArray[np.float32] = leaf_vals
 
         self.n: NDArray[np.int32] = n
-        self.leaf_ids: NDArray[np.int16] = leaf_ids
+        self.leaf_ids: NDArray[np.int32] = leaf_ids
         self.evals: NDArray[np.float32] = evals
 
     default_size: int = 8  # Default size for the tree arrays
+    max_nodes: int = 131072 # Max nodes, equivalent to 2**17
     
     def _init_caching_arrays(self):
         """
         Initialize caching arrays for the tree.
         """
         assert self.dataX is not None, "Data matrix is not provided."
-        self.leaf_ids = np.zeros(self.dataX.shape[0], dtype=np.int16)
+        self.leaf_ids = np.zeros(self.dataX.shape[0], dtype=np.int32)
         self.n = np.zeros(Tree.default_size, dtype=np.int32)
         self.n[0] = self.dataX.shape[0]
         self.evals = np.zeros(self.dataX.shape[0], dtype=np.float32)
@@ -236,6 +238,10 @@ class Tree:
         old_size = len(self.vars)
         new_size = old_size * 2
 
+        if new_size > Tree.max_nodes:
+            logging.warning(f"Tree resize aborted. Attempted to grow from {old_size} to {new_size} nodes, which exceeds the max of {Tree.max_nodes}.")
+            return False
+
         # -------- vars (int) --------
         # Alloc uninitialized
         a = np.empty(new_size, dtype=self.vars.dtype)
@@ -263,6 +269,8 @@ class Tree:
             d[:old_size] = self.n
             d[old_size:] = 0
             self.n = d
+
+        return True
 
     
     def _truncate_tree_arrays(self):
@@ -316,7 +324,8 @@ class Tree:
         right_child = node_id * 2 + 2
 
         if left_child >= len(self.vars) or right_child >= len(self.vars):
-            self._resize_arrays()
+            if not self._resize_arrays():
+                return False
 
         # Assign the split variable and threshold to the leaf node
         self.vars[node_id] = var
@@ -338,13 +347,15 @@ class Tree:
 
         return is_valid
 
-    def prune_split(self, node_id: int, recursive = False):
+    def prune_split(self, node_id: int, tree_id: Optional[int] = None, recursive = False):
         """
         Prune a terminal split node, turning it back into a leaf.
 
         Parameters:
         - node_id: int
             Index of the split node to prune.
+        - tree_id: int, optional
+            The ID of the tree being pruned, for logging purposes.
         - recursive: bool, default=False
         If True, recursively prune all descendant split nodes.
         """
@@ -385,7 +396,9 @@ class Tree:
     def swap_split(self, parent_id, child_id):
         parent_var, parent_threshold = self.vars[parent_id], self.thresholds[parent_id]
         child_var, child_threshold = self.vars[child_id], self.thresholds[child_id]
-        self.change_split(child_id, parent_var, parent_threshold, update_n=False)
+        is_valid = self.change_split(child_id, parent_var, parent_threshold, update_n=True)
+        if not is_valid:
+            return False
         is_valid = self.change_split(parent_id, child_var, child_threshold, update_n=True)
         return is_valid
     
@@ -488,6 +501,9 @@ class Tree:
             return f"Tree(vars={self.vars}, thresholds={self.thresholds}, leaf_vals={self.leaf_vals}, n_vals={self.n})"
 
     def _print_tree(self, node_id=0, prefix=""):
+        if node_id >= len(self.vars) or self.vars[node_id] == -2:
+            return ""
+        
         pprefix = prefix + "\t"
         if self.vars[node_id] == -1: # Leaf node
             return prefix + self._print_node(node_id)

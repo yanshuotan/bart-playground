@@ -120,7 +120,7 @@ class Prune(Move):
         node_id = fast_choice(generator, self.cur_terminal_split_nodes)
         n_splits = len(self.cur_terminal_split_nodes)
         
-        tree.prune_split(node_id)
+        tree.prune_split(node_id, tree_id=self.trees_changed[0])
         n_leaves = tree.n_leaves
         self.log_tran_ratio = math.log(n_splits) - math.log(n_leaves)
         return True

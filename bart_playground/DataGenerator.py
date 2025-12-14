@@ -4,6 +4,7 @@ import logging
 
 import numpy as np
 from sklearn.tree import DecisionTreeRegressor
+from scipy.stats import norm
 
 LOGGER = logging.getLogger("DataGenerator")
 logging.basicConfig(level=logging.INFO)
@@ -415,26 +416,109 @@ class DataGenerator:
 
     def piecewise_linear_kunzel(self):
         # piecese wise linear function from Kunzel et al 2019
-        # the covariates are n_features dimentional with the same mean and variance as in low_lei_candes
-        # the is linear with the three pieces based on the last feature
-        # the coeffcients anre sampled uniformly from [-15, 15]
+        # This version is modified to match the logic of a previous R implementation,
+        # including pnorm scaling, non-deterministic coefficients, and a fixed number of features.
+        if not self.n_features == 20:
+            LOGGER.debug("n_features is not 20, using 20 for piecewise_linear_kunzel to match R version")
+            self.n_features = 20
+            
+        # The covariates are n_features dimentional with the same mean and variance as in low_lei_candes
         X = self.rng.multivariate_normal(mean=np.zeros(self.n_features), cov=np.eye(self.n_features) + 0.01 - 0.01 * np.eye(self.n_features), size=self.n_samples)
+        
+        # Apply pnorm scaling to match R script
+        X = norm.cdf(X)
+
         x_last = X[:, -1]
         y_noiseless = np.zeros(self.n_samples)
-        idx_1 = x_last > 4
-        idx_2 = x_last < -4
-        idx_3 = (x_last >= -4) & (x_last <= 4)
-        # Use local RNGs to avoid polluting the global state while keeping coefficients deterministic
+        
+        # With pnorm scaling, idx_2 will be empty, matching the R implementation's behavior
+        idx_1 = x_last >= 0.4
+        idx_2 = x_last < -0.4
+        idx_3 = (x_last >= -0.4) & (x_last < 0.4)
+        
+        # Use local, seeded RNGs to keep coefficients deterministic across runs
         rng1 = np.random.default_rng(1)
         coefs1 = rng1.uniform(-15, 15, size=self.n_features)
         rng2 = np.random.default_rng(2)
         coefs2 = rng2.uniform(-15, 15, size=self.n_features)
         rng3 = np.random.default_rng(3)
         coefs3 = rng3.uniform(-15, 15, size=self.n_features)
+        
         y_noiseless[idx_1] = X[idx_1] @ coefs1
         y_noiseless[idx_2] = X[idx_2] @ coefs2
         y_noiseless[idx_3] = X[idx_3] @ coefs3
         return X, y_noiseless
+    
+    def piecewise_linear_sparse(self):
+        """
+        Piecewise linear sparse: Piecewise linear with regime switching based on last covariate.
+        
+        - d = 20 features
+        - X ~ N(0, I_20)
+        - β ~ Uniform([-15, 15]^20)
+        - Three regimes based on x_20 (last feature):
+            * Lower regime (x_20 < -0.4): uses β_l (features 1-5 only)
+            * Middle regime (-0.4 ≤ x_20 < 0.4): uses β_m (features 6-10 only)
+            * Upper regime (x_20 ≥ 0.4): uses β_u (features 11-15 only)
+        - Features 16-19 are noise (never active)
+        - Noise variance = 1 (fixed)
+        
+        Returns:
+            tuple: (X, y_noiseless) where X is (n_samples, 20)
+        """
+        if self.n_features != 20:
+            LOGGER.debug("n_features is not 20, using 20 for piecewise_linear_sparse")
+            self.n_features = 20
+        
+        # Features from standard multivariate normal
+        X = self.rng.multivariate_normal(
+            mean=np.zeros(self.n_features), 
+            cov=np.eye(self.n_features), 
+            size=self.n_samples
+        )
+        
+        # Last covariate determines regime
+        x_last = X[:, -1]
+        y_noiseless = np.zeros(self.n_samples)
+        
+        # Define regimes based on thresholds at ±0.4
+        idx_lower = x_last < -0.4      # Lower regime: use features 1-5
+        idx_middle = (x_last >= -0.4) & (x_last < 0.4)  # Middle regime: use features 6-10
+        idx_upper = x_last >= 0.4      # Upper regime: use features 11-15
+        
+        # Generate three sets of coefficients, each for their active feature subset
+        # Use deterministic seeds for reproducibility
+        
+        # β_l: features 1-5 (indices 0-4)
+        rng_l = np.random.default_rng(100)
+        beta_l = np.zeros(self.n_features)
+        beta_l[0:5] = rng_l.uniform(-15, 15, size=5)
+        
+        # β_m: features 6-10 (indices 5-9)
+        rng_m = np.random.default_rng(101)
+        beta_m = np.zeros(self.n_features)
+        beta_m[5:10] = rng_m.uniform(-15, 15, size=5)
+        
+        # β_u: features 11-15 (indices 10-14)
+        rng_u = np.random.default_rng(102)
+        beta_u = np.zeros(self.n_features)
+        beta_u[10:15] = rng_u.uniform(-15, 15, size=5)
+        
+        # Features 16-20 (indices 15-19) remain zero (noise features)
+        
+        # Assign outcomes based on regime
+        y_noiseless[idx_lower] = X[idx_lower] @ beta_l
+        y_noiseless[idx_middle] = X[idx_middle] @ beta_m
+        y_noiseless[idx_upper] = X[idx_upper] @ beta_u
+        
+        return X, y_noiseless
+    
+    def piecewise_linear_sparse_original(self):
+        """
+        Alias for piecewise_linear_sparse - same function, different noise level.
+        The noise level is controlled by the config, not the function.
+        """
+        return self.piecewise_linear_sparse()
     
     def sum(self):
         # the covariates are 10 dimentional  with mean 0 variance 1 and covariance 0.01 if i = j+10 otherwise 0
