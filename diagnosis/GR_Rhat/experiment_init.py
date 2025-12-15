@@ -62,7 +62,7 @@ def get_feature_split_ratios(trace_list, n_features):
     return np.array(ratios_per_trace)
 
 
-def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries, 
+def run_experiment(run_id, chain_id, X, y, ndpost, nskip, n_trees, m_tries, 
                    tree_alpha, tree_beta, store_preds=False, n_test_points=None):
     """Run a single experiment with same train-test split but different initial trees"""
     
@@ -88,7 +88,7 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries,
     bart_mtmh = MultiBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
                           proposal_probs=proposal_probs_mtmh, multi_tries=m_tries, tol=1, 
                           tree_alpha=tree_alpha, tree_beta=tree_beta, # Only for mtmh prior
-                          random_state=0, init_trees=random_trees)
+                          random_state=run_id*100+chain_id, init_trees=random_trees)
     bart_mtmh.fit(X_train, y_train)
     
     # Extract MTMH BART results
@@ -110,7 +110,8 @@ def run_experiment(run_id, X, y, ndpost, nskip, n_trees, m_tries,
         'swap': 0.1
     }
     bart_default = DefaultBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees, tol=1, 
-                    proposal_probs=proposal_probs_default, random_state=0, init_trees=random_trees)
+                               proposal_probs=proposal_probs_default, 
+                               random_state=run_id*100+chain_id, init_trees=random_trees)
     bart_default.fit(X_train, y_train)
     
     # Extract default BART results
@@ -159,6 +160,7 @@ def run_experiment_multiple_chains(run_id, X, y, ndpost, nskip, n_trees, m_tries
     for chain_id in range(n_chains):
         result = run_experiment(
             run_id=run_id, 
+            chain_id=chain_id,
             X=X, y=y, 
             ndpost=ndpost, nskip=nskip, n_trees=n_trees, m_tries=m_tries, 
             tree_alpha=tree_alpha, tree_beta=tree_beta, 
