@@ -63,7 +63,7 @@ class BARTTSAgent(BanditAgent):
             model_factory (Callable): Factory function to create BART models
             initial_random_selections (int): Number of initial random selections before using model
             random_state (int): Random seed
-            encoding (str): Encoding strategy ('multi', 'one-hot', 'separate', 'native')
+            encoding (str): Encoding strategy ('multi', 'one-hot', 'separate')
             refresh_schedule (str): Strategy to control model refresh frequency:
                 - 'log': Standard (default). Refresh when ceil(8*log(t)) jumps. Aggressive early, scarce later.
                 - 'sqrt': Balanced. Refresh when ceil(0.57*sqrt(t)) jumps. Smoother early phase.
@@ -91,10 +91,10 @@ class BARTTSAgent(BanditAgent):
         self.models: Union[list[BART], MultiChainBART] 
         if self.encoding == 'separate':
             first_model = model_factory()
-            assert isinstance(first_model, BART), "Must be a BART model"
             if isinstance(first_model, MultiChainBART) and getattr(first_model, "n_models", 1) == self.n_arms:
                 self.models = first_model
             else:
+                assert isinstance(first_model, BART), "Must be a BART model"
                 self.models = [first_model]
                 for _ in range(1, n_arms):
                     self.models.append(model_factory())
@@ -105,7 +105,10 @@ class BARTTSAgent(BanditAgent):
         self.max_ndpost = int(getattr(self.model, 'ndpost', 0))
 
         # Check if model is logistic
-        self.is_logistic = isinstance(self.model, LogisticBART)
+        if isinstance(self.model, MultiChainBART):
+            self.is_logistic = issubclass(self.model.bart_class, LogisticBART)
+        else:
+            self.is_logistic = isinstance(self.model, LogisticBART)
         
         # Storage for all training data
         self.all_arms = []
@@ -269,13 +272,7 @@ class BARTTSAgent(BanditAgent):
         
         def _reformat(post_sample):
             if self.is_logistic:
-                if self.encoding in ['multi', 'one-hot', 'separate']:
-                    post_sample = post_sample[:, 1] 
-                elif self.encoding == 'native':
-                    post_sample = post_sample.flatten()
-            # Ensure scalar output for single-row input (i.e. separate encoding)
-            if np.ndim(post_sample) > 0 and post_sample.size == 1:
-                return float(post_sample.flat[0])
+                post_sample = post_sample[:, 1]
             return post_sample
         
         # Use a precomputed, non-repeating posterior draw index
@@ -382,7 +379,6 @@ class BARTTSAgent(BanditAgent):
     def diagnostics_probes(self, X_probes: np.ndarray) -> Dict[str, Any]:
         """
         Compute f(X) diagnostics for probes.
-        Raises NotImplementedError if model is logistic and encoding is native.
         Raises ValueError if model is not fitted or has no post-burn-in draws (from `compute_diagnostics`).
         """
         if self.is_logistic:
@@ -448,7 +444,7 @@ class BARTTSAgent(BanditAgent):
 
         Only support:
           * regression BART (non-logistic)
-          * separate models encoding (one model per arm, native covariates)
+          * separate models encoding (one model per arm, original covariates)
         """
         if self.is_logistic:
             raise NotImplementedError(
@@ -529,10 +525,6 @@ class BARTTSAgent(BanditAgent):
         if encoded_x.ndim > 1:
             encoded_x = encoded_x.flatten()
             
-        # Handle native encoding for logistic models
-        if self.encoding == 'native' and self.is_logistic:
-            y = float(np.logical_not(np.logical_xor(y, arm)))
-        
         # Store all data for potential refresh
         self.all_arms.append(arm)
         self.all_features.append(x.copy())
@@ -576,7 +568,7 @@ class BARTTSAgent(BanditAgent):
         if not self.is_model_fitted:
             return 0
         # Use model.range_post directly which now reflects total samples
-        return len(list(self.model.range_post))
+        return len(self.model.range_post)
 
     def _preprocess_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int, int, int]:
         """
@@ -636,7 +628,6 @@ class BARTTSAgent(BanditAgent):
             - For regression BART: draws correspond to posterior samples of f(x, arm).
             - For logistic BART: draws correspond to expected reward used in selection:
               * encoding in {'multi','one-hot','separate'}: P(y=1 | x, arm)
-              * encoding == 'native' (binary arms only): category probabilities per arm
             - Returns (empty array with shape (0, n_probes, n_arms), 0) when not fitted.
         """
         pass
@@ -744,11 +735,9 @@ class LogisticBARTTSAgent(BARTTSAgent):
     def __init__(self, n_arms: int, n_features: int,
                  initial_random_selections: int = 10,
                  random_state: int = 42,
-                 encoding: str = 'native',
+                 encoding: str = 'multi',
                  refresh_schedule: str = 'log',
                  bart_kwargs: Optional[Dict[str, Any]] = None) -> None:
-        if n_arms > 2 and encoding == 'native':
-            raise NotImplementedError("RefreshLogisticBARTAgent: native encoding currently only supports n_arms = 2.")
         
         default_bart_kwargs: Dict[str, Any] = {
             "ndpost": 500,
@@ -786,7 +775,6 @@ class LogisticBARTTSAgent(BARTTSAgent):
             - Draws correspond to expected reward used in selection:
               * encoding in {'multi','one-hot'}: P(y=1 | x, arm)
               * encoding == 'separate': P(y=1 | x) per arm model
-              * encoding == 'native' (binary arms only): category probabilities per arm
             - Returns (empty array with shape (0, n_probes, n_arms), 0) when not fitted.
         """
         X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
@@ -796,24 +784,21 @@ class LogisticBARTTSAgent(BARTTSAgent):
 
         # Logistic BART pathway
         if not self.separate_models:
-            if self.encoding in ['multi', 'one-hot']:
-                # Encode each probe for all arms and stack rows
-                encoded_list = []
-                for i in range(n_probes):
-                    x = X_probes[i, :]
-                    X_enc = self.encoder.encode(x, arm=-1)  # (n_arms, combined_dim)
-                    encoded_list.append(X_enc)
-                X_all = np.vstack(encoded_list)  # (n_probes*n_arms, combined_dim)
-                model_logit = cast(LogisticBART, self.model)
-                prob = model_logit.posterior_predict_proba(X_all)  # (n_rows, n_post, n_categories)
-                # Select probability of positive class (category 1) per row
-                if prob.shape[2] < 2:
-                    raise ValueError("LogisticBART with multi/one-hot encoding requires at least 2 categories.")
-                p1_rows = prob[:, :, 1]  # (n_rows, n_post)
-                draws = self._rows_to_draws(p1_rows, n_probes, n_arms)
-                return draws, n_post
-            else:
-                raise NotImplementedError(f"Unsupported encoding for logistic BARTTSAgent probes: {self.encoding}")
+            # Encode each probe for all arms and stack rows
+            encoded_list = []
+            for i in range(n_probes):
+                x = X_probes[i, :]
+                X_enc = self.encoder.encode(x, arm=-1)  # (n_arms, combined_dim)
+                encoded_list.append(X_enc)
+            X_all = np.vstack(encoded_list)  # (n_probes*n_arms, combined_dim)
+            model_logit = cast(LogisticBART, self.model)
+            prob = model_logit.posterior_predict_proba(X_all)  # (n_rows, n_post, n_categories)
+            # Select probability of positive class (category 1) per row
+            if prob.shape[2] < 2:
+                raise ValueError("LogisticBART with multi/one-hot encoding requires at least 2 categories.")
+            p1_rows = prob[:, :, 1]  # (n_rows, n_post)
+            draws = self._rows_to_draws(p1_rows, n_probes, n_arms)
+            return draws, n_post
         else:
             # Separate logistic models per arm; use P(y=1|x) as arm value
             draws = np.zeros((n_post, n_probes, n_arms), dtype=float)
