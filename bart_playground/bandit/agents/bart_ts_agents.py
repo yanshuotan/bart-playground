@@ -88,15 +88,16 @@ class BARTTSAgent(BanditAgent):
 
         # Model setup
         self.model_factory = model_factory
+        self.models: Union[list[BART], MultiChainBART] 
         if self.encoding == 'separate':
             first_model = model_factory()
+            assert isinstance(first_model, BART), "Must be a BART model"
             if isinstance(first_model, MultiChainBART) and getattr(first_model, "n_models", 1) == self.n_arms:
                 self.models = first_model
             else:
-                models: list[BART] = [first_model]
+                self.models = [first_model]
                 for _ in range(1, n_arms):
-                    models.append(model_factory())
-                self.models = models
+                    self.models.append(model_factory())
         else:
             self.models = [model_factory()]
         
@@ -130,6 +131,7 @@ class BARTTSAgent(BanditAgent):
         return self.models[0]
     @model.setter
     def model(self, value):
+        assert isinstance(self.models, list), "Must be a list of BART models"
         self.models[0] = value
     
     @property
@@ -545,6 +547,26 @@ class BARTTSAgent(BanditAgent):
         self.t += 1
         
         return self
+    
+    def feel_good_weights(self, lam: Callable[[int], float]):
+        r"""
+        $$
+        S(\Theta)=\sum_{i} \min \left(b, \max _{a \in\{1, \ldots, K\}} f_{\Theta}\left(x_i, a\right)\right) \\
+        w_j = \exp(\lambda S(\Theta_j))
+        $$
+        Here we may assume b=1, so that f>=-b always holds for non-backtransformed rewards.
+        Return the (unnormalized) log weights (log w_1, ..., log w_{n_post}) for the current posterior samples.
+        Shape: (n_post,)
+        """
+        # Get all posterior samples evaluated at historical data points
+        # Shape: (n_post, n_data, n_arms)
+        # Currently, we use window size = infinity, i.e. full history
+        post_samples, _ = self.posterior_draws_on_probes(np.asarray(self.all_features)) 
+
+        # Shape: (n_post, n_data)
+        min_max_post_samples = np.minimum(1.0, np.max(post_samples, axis=2))
+        # Shape: (n_post,)
+        return lam(self.t) * np.sum(min_max_post_samples, axis=1)
 
     @property
     def n_post(self) -> int:
@@ -613,8 +635,7 @@ class BARTTSAgent(BanditAgent):
         Notes:
             - For regression BART: draws correspond to posterior samples of f(x, arm).
             - For logistic BART: draws correspond to expected reward used in selection:
-              * encoding in {'multi','one-hot'}: P(y=1 | x, arm)
-              * encoding == 'separate': P(y=1 | x) per arm model
+              * encoding in {'multi','one-hot','separate'}: P(y=1 | x, arm)
               * encoding == 'native' (binary arms only): category probabilities per arm
             - Returns (empty array with shape (0, n_probes, n_arms), 0) when not fitted.
         """
