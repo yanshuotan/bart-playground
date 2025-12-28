@@ -12,6 +12,8 @@ class BART:
     """
     API for the BART model.
     """
+    preprocessor_class = None  # Must be overridden by subclasses
+    
     def __init__(self, preprocessor : Preprocessor, sampler : Sampler, 
                  ndpost=1000, nskip=100):
         """

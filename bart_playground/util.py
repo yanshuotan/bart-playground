@@ -27,7 +27,7 @@ def fast_choice_with_weights(generator, array, weights, cum_weights=None):
         raise ValueError("Array and weights must have the same length")
     if len_arr == 1:
         return array[0]
-    # Use precomputed cumsum if available
+    # Use precomputed cumsum if available (caller responsible for correctness)
     if cum_weights is None:
         cum_weights = np.cumsum(weights)
     weight_sum = cum_weights[-1]

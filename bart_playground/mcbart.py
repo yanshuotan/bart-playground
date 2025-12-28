@@ -66,7 +66,9 @@ class BARTActor:
         return self.model.predict_trace(k, X, backtransform=backtransform)
 
     def predict_trace_batch(self, k: int, X, backtransform: bool = True):
-        """Evaluate prediction at trace index k for ALL models in this actor."""
+        """
+        Evaluate prediction at trace index k for ALL models in this actor. Note: This is used for batch prediction and ignores the active model state.
+        """
         return [m.predict_trace(k, X, backtransform) for m in self.models]
 
     def get_attributes(self):
@@ -128,7 +130,6 @@ class MultiChainBART:
             max_bins_val = 100
         self._driver_preprocessor = bart_class.preprocessor_class(max_bins=max_bins_val)
         self._dataset: Optional[Dataset] = None
-        self._active = 0
         
         # Initialize Ray. ignore_reinit_error is useful in interactive environments.
         if not ray.is_initialized():
@@ -156,7 +157,6 @@ class MultiChainBART:
 
     def set_active_model(self, model_id: int):
         idx = int(model_id)
-        self._active = idx
         ray.get([actor.set_active_model.remote(idx) for actor in self.bart_actors])
         return self
     
@@ -169,6 +169,11 @@ class MultiChainBART:
         self._calculate_ndpost(ndpost)
         
         ray.get([actor.set_ndpost.remote(self.ndpost_per_chain) for actor in self.bart_actors])
+        return self
+
+    def set_max_bins(self, max_bins: int):
+        """Set max_bins for the driver preprocessor."""
+        self._driver_preprocessor.max_bins = int(max_bins)
         return self
 
     def __len__(self):
@@ -204,10 +209,8 @@ class MultiChainBART:
         """
         return range(self.ndpost)
 
-    def fit(self, X, y, quietly=False, max_bins: int = None):
+    def fit(self, X, y, quietly=False):
         """Fit all BART instances in parallel using Ray actors."""
-        if max_bins is not None:
-            self._driver_preprocessor.max_bins = max_bins
         dataset = self._driver_preprocessor.fit_transform(X, y)
         data_ref, prep_ref = self._share_dataset(dataset)
         fit_futures = [actor.fit.remote(data_ref, prep_ref, quietly) for actor in self.bart_actors]
@@ -264,6 +267,7 @@ class MultiChainBART:
     def predict_trace(self, k: int, X, backtransform: bool = True):
         """Predict using specific trace index k mapping to specific chain."""
         # Map global k -> (chain_id, local_k)
+        # Note: No bounds check here; internal contract ensures 0 <= k < self.ndpost
         chain_id = k // self.ndpost_per_chain
         local_k = k % self.ndpost_per_chain
 

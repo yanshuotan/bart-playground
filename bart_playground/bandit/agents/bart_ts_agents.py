@@ -134,6 +134,7 @@ class BARTTSAgent(BanditAgent):
         return self.models[0]
     @model.setter
     def model(self, value):
+        # Setter only called in non-separate branch where self.models is always a list
         assert isinstance(self.models, list), "Must be a list of BART models"
         self.models[0] = value
     
@@ -193,12 +194,14 @@ class BARTTSAgent(BanditAgent):
                 use_multichain = isinstance(self.models, MultiChainBART) and getattr(self.models, "n_models", 1) == self.n_arms
                 if use_multichain:
                     ndpost_need = self._ndpost_needed(max_needed)
+                    self.models: MultiChainBART
                     self.models.set_ndpost(ndpost_need)
+                    self.models.set_max_bins(current_max_bins)
                     for arm in range(self.n_arms):
                         arm_mask = np.array(self.all_arms) == arm
                         X_arm = X[arm_mask]
                         y_arm = y[arm_mask]
-                        self.models[arm].fit(X_arm, y_arm, quietly=True, max_bins=current_max_bins)
+                        self.models[arm].fit(X_arm, y_arm, quietly=True)
                 else:
                     # Train separate models for each arm
                     new_models: list[BART] = []
@@ -539,26 +542,6 @@ class BARTTSAgent(BanditAgent):
         self.t += 1
         
         return self
-    
-    def feel_good_weights(self, lam: Callable[[int], float]):
-        r"""
-        $$
-        S(\Theta)=\sum_{i} \min \left(b, \max _{a \in\{1, \ldots, K\}} f_{\Theta}\left(x_i, a\right)\right) \\
-        w_j = \exp(\lambda S(\Theta_j))
-        $$
-        Here we may assume b=1, so that f>=-b always holds for non-backtransformed rewards.
-        Return the (unnormalized) log weights (log w_1, ..., log w_{n_post}) for the current posterior samples.
-        Shape: (n_post,)
-        """
-        # Get all posterior samples evaluated at historical data points
-        # Shape: (n_post, n_data, n_arms)
-        # Currently, we use window size = infinity, i.e. full history
-        post_samples, _ = self.posterior_draws_on_probes(np.asarray(self.all_features)) 
-
-        # Shape: (n_post, n_data)
-        min_max_post_samples = np.minimum(1.0, np.max(post_samples, axis=2))
-        # Shape: (n_post,)
-        return lam(self.t) * np.sum(min_max_post_samples, axis=1)
 
     @property
     def n_post(self) -> int:
@@ -592,26 +575,6 @@ class BARTTSAgent(BanditAgent):
 
         return X_probes, n_probes, n_arms, n_post
 
-    def _get_empty_draws(self, n_probes: int, n_arms: int) -> Tuple[np.ndarray, int]:
-        """Return empty draws array when model is not fitted."""
-        logger.warning('Model is not fitted, returning empty draws for probes')
-        return np.zeros((0, n_probes, n_arms), dtype=float), 0
-
-    def _rows_to_draws(self, rows: np.ndarray, n_probes: int, n_arms: int) -> np.ndarray:
-        """
-        Helper to reshape stacked rows (n_probes * n_arms, n_post) -> (n_post, n_probes, n_arms)
-
-        Args:
-            rows: Array of shape (n_probes * n_arms, n_post)
-            n_probes: Number of probe points
-            n_arms: Number of arms
-
-        Returns:
-            Array of shape (n_post, n_probes, n_arms)
-        """
-        arr = rows.reshape(n_probes, n_arms, -1)  # -1 infers n_post
-        return np.transpose(arr, (2, 0, 1))
-
     @abstractmethod
     def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
         """
@@ -628,7 +591,6 @@ class BARTTSAgent(BanditAgent):
             - For regression BART: draws correspond to posterior samples of f(x, arm).
             - For logistic BART: draws correspond to expected reward used in selection:
               * encoding in {'multi','one-hot','separate'}: P(y=1 | x, arm)
-            - Returns (empty array with shape (0, n_probes, n_arms), 0) when not fitted.
         """
         pass
 
@@ -682,6 +644,51 @@ class DefaultBARTTSAgent(BARTTSAgent):
         if user_max_bins is not None:
             self._fixed_max_bins_value = user_max_bins
 
+    def _posterior_f_by_arm(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int, int, int]:
+        """
+        Get posterior f values with shape (n_probes, n_arms, n_post).
+        Used by both posterior_draws_on_probes and feel_good_weights.
+
+        Args:
+            X_probes: Array of shape (n_probes, n_features)
+
+        Returns:
+            f_by_arm: (n_probes, n_arms, n_post)
+            n_probes, n_arms, n_post
+        """
+        X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
+
+        if not self.separate_models:
+            # Encode all probes for all arms
+            encoded_list = [self.encoder.encode(X_probes[i, :], arm=-1) for i in range(n_probes)]
+            X_all = np.vstack(encoded_list)  # (n_probes * n_arms, combined_dim)
+            f_rows = self.model.posterior_f(X_all, backtransform=True)  # (n_probes * n_arms, n_post)
+            f_by_arm = f_rows.reshape(n_probes, n_arms, -1)  # (n_probes, n_arms, n_post)
+        else:
+            # Separate models: stack per-arm results
+            f_list = [self.models[arm].posterior_f(X_probes, backtransform=True) for arm in range(n_arms)]
+            f_by_arm = np.stack(f_list, axis=1)  # (n_probes, n_arms, n_post)
+
+        return f_by_arm, n_probes, n_arms, n_post
+
+    def feel_good_weights(self, lam: Callable[[int], float]):
+        r"""
+        Compute feel-good weights for posterior samples based on historical features.
+        $$
+        S(\Theta)=\sum_{i} \min \left(b, \max _{a \in\{1, \ldots, K\}} f_{\Theta}\left(x_i, a\right)\right) \\
+        w_j = \exp(\lambda S(\Theta_j))
+        $$
+        Here we assume b=1, so that f>=-b always holds for non-backtransformed rewards.
+        
+        Returns:
+            Un-normalized log weights (log w_1, ..., log w_{n_post}) of shape (n_post,)
+        """
+        X_probes = np.asarray(self.all_features)
+        f_by_arm, _, _, _ = self._posterior_f_by_arm(X_probes)
+        max_over_arms = np.max(f_by_arm, axis=1)  # (n_probes, n_post)
+        S = np.sum(np.minimum(1.0, max_over_arms), axis=0)  # (n_post,)
+        return lam(self.t) * S
+
     def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
         """
         Compute posterior draws over all arms for provided probe covariates using DefaultBART.
@@ -695,37 +702,10 @@ class DefaultBARTTSAgent(BARTTSAgent):
 
         Notes:
             - Draws correspond to posterior samples of f(x, arm).
-            - Returns (empty array with shape (0, n_probes, n_arms), 0) when not fitted.
         """
-        X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
-
-        if n_post <= 0:
-            return self._get_empty_draws(n_probes, n_arms)
-
-        # Regression BART pathway (DefaultBART):
-        if not self.separate_models:
-            # Encode each probe for all arms and stack
-            encoded_list: list[np.ndarray] = []
-            for i in range(n_probes):
-                x = X_probes[i, :]
-                X_enc = self.encoder.encode(x, arm=-1)  # (n_arms, combined_dim)
-                encoded_list.append(X_enc)
-            X_all = np.vstack(encoded_list)  # (n_probes*n_arms, combined_dim)
-            # Posterior samples f(X)
-            f_rows = self.model.posterior_f(X_all, backtransform=True)  # (n_rows, n_post)
-            # Convert to (n_post, n_probes, n_arms)
-            draws = self._rows_to_draws(f_rows, n_probes, n_arms)
-            return draws, n_post
-        else:
-            # Separate models per arm
-            draws = np.zeros((n_post, n_probes, n_arms), dtype=float)
-            for arm in range(n_arms):
-                f = self.models[arm].posterior_f(X_probes, backtransform=True)  # (n_probes, n_post)
-                n_post_model = int(f.shape[1])
-                if n_post_model != n_post:
-                    logger.error(f"posterior_f produced {n_post_model} draws for arm {arm}, expected {n_post}")
-                draws[:, :, arm] = f.T  # (n_post, n_probes)
-            return draws, n_post
+        f_by_arm, n_probes, n_arms, n_post = self._posterior_f_by_arm(X_probes)
+        draws = np.transpose(f_by_arm, (2, 0, 1))  # (n_post, n_probes, n_arms)
+        return draws, n_post
 
 
 class LogisticBARTTSAgent(BARTTSAgent):
@@ -775,12 +755,8 @@ class LogisticBARTTSAgent(BARTTSAgent):
             - Draws correspond to expected reward used in selection:
               * encoding in {'multi','one-hot'}: P(y=1 | x, arm)
               * encoding == 'separate': P(y=1 | x) per arm model
-            - Returns (empty array with shape (0, n_probes, n_arms), 0) when not fitted.
         """
         X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
-
-        if n_post <= 0:
-            return self._get_empty_draws(n_probes, n_arms)
 
         # Logistic BART pathway
         if not self.separate_models:
@@ -797,7 +773,9 @@ class LogisticBARTTSAgent(BARTTSAgent):
             if prob.shape[2] < 2:
                 raise ValueError("LogisticBART with multi/one-hot encoding requires at least 2 categories.")
             p1_rows = prob[:, :, 1]  # (n_rows, n_post)
-            draws = self._rows_to_draws(p1_rows, n_probes, n_arms)
+            # Reshape and transpose: (n_rows, n_post) -> (n_probes, n_arms, n_post) -> (n_post, n_probes, n_arms)
+            p1_by_arm = p1_rows.reshape(n_probes, n_arms, -1)
+            draws = np.transpose(p1_by_arm, (2, 0, 1))
             return draws, n_post
         else:
             # Separate logistic models per arm; use P(y=1|x) as arm value
