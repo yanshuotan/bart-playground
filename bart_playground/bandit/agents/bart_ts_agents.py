@@ -53,7 +53,8 @@ class BARTTSAgent(BanditAgent):
                  initial_random_selections: int = 10,
                  random_state: int = 42,
                  encoding: str = 'multi',
-                 refresh_schedule: str = 'log') -> None:
+                 refresh_schedule: str = 'log',
+                 feel_good_lambda: float = 0.0) -> None:
         """
         Initialize the RefreshBART agent.
         
@@ -69,6 +70,7 @@ class BARTTSAgent(BanditAgent):
                 - 'sqrt': Balanced. Refresh when ceil(0.57*sqrt(t)) jumps. Smoother early phase.
                 - 'hybrid': Sqrt -> Log. Reduced early overhead, standard late behavior.
                 - 'rev_hybrid': Log -> Sqrt. Aggressive early learning, maintained alertness later.
+            feel_good_lambda (float): Lambda for feel-good weights. If 0, caching is disabled.
         """
         super().__init__(n_arms, n_features)
         
@@ -129,6 +131,10 @@ class BARTTSAgent(BanditAgent):
         # Fixed max_bins provided by caller (None -> use adaptive rule)
         self._fixed_max_bins_value: Optional[int] = None
         
+        # Feel-good weights caching
+        self.feel_good_lambda = float(feel_good_lambda)
+        self._fg_S: Optional[np.ndarray] = None  # Cache for S(Theta), shape (n_post,)
+        
     @property
     def model(self):
         return self.models[0]
@@ -177,8 +183,13 @@ class BARTTSAgent(BanditAgent):
         # soft cap at 2000 to avoid excessive quantile generation
         return int(min(2000, max(100, bins)))
     
-    def _refresh_model(self) -> None:
-        """Re-fit the model from scratch using all historical data."""
+    def _refresh_model(self) -> bool:
+        """
+        Re-fit the model from scratch using all historical data.
+        
+        Returns:
+            bool: True if refresh succeeded, False if it failed
+        """
         logger.info(f't = {self.t} - re-training BART model from scratch')
 
         X = np.array(self.all_encoded_features)
@@ -236,6 +247,10 @@ class BARTTSAgent(BanditAgent):
             # Reset sequential posterior index queue
             self._reset_post_queue()
             
+            # Feel-good cache full recompute on posterior refresh
+            if self.feel_good_lambda != 0.0:
+                self._feel_good_full_recompute()
+            
             # Memory tracking after refresh
             if PSUTIL_AVAILABLE:
                 try:
@@ -262,9 +277,11 @@ class BARTTSAgent(BanditAgent):
                     # Don't let memory logging crash the agent
                     pass
 
+            return True
+
         except Exception:
             logger.exception('Failed to refresh model; keeping previous model(s) in place')
-            # self.models or self.model and is_model_fitted remain as they were
+            return False
 
     def _get_action_estimates(self, x: Union[np.ndarray, List[float]]) -> np.ndarray:
         """Get action estimates for all arms based on input features x."""
@@ -279,8 +296,13 @@ class BARTTSAgent(BanditAgent):
                 post_sample = post_sample[:, 1]
             return post_sample
         
-        # Use a precomputed, non-repeating posterior draw index
-        k = self._next_post_index()
+        # Select posterior draw index based on feel-good mode
+        if self.feel_good_lambda != 0.0:
+            k = self._sample_fg_post_index()
+        else:
+            # Non-feel-good: use non-repeating queue
+            k = self._next_post_index()
+        
         def _eval_at(model, X: np.ndarray, k: int) -> np.ndarray:
             return model.predict_trace(k, X, backtransform=True)
         
@@ -361,7 +383,7 @@ class BARTTSAgent(BanditAgent):
         self.rng.shuffle(self._post_indices)
 
     def _next_post_index(self) -> int:
-        """Return the next posterior index to use without repetition.
+        """Return the next posterior index to use without repetition (non-feel-good TS path).
         If the queue is exhausted or not initialized, re-initialize it."""
         if self._post_idx_pos < len(self._post_indices):
             k = self._post_indices[self._post_idx_pos]
@@ -371,6 +393,25 @@ class BARTTSAgent(BanditAgent):
             logger.info(f'Posterior index queue exhausted ({self.n_post} samples used), re-initializing.')
             self._reset_post_queue()
             return self._next_post_index()
+
+    def _sample_fg_post_index(self) -> int:
+        """Sample a posterior draw index WITH replacement from p ~ exp(feel_good_lambda * S).
+        Used for feel-good TS when feel_good_lambda != 0.0."""
+        # Ensure cache is initialized
+        if self._fg_S is None:
+            raise ValueError("feel-good cache not initialized, cannot sample posterior draw index")
+        
+        # Compute probabilities via numerically-stable softmax
+        logw = self.feel_good_lambda * self._fg_S
+        m = float(np.max(logw))
+        p = np.exp(logw - m)
+        p = p / float(np.sum(p))
+        
+        # Sample a position and map to trace index k
+        rp = self.model.range_post
+        n_post = len(rp)
+        pos = int(self.rng.choice(n_post, replace=True, p=p))
+        return int(rp.start + pos * rp.step)
 
     def diagnostics_chain(self, key: str = "eps_sigma2") -> Dict[str, Any]:
         """
@@ -536,8 +577,11 @@ class BARTTSAgent(BanditAgent):
         self.all_encoded_features.append(encoded_x.copy())
         
         # Check if we should refresh the model
+        refreshed = False
         if self._should_refresh():
-            self._refresh_model()
+            refreshed = self._refresh_model()
+        if not refreshed and self.feel_good_lambda != 0.0 and self.is_model_fitted:
+            self._feel_good_incremental_recompute(x)
         
         # Increment time counter
         self.t += 1
@@ -595,6 +639,25 @@ class BARTTSAgent(BanditAgent):
         """
         pass
 
+    @abstractmethod
+    def _feel_good_full_recompute(self) -> None:
+        """
+        Full recompute of feel-good cache S(Theta).
+        Called after successful model refresh when feel_good_lambda != 0.
+        """
+        pass
+
+    @abstractmethod
+    def _feel_good_incremental_recompute(self, x_new: np.ndarray) -> None:
+        """
+        Incremental update of feel-good cache with new observation x_new.
+        Called after update_state when feel_good_lambda != 0 and model is fitted.
+        
+        Args:
+            x_new: New feature vector, shape (n_features,)
+        """
+        pass
+
 
 class DefaultBARTTSAgent(BARTTSAgent):
     """
@@ -607,7 +670,8 @@ class DefaultBARTTSAgent(BARTTSAgent):
                  encoding: str = 'multi',
                  n_chains: int = 1,
                  refresh_schedule: str = 'log',
-                 bart_kwargs: Optional[Dict[str, Any]] = None) -> None:
+                 bart_kwargs: Optional[Dict[str, Any]] = None,
+                 feel_good_lambda: float = 0.0) -> None:
         
         default_bart_kwargs: Dict[str, Any] = {
             "ndpost": 500,
@@ -640,7 +704,8 @@ class DefaultBARTTSAgent(BARTTSAgent):
                 )
         
         super().__init__(n_arms, n_features, model_factory,
-                         initial_random_selections, random_state, encoding, refresh_schedule)
+                         initial_random_selections, random_state, encoding, refresh_schedule,
+                         feel_good_lambda)
         
         if user_max_bins is not None:
             self._fixed_max_bins_value = user_max_bins
@@ -684,6 +749,67 @@ class DefaultBARTTSAgent(BARTTSAgent):
 
         return f_by_arm, n_probes, n_arms, n_post
 
+    def _compute_fg_ess(self) -> float:
+        """Compute Effective Sample Size (ESS) from feel-good weights: 1/sum(p^2)."""
+        if self._fg_S is None:
+            return float('nan')
+        
+        logw = self.feel_good_lambda * self._fg_S
+        m = float(np.max(logw))
+        p = np.exp(logw - m)
+        p = p / float(np.sum(p))
+        
+        ess = 1.0 / float(np.sum(p ** 2))
+        return ess
+
+    def _feel_good_full_recompute(self) -> None:
+        """
+        Full recompute of feel-good cache S(Theta) using all historical data.
+        Called after successful model refresh when feel_good_lambda != 0.
+        """
+        # Record ESS before refresh
+        ess_before = self._compute_fg_ess()
+        
+        if len(self.all_features) == 0:
+            # No data yet
+            n_post = self.n_post
+            self._fg_S = np.zeros(n_post)
+            return
+        
+        X_probes = np.asarray(self.all_features)
+        f_by_arm, _, _, _ = self._posterior_f_by_arm(X_probes)
+        max_over_arms = np.max(f_by_arm, axis=1)  # (n_probes, n_post)
+        self._fg_S = np.sum(max_over_arms, axis=0)  # (n_post,)
+        
+        # Record ESS after refresh
+        ess_after = self._compute_fg_ess()
+        n_post = self.n_post
+        
+        if np.isnan(ess_before):
+            logger.info(f"FG weights refreshed. ESS: {ess_after:.1f}/{n_post} ({100*ess_after/n_post:.1f}%)")
+        else:
+            logger.info(f"FG weights refreshed. ESS: {ess_before:.1f} -> {ess_after:.1f}/{n_post} ({100*ess_after/n_post:.1f}%)")
+
+    def _feel_good_incremental_recompute(self, x_new: np.ndarray) -> None:
+        """
+        Incremental update of feel-good cache with new observation x_new.
+        Called after update_state when feel_good_lambda != 0 and model is fitted.
+        
+        Args:
+            x_new: New feature vector, shape (n_features,)
+        """
+        if self._fg_S is None:
+            # Cache not initialized, do full recompute
+            self._feel_good_full_recompute()
+            return
+        
+        # Compute contribution of the new point
+        x_new_2d = x_new.reshape(1, -1)  # (1, n_features)
+        f_by_arm, _, _, _ = self._posterior_f_by_arm(x_new_2d)
+        max_over_arms = np.max(f_by_arm, axis=1)  # (1, n_post)
+        delta = max_over_arms[0]  # (n_post,)
+        self._fg_S += delta
+
     def feel_good_weights(self, lam: Callable[[int], float]):
         r"""
         Compute feel-good weights for posterior samples based on historical features.
@@ -696,11 +822,10 @@ class DefaultBARTTSAgent(BARTTSAgent):
         Returns:
             Un-normalized log weights (log w_1, ..., log w_{n_post}) of shape (n_post,)
         """
-        X_probes = np.asarray(self.all_features)
-        f_by_arm, _, _, _ = self._posterior_f_by_arm(X_probes)
-        max_over_arms = np.max(f_by_arm, axis=1)  # (n_probes, n_post)
-        S = np.sum(max_over_arms, axis=0)  # (n_post,)
-        return lam(self.t) * S
+        if self._fg_S is None:
+            # Cache not initialized yet, return zeros
+            return np.zeros(self.n_post)
+        return lam(self.t) * self._fg_S
 
     def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
         """
@@ -730,7 +855,8 @@ class LogisticBARTTSAgent(BARTTSAgent):
                  random_state: int = 42,
                  encoding: str = 'multi',
                  refresh_schedule: str = 'log',
-                 bart_kwargs: Optional[Dict[str, Any]] = None) -> None:
+                 bart_kwargs: Optional[Dict[str, Any]] = None,
+                 feel_good_lambda: float = 0.0) -> None:
         
         default_bart_kwargs: Dict[str, Any] = {
             "ndpost": 500,
@@ -748,7 +874,8 @@ class LogisticBARTTSAgent(BARTTSAgent):
                 **merged_bart_kwargs
             )
         super().__init__(n_arms, n_features, model_factory,
-                         initial_random_selections, random_state, encoding, refresh_schedule)
+                         initial_random_selections, random_state, encoding, refresh_schedule,
+                         feel_good_lambda)
         
         if user_max_bins is not None:
             self._fixed_max_bins_value = user_max_bins

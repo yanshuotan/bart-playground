@@ -18,6 +18,14 @@ class DummyAgent(BARTTSAgent):
 
     def posterior_draws_on_probes(self, X_probes: np.ndarray):
         return np.zeros((0, 0, 0)), 0
+    
+    def _feel_good_full_recompute(self) -> None:
+        """Dummy implementation for testing."""
+        pass
+    
+    def _feel_good_incremental_recompute(self, x_new: np.ndarray) -> None:
+        """Dummy implementation for testing."""
+        pass
 
 
 def _make_agent_with_real_multichain(n_arms=2, n_features=1):
@@ -289,4 +297,195 @@ def test_posterior_f_batch_consistency():
         # Check shape and numerical consistency
         assert batch_results[i].shape == individual_results[i].shape
         np.testing.assert_allclose(batch_results[i], individual_results[i], rtol=1e-10)
+
+
+def test_feel_good_weights_caching():
+    """
+    Test feel-good weights caching:
+    1. When lambda=0, weights should be zero.
+    2. Cache is incrementally updated with each update_state.
+    3. Incremental computation == full recomputation.
+    4. Cache is fully recomputed after model refresh.
+    """
+    from bart_playground.bandit.agents.bart_ts_agents import DefaultBARTTSAgent
+    
+    n_arms = 2
+    n_features = 1
+    
+    bart_kwargs = {
+        "ndpost": 10,
+        "nskip": 5,
+        "n_trees": 5
+    }
+    
+    # Test 1: lambda=0 -> weights should be zero
+    agent_zero = DefaultBARTTSAgent(
+        n_arms=n_arms,
+        n_features=n_features,
+        initial_random_selections=0,
+        random_state=42,
+        encoding="multi",
+        n_chains=1,
+        refresh_schedule="log",
+        bart_kwargs=bart_kwargs,
+        feel_good_lambda=0.0
+    )
+    
+    # Add some data and fit
+    rng = np.random.default_rng(42)
+    for i in range(10):
+        arm = i % n_arms
+        x = rng.random(n_features)
+        y = rng.random()
+        agent_zero.update_state(arm, x, y)
+    
+    # Should have triggered refresh and fit
+    assert agent_zero.is_model_fitted
+    
+    # With lambda=0, cache should not be initialized (None)
+    assert agent_zero._fg_S is None
+    
+    # Calling feel_good_weights should return zeros when cache is None
+    weights = agent_zero.feel_good_weights(lambda t: 1.0)
+    np.testing.assert_array_equal(weights, np.zeros(agent_zero.n_post))
+    
+    # Test 2 & 3: Incremental == Full recompute
+    agent = DefaultBARTTSAgent(
+        n_arms=n_arms,
+        n_features=n_features,
+        initial_random_selections=0,
+        random_state=42,
+        encoding="multi",
+        n_chains=1,
+        refresh_schedule="log",
+        bart_kwargs=bart_kwargs,
+        feel_good_lambda=0.5  # Non-zero lambda to enable caching
+    )
+    
+    # Add initial data and force refresh
+    rng = np.random.default_rng(42)
+    for i in range(10):
+        arm = i % n_arms
+        x = rng.random(n_features)
+        y = rng.random()
+        agent.update_state(arm, x, y)
+    
+    # At this point cache should be initialized
+    assert agent.is_model_fitted
+    assert agent._fg_S is not None
+    
+    # Save the current cache
+    cache_after_initial = agent._fg_S.copy()
+    
+    # Add 5 more points incrementally
+    for i in range(5):
+        arm = i % n_arms
+        x = rng.random(n_features)
+        y = rng.random()
+        agent.update_state(arm, x, y)
+    
+    # Get incremental cache result
+    incremental_cache = agent._fg_S.copy()
+    
+    # Now do a full recompute to verify incremental matches full
+    agent._feel_good_full_recompute()
+    full_cache = agent._fg_S.copy()
+    
+    # Incremental should equal full recomputation
+    np.testing.assert_allclose(incremental_cache, full_cache, rtol=1e-10,
+                               err_msg="Incremental cache update should match full recomputation")
+    
+    # Test 4: Cache should update after refresh
+    # Force a refresh by manipulating the schedule
+    old_t = agent.t
+    agent.t = 100  # Jump ahead to trigger refresh
+    
+    # Add one more point to trigger refresh
+    x = rng.random(n_features)
+    y = rng.random()
+    refreshed = agent._should_refresh()
+    agent.t = old_t  # restore t before update
+    
+    if refreshed:
+        # Cache before refresh
+        cache_before_refresh = agent._fg_S.copy()
+        
+        # Update which should trigger refresh
+        agent.t = 100
+        agent.update_state(0, x, y)
+        
+        # Cache should be different after refresh (different posterior samples)
+        # We can't predict exact values, but we can verify cache was updated
+        assert agent._fg_S is not None
+        # The cache shape should remain correct
+        assert agent._fg_S.shape == (agent.n_post,)
+    
+    print("✓ Feel-good weights caching test passed")
+
+
+def test_feel_good_sampling_draw_index_is_weighted():
+    """
+    Test that feel-good sampling uses weighted posterior draws.
+    When _fg_S is highly peaked, sampled k should always match the peak index.
+    """
+    from bart_playground.bandit.agents.bart_ts_agents import DefaultBARTTSAgent
+    
+    n_arms = 2
+    n_features = 1
+    
+    bart_kwargs = {
+        "ndpost": 20,  # Request 20 posterior samples
+        "nskip": 5,
+        "n_trees": 5
+    }
+    
+    # Create agent with non-zero feel_good_lambda
+    agent = DefaultBARTTSAgent(
+        n_arms=n_arms,
+        n_features=n_features,
+        initial_random_selections=0,
+        random_state=42,
+        encoding="multi",
+        n_chains=1,
+        refresh_schedule="log",
+        bart_kwargs=bart_kwargs,
+        feel_good_lambda=1.0
+    )
+    
+    # Add enough data to trigger fit
+    rng = np.random.default_rng(42)
+    for i in range(30):
+        arm = i % n_arms
+        x = rng.random(n_features)
+        y = rng.random()
+        agent.update_state(arm, x, y)
+    
+    # Should have triggered refresh and fit
+    assert agent.is_model_fitted
+    assert agent._fg_S is not None
+    
+    # Get actual n_post (may be less than requested due to _steps_until_next_refresh)
+    n_post = agent.n_post
+    assert n_post >= 1, f"Need at least 1 posterior sample, got {n_post}"
+    
+    # Create a degenerate weight distribution (all -1000, one element 0)
+    # Use the middle index or index 0 if n_post is small
+    peak_idx = min(n_post // 2, n_post - 1) if n_post > 1 else 0
+    
+    # Create peaked _fg_S
+    agent._fg_S = np.full(n_post, -1000.0)
+    agent._fg_S[peak_idx] = 0.0
+    
+    # Expected k value
+    rp = agent.model.range_post
+    expected_k = rp.start + peak_idx * rp.step
+    
+    # Sample many times and check all match the expected k
+    num_samples = 50
+    for _ in range(num_samples):
+        sampled_k = agent._sample_fg_post_index()
+        assert sampled_k == expected_k, \
+            f"Expected k={expected_k} (peak at idx {peak_idx}), got k={sampled_k}"
+    
+    print("✓ Feel-good sampling weighted draw test passed")
 
