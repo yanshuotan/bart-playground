@@ -542,7 +542,7 @@ class LogisticBART(BART):
     def fit(self, X, y, quietly=False):
         y = y.flatten()
         self.sampler.n_categories = np.unique(y).size
-        super().fit(X, y, quietly=quietly)
+        return super().fit(X, y, quietly=quietly)
 
     def fit_with_data(self, data: Dataset, quietly=False):
         # data.y is already encoded to 0..K-1 by ClassificationPreprocessor

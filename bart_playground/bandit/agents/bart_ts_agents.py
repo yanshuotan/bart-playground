@@ -8,6 +8,8 @@ from bart_playground.mcbart import MultiChainBART
 from bart_playground.bandit.agents.agent import BanditAgent
 from bart_playground.bandit.experiment_utils.encoder import BanditEncoder
 from bart_playground.diagnostics import compute_diagnostics, MoveAcceptance
+from bart_playground.bandit.agents.refresh_schedule import RefreshScheduleMixin
+from bart_playground.bandit.agents.diagnostics_mixin import DiagnosticsMixin
 
 try:
     import psutil
@@ -40,7 +42,7 @@ def _prepare_bart_kwargs(default_kwargs: Dict[str, Any],
     
     return base_ndpost, user_max_bins, merged
 
-class BARTTSAgent(BanditAgent):
+class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
     """
     A BART agent that periodically re-fits the entire model from scratch,
     similar to the refresh strategy used in XGBoostTS and RandomForestTS agents.
@@ -140,7 +142,7 @@ class BARTTSAgent(BanditAgent):
         return self.models[0]
     @model.setter
     def model(self, value):
-        # Setter only called in non-separate branch where self.models is always a list
+        # Setter only called in non-separate branch where self.models is always a list; assertion always holds.
         assert isinstance(self.models, list), "Must be a list of BART models"
         self.models[0] = value
     
@@ -252,7 +254,7 @@ class BARTTSAgent(BanditAgent):
                 self._feel_good_full_recompute()
             
             # Memory tracking after refresh
-            if PSUTIL_AVAILABLE:
+            if PSUTIL_AVAILABLE and self.t >= 1000:
                 try:
                     process = psutil.Process()
                     mem_main = process.memory_info().rss / (1024 ** 2)  # MB
@@ -329,51 +331,6 @@ class BARTTSAgent(BanditAgent):
                     action_estimates[arm] = float(np.ravel(post_val)[0])        
         return action_estimates
 
-    def _refresh_idx(self, t: int) -> int:
-        """Determine the time step at which the model should be refreshed."""
-        # Total number of refreshes at time t is normalized to ~56 at t=10k steps.
-        if self.refresh_schedule == 'log':
-            # Original: Aggressive early (t<100), very sparse late.
-            return int(np.ceil(8.0 * np.log(t)))
-            
-        elif self.refresh_schedule == 'sqrt':
-            # Balanced: Smoother early phase, consistent updates later.
-            return int(np.ceil(0.57 * np.sqrt(t)))
-            
-        elif self.refresh_schedule == 'hybrid':
-            # Hybrid (Switch @ 100): Sqrt -> Log
-            # Mitigates early overhead (Sqrt), then switches to efficient Log decay.
-            if t <= 100:
-                return int(np.ceil(1.848 * np.sqrt(t)))
-            else:
-                return int(np.ceil(9.240 * np.log(t) - 24.072))
-                
-        elif self.refresh_schedule == 'rev_hybrid':
-            # Rev-Hybrid (Switch @ 200): Log -> Sqrt
-            # Maintains aggressive early learning (Log), but keeps "alertness" later (Sqrt).
-            # Best for non-stationary or hard-to-converge environments.
-            if t <= 200:
-                return int(np.ceil(3.620 * np.log(t)))
-            else:
-                return int(np.ceil(0.512 * np.sqrt(t) + 11.940))
-                
-        else:
-            raise ValueError(f"Unknown refresh_schedule: {self.refresh_schedule}")
-
-    def _should_refresh(self) -> bool:
-        """Check if model should be refreshed based on time step."""
-        if self.t < self.initial_random_selections or not self._has_sufficient_data():
-            return False
-        return self._refresh_idx(self.t) > self._refresh_idx(self.t - 1)
-    
-    def _steps_until_next_refresh(self, t_now: int) -> int:
-        """Compute the number of selections until the next refresh trigger based on the schedule."""
-        # We assume we are in steady-state (enough data and past initial random phase)
-        steps = 1
-        while self._refresh_idx(t_now + steps) <= self._refresh_idx(t_now + steps - 1):
-            steps += 1
-        return steps
-
     def _reset_post_queue(self) -> None:
         """Reset the non-repeating posterior index queue after a refresh."""
         self._post_indices = []
@@ -412,123 +369,6 @@ class BARTTSAgent(BanditAgent):
         n_post = len(rp)
         pos = int(self.rng.choice(n_post, replace=True, p=p))
         return int(rp.start + pos * rp.step)
-
-    def diagnostics_chain(self, key: str = "eps_sigma2") -> Dict[str, Any]:
-        """
-        Compute chain-level MCMC diagnostics for the underlying model.
-        """
-        if not self.is_model_fitted or self.n_post <= 0:
-            return {}
-        return compute_diagnostics(self.model, key=key)
-
-    def diagnostics_probes(self, X_probes: np.ndarray) -> Dict[str, Any]:
-        """
-        Compute f(X) diagnostics for probes.
-        Raises ValueError if model is not fitted or has no post-burn-in draws (from `compute_diagnostics`).
-        """
-        if self.is_logistic:
-            raise NotImplementedError("diagnostics_probes: logistic handling not implemented yet")
-
-        # Preprocess probes and check posterior draws
-        X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
-
-        diag: dict[str, Any] = {"meta": {}, "metrics": {}, "acceptance": {}}
-
-        if not self.separate_models:
-            # Build rows for all (probe, arm) pairs
-            encoded_list: List[np.ndarray] = []
-            for p in range(n_probes):
-                x = X_probes[p, :]
-                X_enc = self.encoder.encode(x, arm=-1)  # (n_arms, combined_dim)
-                encoded_list.append(X_enc)
-            X_all = np.vstack(encoded_list)  # (n_probes*n_arms, combined_dim)
-
-            raw_diag = compute_diagnostics(self.model, X=X_all)
-            # raw_diag["metrics"] is a pandas DataFrame with columns [...metrics...]
-            metrics_df = raw_diag["metrics"]
-            # Build tidy DataFrame with probe/arm columns
-            if len(metrics_df) != n_probes * n_arms:
-                logger.warning("diagnostics_probes: unexpected metrics length vs n_probes*n_arms")
-            probes = np.repeat(np.arange(n_probes, dtype=int), n_arms)
-            arms = np.tile(np.arange(n_arms, dtype=int), n_probes)
-            out_df = pd.DataFrame({"probe_idx": probes, "arm": arms})
-            out_df = pd.concat([out_df, metrics_df], axis=1)
-
-            diag["meta"]["model"] = [raw_diag["meta"]]
-            diag["metrics"] = out_df
-            diag["acceptance"] = raw_diag["acceptance"]
-        else:
-            # Separate models: run per-arm and build tidy DataFrame with probe/arm columns
-            df_list: List[pd.DataFrame] = []
-            diag["meta"]["model"] = []
-            for a in range(n_arms):
-                model_a = self.models[a]
-                diag_a = compute_diagnostics(model_a, X=X_probes)
-                diag["meta"]["model"].append(diag_a["meta"])
-                metrics_df_a = diag_a["metrics"]
-                df_a = pd.DataFrame({"probe_idx": np.arange(n_probes, dtype=int), "arm": a})
-                df_a = pd.concat([df_a, metrics_df_a], axis=1)
-                df_list.append(df_a)
-                for move, move_acceptance in diag_a["acceptance"].items():
-                    if move not in diag["acceptance"]:
-                        diag["acceptance"][move] = MoveAcceptance(selected=0, proposed=0, accepted=0)
-                    diag["acceptance"][move] = diag["acceptance"][move].combine(move_acceptance)
-            # This dataframe is of different sort order than the one from the non-separate models
-            # This is fine for most purposes; the caller should not rely on the order
-            diag["metrics"] = pd.concat(df_list, ignore_index=True)
-
-        diag["meta"]["n_probes"] = n_probes
-        diag["meta"]["n_arms"] = n_arms
-        diag["meta"]["n_post"] = n_post
-
-        return diag
-
-    def feature_inclusion(self) -> Dict[str, Any]:
-        """
-        Compute per-feature inclusion statistics based on the current posterior.
-
-        Only support:
-          * regression BART (non-logistic)
-          * separate models encoding (one model per arm, original covariates)
-        """
-        if self.is_logistic:
-            raise NotImplementedError(
-                "feature_inclusion is only implemented for regression BARTTSAgent."
-            )
-        if not self.separate_models:
-            raise NotImplementedError(
-                "feature_inclusion currently only supports encoding='separate'."
-            )
-
-        # In the separate-models setup, we have one model per arm, each seeing the
-        # original covariates. We compute a per-arm inclusion frequency and then
-        # average across arms to get a single per-feature vector.
-        P = self.n_features
-        per_arm_inclusion: List[np.ndarray] = []
-
-        for arm in range(self.n_arms):
-            freq = self.models[arm].feature_inclusion_frequency("split")
-            per_arm_inclusion.append(freq)
-
-        stacked = np.stack(per_arm_inclusion, axis=0)  # (n_arms, P)
-        inclusion = np.mean(stacked, axis=0)  # (P,)
-
-        feature_idx = np.arange(P, dtype=int)
-        df = pd.DataFrame(
-            {
-                "feature_idx": feature_idx,
-                "inclusion": inclusion,
-            }
-        )
-
-        meta: Dict[str, Any] = {
-            "n_features": P,
-            "n_arms": self.n_arms,
-            "encoding": self.encoding,
-            "n_post": int(self.n_post),
-        }
-
-        return {"meta": meta, "metrics": df}
 
     def choose_arm(self, x: Union[np.ndarray, List[float]], **kwargs) -> int:
         """
