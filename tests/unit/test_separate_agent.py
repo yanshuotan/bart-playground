@@ -246,3 +246,47 @@ def test_batch_prediction_consistency():
         # though usually they should be identical if deterministic
         np.testing.assert_allclose(batch_preds[i], individual_preds[i], rtol=1e-6)
 
+
+def test_posterior_f_batch_consistency():
+    """Test that posterior_f_batch matches repeated mc[i].posterior_f calls."""
+    n_arms = 3
+    agent = _make_agent_with_real_multichain(n_arms=n_arms, n_features=2)
+    
+    # Custom population to ensure ALL arms have data
+    rng = np.random.default_rng(456)
+    for arm in range(n_arms):
+        # Give each arm some observations
+        for _ in range(5):
+            x = rng.random(2)
+            reward = rng.random()
+            agent.update_state(arm, x, reward)
+    
+    agent._refresh_model()
+    
+    # Ensure we have a fitted model
+    assert agent.is_model_fitted
+    mc_model = agent.models
+    
+    # Random probes (multiple rows to test shape handling)
+    X_probes = np.random.random((10, 2))
+    
+    # 1. Batch API - new method (returns 3D array)
+    batch_results = mc_model.posterior_f_batch(X_probes, backtransform=True)
+    
+    # 2. Individual calls via indexing (old semantics)
+    individual_results = []
+    for i in range(n_arms):
+        mc_model.set_active_model(i)
+        f = mc_model.posterior_f(X_probes, backtransform=True)
+        individual_results.append(f)
+    
+    # Compare results
+    # batch_results shape: (n_arms, n_probes, n_post_total)
+    assert batch_results.shape[0] == n_arms
+    assert batch_results.shape[1] == 10  # n_probes
+    
+    for i in range(n_arms):
+        # Check shape and numerical consistency
+        assert batch_results[i].shape == individual_results[i].shape
+        np.testing.assert_allclose(batch_results[i], individual_results[i], rtol=1e-10)
+

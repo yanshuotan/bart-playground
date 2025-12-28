@@ -71,6 +71,16 @@ class BARTActor:
         """
         return [m.predict_trace(k, X, backtransform) for m in self.models]
 
+    def posterior_f_batch(self, X, backtransform=True):
+        """
+        Get posterior f from ALL models in this actor.
+
+        
+        Returns:
+            Array of shape (n_models, n_samples, ndpost_per_chain)
+        """
+        return np.stack([m.posterior_f(X, backtransform=backtransform) for m in self.models], axis=0)
+
     def get_attributes(self):
         """Helper to retrieve attributes from the model inside the actor."""
         if self.model.is_fitted:
@@ -254,6 +264,35 @@ class MultiChainBART:
         preds_futures = [actor.posterior_f.remote(X, backtransform=backtransform) for actor in self.bart_actors]
         preds_list = ray.get(preds_futures)
         return np.concatenate(preds_list, axis=1)
+    
+    def posterior_f_batch(self, X, backtransform=True):
+        """
+        Get posterior f from all models across all chains.
+        
+        Args:
+            X: Input covariates (n_samples, n_features)
+            backtransform: Whether to backtransform predictions
+        
+        Returns:
+            Array of shape (n_models, n_samples, total_ndpost)
+            where total_ndpost = ndpost_per_chain * n_ensembles
+        
+        Notes:
+            - Parallelizes across chains via Ray
+            - Concatenates results from each chain along posterior dimension
+        """
+        # Parallel call to all actors
+        futures = [actor.posterior_f_batch.remote(X, backtransform=backtransform) 
+                   for actor in self.bart_actors]
+        results_per_actor = ray.get(futures)
+        # Each result: (n_models, n_samples, ndpost_per_chain)
+        
+        if not results_per_actor:
+            return np.zeros((0, 0, 0), dtype=float)
+        
+        # Concatenate along posterior dimension (axis=2)
+        return np.concatenate(results_per_actor, axis=2)
+
     
     def posterior_sample(self, X, schedule: Callable[[int], float]):
         """

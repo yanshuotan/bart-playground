@@ -201,6 +201,7 @@ class BARTTSAgent(BanditAgent):
                         arm_mask = np.array(self.all_arms) == arm
                         X_arm = X[arm_mask]
                         y_arm = y[arm_mask]
+                        # Note: fit() trains all chains in parallel, but each actor only fits its active arm model
                         self.models[arm].fit(X_arm, y_arm, quietly=True)
                 else:
                     # Train separate models for each arm
@@ -665,9 +666,21 @@ class DefaultBARTTSAgent(BARTTSAgent):
             f_rows = self.model.posterior_f(X_all, backtransform=True)  # (n_probes * n_arms, n_post)
             f_by_arm = f_rows.reshape(n_probes, n_arms, -1)  # (n_probes, n_arms, n_post)
         else:
-            # Separate models: stack per-arm results
-            f_list = [self.models[arm].posterior_f(X_probes, backtransform=True) for arm in range(n_arms)]
-            f_by_arm = np.stack(f_list, axis=1)  # (n_probes, n_arms, n_post)
+            # Separate models: check for batch optimization
+            use_batch = (isinstance(self.models, MultiChainBART) and 
+                         getattr(self.models, "n_models", 1) == self.n_arms and
+                         hasattr(self.models, 'posterior_f_batch'))
+            
+            if use_batch:
+                # OPTIMIZED: Single parallel Ray call for all arms
+                f_stack = self.models.posterior_f_batch(X_probes, backtransform=True)
+                # f_stack: (n_arms, n_probes, n_post)
+                f_by_arm = np.transpose(f_stack, (1, 0, 2))  # (n_probes, n_arms, n_post)
+            else:
+                # STANDARD: Loop over arms (for list[BART] or old MultiChainBART)
+                f_list = [self.models[arm].posterior_f(X_probes, backtransform=True) 
+                         for arm in range(n_arms)]
+                f_by_arm = np.stack(f_list, axis=1)  # (n_probes, n_arms, n_post)
 
         return f_by_arm, n_probes, n_arms, n_post
 
@@ -678,7 +691,7 @@ class DefaultBARTTSAgent(BARTTSAgent):
         S(\Theta)=\sum_{i} \min \left(b, \max _{a \in\{1, \ldots, K\}} f_{\Theta}\left(x_i, a\right)\right) \\
         w_j = \exp(\lambda S(\Theta_j))
         $$
-        Here we assume b=1, so that f>=-b always holds for non-backtransformed rewards.
+        Here we assume b=1/2, so that f \in [-b, b] always holds for not backtransformed rewards; There is therefore no need to clip the rewards.
         
         Returns:
             Un-normalized log weights (log w_1, ..., log w_{n_post}) of shape (n_post,)
@@ -686,7 +699,7 @@ class DefaultBARTTSAgent(BARTTSAgent):
         X_probes = np.asarray(self.all_features)
         f_by_arm, _, _, _ = self._posterior_f_by_arm(X_probes)
         max_over_arms = np.max(f_by_arm, axis=1)  # (n_probes, n_post)
-        S = np.sum(np.minimum(1.0, max_over_arms), axis=0)  # (n_post,)
+        S = np.sum(max_over_arms, axis=0)  # (n_post,)
         return lam(self.t) * S
 
     def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
@@ -779,9 +792,11 @@ class LogisticBARTTSAgent(BARTTSAgent):
             return draws, n_post
         else:
             # Separate logistic models per arm; use P(y=1|x) as arm value
+            # Note: This assumes self.models[arm] is a single LogisticBART, not MultiChainBART (not supported yet)
             draws = np.zeros((n_post, n_probes, n_arms), dtype=float)
             for arm in range(n_arms):
                 prob = self.models[arm].posterior_predict_proba(X_probes)  # (n_probes, n_post, n_categories)
                 p1 = prob[:, :, 1]  # (n_probes, n_post)
                 draws[:, :, arm] = p1.T
             return draws, n_post
+
