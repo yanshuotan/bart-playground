@@ -351,18 +351,21 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
             self._reset_post_queue()
             return self._next_post_index()
 
-    def _sample_fg_post_index(self) -> int:
-        """Sample a posterior draw index WITH replacement from p ~ exp(feel_good_lambda * S).
-        Used for feel-good TS when feel_good_lambda != 0.0."""
-        # Ensure cache is initialized
+    def _fg_softmax(self) -> np.ndarray:
+        """Compute normalized probabilities p ~ exp(feel_good_lambda * S) via stable softmax."""
         if self._fg_S is None:
-            raise ValueError("feel-good cache not initialized, cannot sample posterior draw index")
+            raise ValueError("feel-good cache not initialized")
         
-        # Compute probabilities via numerically-stable softmax
         logw = self.feel_good_lambda * self._fg_S
         m = float(np.max(logw))
         p = np.exp(logw - m)
         p = p / float(np.sum(p))
+        return p
+
+    def _sample_fg_post_index(self) -> int:
+        """Sample a posterior draw index WITH replacement from p ~ exp(feel_good_lambda * S).
+        Used for feel-good TS when feel_good_lambda != 0.0."""
+        p = self._fg_softmax()
         
         # Sample a position and map to trace index k
         rp = self.model.range_post
@@ -594,13 +597,8 @@ class DefaultBARTTSAgent(BARTTSAgent):
         if self._fg_S is None:
             return float('nan')
         
-        logw = self.feel_good_lambda * self._fg_S
-        m = float(np.max(logw))
-        p = np.exp(logw - m)
-        p = p / float(np.sum(p))
-        
-        ess = 1.0 / float(np.sum(p ** 2))
-        return ess
+        p = self._fg_softmax()
+        return 1.0 / float(np.sum(p ** 2))
 
     def _feel_good_full_recompute(self) -> None:
         """
@@ -626,9 +624,9 @@ class DefaultBARTTSAgent(BARTTSAgent):
         n_post = self.n_post
         
         if np.isnan(ess_before):
-            logger.info(f"FG weights refreshed. ESS: {ess_after:.1f}/{n_post} ({100*ess_after/n_post:.1f}%)")
+            logger.info(f"FG ESS: {ess_after:.1f}/{n_post} ({100*ess_after/n_post:.1f}%)")
         else:
-            logger.info(f"FG weights refreshed. ESS: {ess_before:.1f} -> {ess_after:.1f}/{n_post} ({100*ess_after/n_post:.1f}%)")
+            logger.info(f"FG ESS: {ess_before:.1f} -> {ess_after:.1f}/{n_post} ({100*ess_after/n_post:.1f}%)")
 
     def _feel_good_incremental_recompute(self, x_new: np.ndarray) -> None:
         """

@@ -9,6 +9,41 @@ from collections import Counter
 Float32Or64 = Union[np.float32, np.float64]
 
 @njit(cache=True)
+def _eval_forest_numba(X, all_vars, all_thr, all_leaves, tree_starts):
+    """
+    Evaluate a forest on a batch of samples X (2D array) using flattened arrays.
+    Returns a 1D array of results.
+    """
+    n_samples = X.shape[0]
+    # Use the dtype of leaves for the output
+    total = np.zeros(n_samples, dtype=all_leaves.dtype)
+    n_trees = len(tree_starts) - 1
+    
+    for i in range(n_samples):
+        x_row = X[i]
+        sample_sum = 0.0
+        for t in range(n_trees):
+            start = tree_starts[t]
+            end = tree_starts[t+1]
+            
+            # Numba supports efficient array slicing (view)
+            # Tree node indices are relative to the start of the tree's array
+            vars_t = all_vars[start:end]
+            thr_t = all_thr[start:end]
+            leaf_t = all_leaves[start:end]
+
+            node = 0
+            while vars_t[node] >= 0:
+                split_var = vars_t[node]
+                if x_row[split_var] <= thr_t[node]:
+                    node = 2 * node + 1
+                else:
+                    node = 2 * node + 2
+            sample_sum += leaf_t[node]
+        total[i] = sample_sum
+    return total
+
+@njit(cache=True)
 def _update_leaf_ids_for_prune(leaf_ids, desc, node_id):
     """
     Numba-optimized in-place update of leaf_ids for pruned nodes.
@@ -607,6 +642,9 @@ class Parameters:
         self.global_params = global_params
         self.float_dtype = self.trees[0].float_dtype if self.trees else np.float32
         self.init_cache(cache)
+        
+        # Cache for fast forest eval
+        self._forest_eval_cache = None  # (all_vars, all_thr, all_leaves, tree_starts)
             
     def init_cache(self, cache):
         if cache is None:
@@ -654,6 +692,35 @@ class Parameters:
         
         return new_state
 
+    def _ensure_forest_eval_cache(self):
+        """Build flat numpy array cache for fast single-sample evaluation."""
+        if self._forest_eval_cache is not None:
+            return
+
+        # Pre-allocate or use list comprehension for speed
+        vars_list = [t.vars for t in self.trees]
+        thr_list = [t.thresholds for t in self.trees]
+        leaf_list = [t.leaf_vals for t in self.trees]
+        
+        # Calculate offsets
+        sizes = np.array([len(v) for v in vars_list], dtype=np.int32)
+        tree_starts = np.zeros(len(sizes) + 1, dtype=np.int32)
+        np.cumsum(sizes, out=tree_starts[1:])
+        
+        # Flatten
+        all_vars = np.concatenate(vars_list)
+        all_thr = np.concatenate(thr_list)
+        all_leaves = np.concatenate(leaf_list)
+
+        self._forest_eval_cache = (all_vars, all_thr, all_leaves, tree_starts)
+
+    def _evaluate_forest_fast(self, X):
+        """Fast path for evaluating forest on a small batch of samples (X.shape[0] <= 16)."""
+        # X is (n, d)
+        self._ensure_forest_eval_cache()
+        all_vars, all_thr, all_leaves, tree_starts = self._forest_eval_cache
+        return _eval_forest_numba(X, all_vars, all_thr, all_leaves, tree_starts)
+
     def evaluate(self, X: Optional[np.ndarray]=None, tree_ids:Optional[list[int]]=None, all_except:Optional[list[int]]=None) -> NDArray[Float32Or64]:
         """
         Evaluate the model on the given data.
@@ -672,6 +739,11 @@ class Parameters:
         np.ndarray
             The total output of the evaluated trees on the input data.
         """
+        
+        # NEW: fast path for small batch full-forest evaluation
+        # Using 64 as a heuristic threshold where sample-major Numba loop beats tree-major Python loop
+        if X is not None and X.shape[0] <= 16 and tree_ids is None and all_except is None:
+            return self._evaluate_forest_fast(X)
 
         # Trees to evaluate on
         if tree_ids is None and all_except is None:
@@ -719,6 +791,9 @@ class Parameters:
         Returns:
         - None
         """
+        # Invalidate forest eval cache when leaf values change
+        self._forest_eval_cache = None
+        
         leaf_counter = 0
         for tree_id in tree_ids:
             tree = self.trees[tree_id]

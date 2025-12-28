@@ -23,9 +23,9 @@ from bart_playground.bandit.experiment_utils.simulation import simulate, Scenari
 # =============================================================================
 # FIXED PARAMETERS - Modify here to change test configuration
 # =============================================================================
-N_DRAWS = 100
-FEEL_GOOD_LAMBDA = 1/30
-N_FEATURES = 10
+N_DRAWS = 5000
+FEEL_GOOD_LAMBDA = 0.01
+N_FEATURES = 5
 N_ARMS = 3
 RANDOM_SEED = 0
 # =============================================================================
@@ -68,15 +68,65 @@ class LinearScenario(Scenario):
 
 
 
-def run_simulation_with_feel_good():
+def warmup_numba(agents, n_features, n_arms):
     """
-    Run simulation with feel_good_lambda enabled using fixed parameters.
+    Warm up numba JIT compilation by running a simple fit.
+    This avoids profiling JIT compilation overhead.
+    """
+    print("Warming up numba JIT compilation...")
+    
+    # Create a simple scenario for warmup
+    scenario = LinearScenario(
+        P=n_features,
+        K=n_arms,
+        sigma2=1.0,
+        random_generator=np.random.default_rng(RANDOM_SEED + 9999)  # Different seed
+    )
+    
+    # Run a few updates to trigger fit (need enough to trigger refresh)
+    # Use minimal parameters for speed
+    for agent in agents:
+        for _ in range(20):  # Enough to trigger at least one fit
+            x = scenario.generate_covariates()
+            u = scenario.reward_function(x)
+            arm = agent.choose_arm(x)
+            agent.update_state(arm, x, u["reward"][arm])
+    
+    print("✓ Numba warmup complete\n")
+
+
+def create_agents():
+    """Create agents for simulation."""
+    return [
+        DefaultBARTTSAgent(
+            n_arms=N_ARMS,
+            n_features=N_FEATURES,
+            bart_kwargs={'nskip': 200, 'ndpost': 200, 'n_trees': 50},
+            encoding='separate',
+            feel_good_lambda=0.0
+        ),
+        DefaultBARTTSAgent(
+            n_arms=N_ARMS,
+            n_features=N_FEATURES,
+            bart_kwargs={'nskip': 200, 'ndpost': 200, 'n_trees': 50},
+            encoding='separate',
+            feel_good_lambda=FEEL_GOOD_LAMBDA
+        ),
+    ]
+
+
+def run_simulation_with_feel_good(agents=None):
+    """
+    Run simulation comparing lambda=0 (baseline) with feel_good_lambda enabled.
+    
+    Args:
+        agents: Optional list of agents. If None, creates new agents.
     
     Returns:
         Tuple of (cumulative_regrets, agent_times, agent_names)
     """
     print(f"\n{'='*60}")
-    print(f"Running simulation with feel_good_lambda={FEEL_GOOD_LAMBDA}")
+    print(f"Running simulation comparing λ=0 vs λ={FEEL_GOOD_LAMBDA}")
     print(f"n_draws={N_DRAWS}, n_features={N_FEATURES}, n_arms={N_ARMS}")
     print(f"{'='*60}\n")
     
@@ -88,30 +138,13 @@ def run_simulation_with_feel_good():
         random_generator=np.random.default_rng(RANDOM_SEED)
     )
     
-    # Create agents with feel_good_lambda enabled
-    # Test different configurations
-    agents = [
-        # Multi encoding with feel-good
-        DefaultBARTTSAgent(
-            n_arms=N_ARMS,
-            n_features=N_FEATURES,
-            bart_kwargs={'nskip': 20, 'ndpost': 20, 'n_trees': 50},
-            encoding='multi',
-            feel_good_lambda=FEEL_GOOD_LAMBDA
-        ),
-        # Separate encoding with feel-good
-        DefaultBARTTSAgent(
-            n_arms=N_ARMS,
-            n_features=N_FEATURES,
-            bart_kwargs={'nskip': 20, 'ndpost': 20, 'n_trees': 50},
-            encoding='separate',
-            feel_good_lambda=FEEL_GOOD_LAMBDA
-        ),
-    ]
+    # Create agents if not provided
+    if agents is None:
+        agents = create_agents()
     
     agent_names = [
-        f'DefaultBARTTS-Multi (λ={FEEL_GOOD_LAMBDA})',
-        f'DefaultBARTTS-Separate (λ={FEEL_GOOD_LAMBDA})',
+        f'Baseline (λ=0)',
+        f'Feel-Good (λ={FEEL_GOOD_LAMBDA})',
     ]
     
     # Run simulation
@@ -127,46 +160,79 @@ def run_simulation_with_feel_good():
 
 def plot_results(cum_regrets, time_agent, agent_names):
     """
-    Plot cumulative regret and computation time.
+    Plot cumulative regret and computation time comparison.
     
     Args:
         cum_regrets: Cumulative regrets array (n_draws, n_agents)
         time_agent: Agent times array (n_draws, n_agents)
         agent_names: List of agent names
     """
-    # Plot cumulative regret
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    # Create figure with 3 subplots
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     
     # Left: Cumulative regret
     ax = axes[0]
+    colors = ['#2E86AB', '#A23B72']  # Blue for baseline, Purple for feel-good
     for i in range(cum_regrets.shape[1]):
-        ax.plot(cum_regrets[:, i], label=agent_names[i], linewidth=2)
+        ax.plot(cum_regrets[:, i], label=agent_names[i], linewidth=2.5, color=colors[i])
     
     ax.set_xlabel("Draw", fontsize=12)
     ax.set_ylabel("Cumulative Regret", fontsize=12)
-    ax.set_title(f"Cumulative Regret (feel_good_lambda={FEEL_GOOD_LAMBDA})", fontsize=14)
-    ax.legend()
+    ax.set_title(f"Cumulative Regret: λ=0 vs λ={FEEL_GOOD_LAMBDA}", fontsize=13, fontweight='bold')
+    ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
     
-    # Right: Computation time
+    # Middle: Average computation time
     ax = axes[1]
     avg_times = np.mean(time_agent, axis=0)
     x = np.arange(len(agent_names))
-    bars = ax.bar(x, avg_times, width=0.6, color=['#1f77b4', '#ff7f0e'])
+    bars = ax.bar(x, avg_times, width=0.6, color=colors)
     
     ax.set_xlabel("Agent", fontsize=12)
     ax.set_ylabel("Average Time per Draw (seconds)", fontsize=12)
-    ax.set_title("Computation Time Comparison", fontsize=14)
+    ax.set_title("Computation Time", fontsize=13, fontweight='bold')
     ax.set_xticks(x)
-    ax.set_xticklabels(['Multi', 'Separate'], fontsize=10)
+    ax.set_xticklabels(['λ=0', f'λ={FEEL_GOOD_LAMBDA}'], fontsize=11)
     ax.grid(True, alpha=0.3, axis='y')
     
     # Add value labels on bars
-    for i, (bar, val) in enumerate(zip(bars, avg_times)):
+    for bar, val in zip(bars, avg_times):
         height = bar.get_height()
         ax.text(bar.get_x() + bar.get_width()/2., height,
                 f'{val:.4f}s',
                 ha='center', va='bottom', fontsize=10)
+    
+    # Right: Performance metrics comparison
+    ax = axes[2]
+    final_regrets = cum_regrets[-1, :]
+    time_overhead = (avg_times[1] - avg_times[0]) / avg_times[0] * 100  # Percentage
+    regret_change = (final_regrets[0] - final_regrets[1]) / final_regrets[0] * 100  # Percentage
+    
+    # Use more descriptive label based on sign
+    if regret_change >= 0:
+        regret_label = 'Regret Reduction\n(%)'
+    else:
+        regret_label = 'Regret Increase\n(%)'
+    
+    metrics = ['Time Overhead\n(%)', regret_label]
+    values = [time_overhead, regret_change]
+    bar_colors = ['#E63946' if v > 0 else '#06A77D' for v in values]
+    
+    bars = ax.barh(metrics, values, color=bar_colors, alpha=0.7, edgecolor='black', linewidth=1.5)
+    
+    ax.set_xlabel("Percentage Change", fontsize=12)
+    ax.set_title("Feel-Good Impact", fontsize=13, fontweight='bold')
+    ax.axvline(x=0, color='black', linestyle='-', linewidth=0.8)
+    ax.grid(True, alpha=0.3, axis='x')
+    
+    # Add value labels
+    for bar, val in zip(bars, values):
+        width = bar.get_width()
+        label_x = width + (5 if width > 0 else -5)
+        ha = 'left' if width > 0 else 'right'
+        ax.text(label_x, bar.get_y() + bar.get_height()/2.,
+                f'{val:+.1f}%',
+                ha=ha, va='center', fontsize=11, fontweight='bold')
     
     plt.tight_layout()
     plt.savefig('feel_good_results.png', dpi=150, bbox_inches='tight')
@@ -176,12 +242,37 @@ def plot_results(cum_regrets, time_agent, agent_names):
     print(f"\n{'='*60}")
     print("SUMMARY STATISTICS")
     print(f"{'='*60}")
-    print(f"\nfeel_good_lambda = {FEEL_GOOD_LAMBDA}")
-    print("-" * 40)
+    print(f"\nComparison: λ=0 (Baseline) vs λ={FEEL_GOOD_LAMBDA} (Feel-Good)")
+    print("-" * 60)
+    
     for i, name in enumerate(agent_names):
         avg_time = np.mean(time_agent[:, i])
         final_regret = cum_regrets[-1, i]
-        print(f"{name:40s}: {avg_time:.6f}s/draw, regret={final_regret:.2f}")
+        print(f"{name:30s}: {avg_time:.6f}s/draw, regret={final_regret:.2f}")
+    
+    print("\n" + "-" * 60)
+    print(f"Time Overhead:      {time_overhead:+.2f}%")
+    if regret_change >= 0:
+        print(f"Regret Reduction:   {regret_change:+.2f}%")
+    else:
+        print(f"Regret Increase:    {regret_change:+.2f}%")
+    
+    if regret_change > 0 and time_overhead > 0:
+        efficiency = regret_change / time_overhead
+        print(f"Efficiency Ratio:   {efficiency:.3f} (regret reduction per % time cost)")
+        if efficiency > 1.0:
+            print("✓ Feel-good is EFFICIENT (good regret reduction for time cost)")
+        else:
+            print("⚠ Feel-good has LOW EFFICIENCY (high time cost for regret reduction)")
+    elif regret_change < 0 and time_overhead > 0:
+        efficiency = regret_change / time_overhead
+        print(f"Efficiency Ratio:   {efficiency:.3f} (NEGATIVE - regret increase per % time cost)")
+        print("✗ Feel-good is COUNTERPRODUCTIVE (increases regret with time cost)")
+    elif regret_change > 0 and time_overhead <= 0:
+        print("✓ Feel-good improves regret with no time overhead")
+    else:
+        print("⚠ Feel-good increases regret but no time cost")
+
 
 
 
@@ -201,7 +292,11 @@ def profile_with_graphviz():
     print(f"Output directory: {output_dir}")
     print(f"{'='*60}\n")
     
-    # Run profiling
+    # Warm up numba JIT before profiling (use separate agents for warmup)
+    warmup_agents = create_agents()
+    warmup_numba(warmup_agents, N_FEATURES, N_ARMS)
+    
+    # Run profiling (create fresh agents for actual test)
     profiler = cProfile.Profile()
     profiler.enable()
     
