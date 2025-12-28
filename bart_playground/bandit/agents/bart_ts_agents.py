@@ -259,16 +259,18 @@ class BARTTSAgent(BanditAgent):
 
     def _get_action_estimates(self, x: Union[np.ndarray, List[float]]) -> np.ndarray:
         """Get action estimates for all arms based on input features x."""
+        if not self.is_model_fitted:
+            logger.error(f'Model is not fitted, returning 0.0')
+            return np.zeros(self.n_arms, dtype=float)
+            
         x = np.array(x).reshape(1, -1)
         
         def _reformat(post_sample):
             if self.is_logistic:
-                if self.encoding in ['multi', 'one-hot']:
+                if self.encoding in ['multi', 'one-hot', 'separate']:
                     post_sample = post_sample[:, 1] 
                 elif self.encoding == 'native':
                     post_sample = post_sample.flatten()
-                elif self.encoding == 'separate':
-                    post_sample = post_sample[:, 1]
             # Ensure scalar output for single-row input (i.e. separate encoding)
             if np.ndim(post_sample) > 0 and post_sample.size == 1:
                 return float(post_sample.flat[0])
@@ -287,7 +289,7 @@ class BARTTSAgent(BanditAgent):
             # OPTIMIZATION: Use batch prediction if supported by the model (MultiChainBART)
             use_multichain = isinstance(self.models, MultiChainBART) and getattr(self.models, "n_models", 1) == self.n_arms
             
-            if use_multichain and self.is_model_fitted and not self.is_logistic:
+            if use_multichain and not self.is_logistic:
                 # MultiChainBART batch path
                 # Returns array of shape (n_arms, ...)
                 batch_preds = self.models.predict_trace_batch(k, x, backtransform=True)
@@ -296,15 +298,10 @@ class BARTTSAgent(BanditAgent):
                 # Standard path (loop over arms)
                 action_estimates = np.zeros(self.n_arms)
                 for arm in range(self.n_arms):
-                    if self.is_model_fitted:
-                        model = self.models[arm]
-                        post_val = _eval_at(model, x, k)          # e.g. shape (1,) or (1, n_cat)
-                        post_val = _reformat(post_val) 
-                        action_estimates[arm] = float(np.ravel(post_val)[0])
-                    else:
-                        logger.warning(f'Model for arm {arm} is not fitted, returning 0.0')
-                        action_estimates[arm] = 0.0
-        
+                    model = self.models[arm]
+                    post_val = _eval_at(model, x, k)          # e.g. shape (1,) or (1, n_cat)
+                    post_val = _reformat(post_val) 
+                    action_estimates[arm] = float(np.ravel(post_val)[0])        
         return action_estimates
 
     def _refresh_idx(self, t: int) -> int:
@@ -554,17 +551,10 @@ class BARTTSAgent(BanditAgent):
         """Number of available posterior samples after burn-in.
         Returns 0 if model is not fitted yet.
         """
-        try:
-            if not self.is_model_fitted:
-                return 0
-            # Use any one model to infer posterior range
-            n_post_per_chain = len(list(self.model.range_post))
-            # If using MultiChainBART, effective posterior samples equal per-chain times number of ensembles
-            if isinstance(self.model, MultiChainBART):
-                return int(n_post_per_chain * self.model.n_ensembles)
-            return int(n_post_per_chain)
-        except Exception:
+        if not self.is_model_fitted:
             return 0
+        # Use model.range_post directly which now reflects total samples
+        return len(list(self.model.range_post))
 
     def _preprocess_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int, int, int]:
         """

@@ -1,6 +1,7 @@
 import copy
 import numpy as np
 import ray
+import math
 from typing import Callable, Any, List, Dict, Optional
 from .bart import DefaultBART 
 from .serializer import bart_to_json
@@ -113,12 +114,14 @@ class BARTActor:
 class MultiChainBART:
     """
     Multi-chain BART model that runs multiple BART chains in parallel using Ray.
-    This allows for efficient, low-overhead updates.
+    Supports multiple models per chain.
     """
     def __init__(self, n_ensembles, bart_class=DefaultBART, random_state=42, ndpost=1000, n_models: int = 1, **kwargs):
         self.n_ensembles = int(n_ensembles)
         self.bart_class = bart_class
-        self.ndpost = int(ndpost)
+        
+        self._calculate_ndpost(ndpost)
+        
         self.n_models = int(n_models)
         max_bins_val = kwargs.get('max_bins', 100)
         if max_bins_val is None:
@@ -144,7 +147,7 @@ class MultiChainBART:
                 bart_class,
                 random_state=seed_sequence,
                 n_models=self.n_models,
-                ndpost=self.ndpost,
+                ndpost=self.ndpost_per_chain,
                 **kwargs,
             )  # type: ignore
             for seed_sequence in child_states
@@ -156,10 +159,16 @@ class MultiChainBART:
         self._active = idx
         ray.get([actor.set_active_model.remote(idx) for actor in self.bart_actors])
         return self
+    
+    def _calculate_ndpost(self, ndpost: int):
+        # User requested TOTAL ndpost
+        self.ndpost = int(ndpost)
+        self.ndpost_per_chain = math.ceil(self.ndpost / self.n_ensembles)
 
     def set_ndpost(self, ndpost: int):
-        self.ndpost = int(ndpost)
-        ray.get([actor.set_ndpost.remote(self.ndpost) for actor in self.bart_actors])
+        self._calculate_ndpost(ndpost)
+        
+        ray.get([actor.set_ndpost.remote(self.ndpost_per_chain) for actor in self.bart_actors])
         return self
 
     def __len__(self):
@@ -191,12 +200,9 @@ class MultiChainBART:
     @property
     def range_post(self):
         """
-        Get the range of posterior samples.
+        Global range of posterior samples [0, actual_total_ndpost).
         """
-        total_iterations = self._trace_length
-        if total_iterations < self.ndpost:
-            raise ValueError(f"Not enough posterior samples: {total_iterations} < {self.ndpost} (provided ndpost).")
-        return range(total_iterations - self.ndpost, total_iterations)
+        return range(self.ndpost)
 
     def fit(self, X, y, quietly=False, max_bins: int = None):
         """Fit all BART instances in parallel using Ray actors."""
@@ -256,19 +262,22 @@ class MultiChainBART:
         return ray.get(sample_future)
 
     def predict_trace(self, k: int, X, backtransform: bool = True):
-        """Predict using a specific trace index by averaging across all actors (chains)."""
-        preds_futures = [actor.predict_trace.remote(k, X, backtransform) for actor in self.bart_actors]
-        all_preds = np.array(ray.get(preds_futures))
-        return np.mean(all_preds, axis=0)
+        """Predict using specific trace index k mapping to specific chain."""
+        # Map global k -> (chain_id, local_k)
+        chain_id = k // self.ndpost_per_chain
+        local_k = k % self.ndpost_per_chain
+
+        return ray.get(self.bart_actors[chain_id].predict_trace.remote(local_k, X, backtransform))
 
     def predict_trace_batch(self, k: int, X, backtransform: bool = True):
         """
         Predict using a specific trace index for ALL models (arms).
-        Returns: np.ndarray of shape (n_models, ...) averaged across chains.
         """
-        futures = [a.predict_trace_batch.remote(k, X, backtransform) for a in self.bart_actors]
-        # shape: (n_chains, n_models, ...) -> mean over chains -> (n_models, ...)
-        return np.mean(ray.get(futures), axis=0)
+        chain_id = k // self.ndpost_per_chain
+        local_k = k % self.ndpost_per_chain
+        
+        preds = ray.get(self.bart_actors[chain_id].predict_trace_batch.remote(local_k, X, backtransform))
+        return np.array(preds)
 
     def collect_model_states(self):
         """Return the in-actor BART models."""
