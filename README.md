@@ -91,10 +91,12 @@ from bart_playground.bandit.agents.bart_ts_agents import DefaultBARTTSAgent
 agent = DefaultBARTTSAgent(
     n_arms=3, 
     n_features=4, 
-    ndpost=100, 
-    nskip=50, 
     encoding='multi', 
-    random_state=42
+    random_state=42,
+    bart_kwargs={
+        "ndpost": 100,
+        "nskip": 50
+    }
 )
 
 # Bandit loop
@@ -136,59 +138,188 @@ Choose the section relevant to your use case:
 
 ```mermaid
 flowchart TD
-    User[User] --> API["DefaultBART / ProbitBART / LogisticBART"]
-    API --> BARTCore[BART Model]
-    BARTCore --> Use["Fit / Predict / Posterior"]
-
-    subgraph OptBandit [Optional: Contextual Bandit]
-        Sim[simulate] --> Agent[BARTTSAgent]
-        Agent --> BARTCore
-    end
-
-    subgraph OptRay [Optional: Parallelism]
-        MC[MultiChainBART] --> Actors[BARTActors]
-        Actors --> BARTCore
-    end
+    User([User])
     
-    Agent -.-> MC
+    subgraph Entries [Entry Points]
+        API["Default Path: Regression / Classification"]
+        Bandit["Bandit Path: Contextual Bandits"]
+        Multi["Parallel Path: MultiChainBART (Ray)"]
+    end
+
+    User --> API
+    User --> Bandit
+    User --> Multi
+
+    subgraph BARTLayer [Algorithm Layer: BART Core]
+        BARTCore[BART Model]
+        Gibbs[Gibbs Sampler]
+        Trees[Tree Ensemble]
+        BARTCore --- Gibbs
+        BARTCore --- Trees
+    end
+
+    API --> BARTCore
+    Bandit --> BARTCore
+    Multi --> BARTCore
+    
+    %% Optional dependency link
+    Bandit -.-> Multi
 ```
 
 ### 1. BART Core (Algorithm)
 
-Inside a single BART model, the Gibbs sampler (Backfitting) iteratively updates trees. We present the DefaultBART model here, but the same principles apply to other BART models.
+`bart-playground` uses a sampler-driven architecture where the core logic resides in the Gibbs sampler (Backfitting MCMC). The sampler iteratively proposes modifications to the tree ensemble and samples parameters from their posterior distributions.
+
+#### 1.1 Sampler Iteration Skeleton
+
+This diagram illustrates the `Sampler.run()` process, including the tree-by-tree Metropolis-Hastings (MH) steps and global parameter resampling.
 
 ```mermaid
 sequenceDiagram
-    participant Algo as Gibbs Sampler
-    participant Tree as Tree Structure
-    participant Node as Leaf Nodes
-    participant Sigma as Noise (σ)
+    participant B as BART
+    participant S as Sampler
+    participant M as Move
+    participant P as Prior/Likelihood
+    participant G as Global Prior
 
-    Note over Algo, Sigma: MCMC Iteration Loop (ndpost + nskip)
-
-    loop For each Tree (1 to M)
-        Algo->>Algo: Calculate Partial Residuals (R_mj)
-        Note right of Algo: R_mj = y - sum(other trees)
-        
-        Algo->>Tree: Propose Mutation (Grow/Prune/Change)
-        Tree-->>Algo: Proposal & Metropolis Ratio
-        
-        alt Accepted
-            Algo->>Tree: Update Structure
-            Algo->>Node: Sample New Leaf Parameters (μ) from Normal
-        else Rejected
-            Algo->>Algo: Keep Old Structure
+    B->>S: run(n_iter)
+    
+    loop For each iteration (1 to n_iter)
+        loop For each Tree (1 to M)
+            S->>S: sample_move()
+            S->>M: propose(tol)
+            M-->>S: proposed_Parameters
+            S->>P: log_mh_ratio(move)
+            Note right of P: Prior + Likelihood + Proposal Correction
+            P-->>S: acceptance_prob
+            
+            alt Accepted
+                S->>S: update current state
+                S->>P: resample_leaf_vals()
+                P-->>S: new μ
+            end
         end
+        
+        S->>G: resample_global_params()
+        Note right of G: Sample σ² (and s if Dirichlet)
+        G-->>S: updated global_params
+        
+        S->>S: append Parameters to trace
     end
-
-    Algo->>Sigma: Sample New σ² from Inverse Gamma
-    Algo->>Algo: Store Posterior Sample
-
-    Note over Algo, Sigma: Repeat until N iterations
+    S-->>B: trace (list of Parameters)
 ```
 
+#### 1.2 State & Caching Overview
+
+The model maintains a `trace` of `Parameters` objects. To ensure high performance, evaluation results are cached at both the tree and ensemble levels.
+
+```mermaid
+flowchart TD
+    Data[Dataset X, y] --> Pre[Preprocessor]
+    Pre --> BData[BART.data]
+    
+    subgraph Trace [Sampler.trace]
+        P1[Parameters 1]
+        P2[Parameters 2]
+        PN[Parameters N]
+    end
+    
+    BData --> Trace
+    
+    subgraph PState [Parameters State]
+        Trees[Tree Ensemble]
+        GParams[Global Params: σ², s]
+        ECache[Ensemble Cache]
+        FECache[Forest Eval Cache: Numba-optimized]
+    end
+    
+    P1 --- PState
+    
+    subgraph TreeDetails [Single Tree]
+        Structure[Structure: vars, thresholds]
+        LeafVals[Leaf Values: μ]
+        TCache[Tree Cache: leaf_ids, n, evals]
+    end
+    
+    Trees --- TreeDetails
+
+    %% Inference Path
+    Trace --> Predict["predict(X) / posterior_f(X)"]
+    Predict --> Evaluate{evaluate}
+    Evaluate -- "Small X" --> FECache
+    Evaluate -- "Large X" --> ECache
+```
+
+### 2. MultiChainBART (Parallelism)
 <details>
-<summary><b>2. Bandit Loop (Optional)</b></summary>
+<summary><b>Parallelism Layer</b></summary>
+
+The `MultiChainBART` class coordinates parallel execution using Ray actors. It supports two modes:
+1. **Standard Mode**: Single model per chain.
+2. **Separate Models Mode** (`encoding='separate'`): Each chain maintains `K` independent models internally (one per arm).
+
+The second mode is more complicated and suggested for most multi-arm bandit problems, so we present it here (with 2 chains) and omit the first mode for simplicity.
+
+```mermaid
+sequenceDiagram
+    participant Client as Agent
+    participant MC as MultiChainBART
+    participant Worker1 as BARTActor 1
+    participant Worker2 as BARTActor 2
+    
+    Note over Client, Worker2: Initialization (n_ensembles=2, n_models=K)
+    Client->>MC: __init__()
+    MC->>Worker1: remote(seed=s1, n_models=K)
+    MC->>Worker2: remote(seed=s2, n_models=K)
+    
+    Note over Client, Worker2: Data Handling
+    Client->>MC: fit(X, y)
+    
+    Note over Client, Worker2: Parallel Training (Separate Mode)
+    loop For each Arm k
+        Client->>MC: set_active_model(k)
+        MC->>Worker1: set_active_model(k)
+        MC->>Worker2: set_active_model(k)
+        
+        Client->>MC: fit(X_k, y_k)
+        MC->>MC: Preprocessor.fit_transform(X_k, y_k)
+        MC->>MC: ray.put(dataset) -> data_ref_k
+        MC->>MC: ray.put(preprocessor) -> preproc_ref_k
+        
+        MC->>Worker1: fit.remote(data_ref_k, preproc_ref_k)
+        MC->>Worker2: fit.remote(data_ref_k, preproc_ref_k)
+        Note right of Worker2: Trains ONLY active model[k]
+    end 
+    
+    Worker1-->>MC: Ready
+    Worker2-->>MC: Ready
+    MC-->>Client: self
+
+    Note over Client, Worker2: Parallel Inference
+    
+    Client->>MC: posterior_f_batch(X)
+    par Parallel Batch
+        MC->>Worker1: posterior_f_batch.remote(X)
+        MC->>Worker2: posterior_f_batch.remote(X)
+        Note right of Worker2: Computes for ALL models
+    end
+    Worker1-->>MC: result_1 (K, n_samples, ndpost_per_chain)
+    Worker2-->>MC: result_2 (K, n_samples, ndpost_per_chain)
+    MC->>MC: concatenate -> (K, n_samples, total_ndpost) 
+    
+    MC-->>Client: Result
+```
+
+#### Key Concepts
+
+- **Active Model**: For stateful operations like `fit()`, `MultiChainBART` sets an "active" model index on all actors. Subsequent calls operate only on that specific model (e.g., training arm $k$).
+- **Batch APIs**: For inference, methods like `posterior_f_batch` trigger computation across **all** internal models simultaneously within each actor, reducing Ray overhead.
+</details>
+
+### 3. Bandit Usage
+
+<details>
+<summary><b>Bandit Usage</b></summary>
 
 The bandit loop describes how the Agent interacts with the Environment (Scenario) and when model updates are triggered. It also highlights the "Feel-Good" mechanism, which optionally weights posterior samples towards those with higher historical utility.
 
@@ -242,70 +373,6 @@ sequenceDiagram
         end
     end
 ```
-</details>
-
-<details>
-<summary><b>3. Parallelism Layer (Optional)</b></summary>
-
-The `MultiChainBART` class coordinates parallel execution using Ray actors. It supports two modes:
-1. **Standard Mode**: Single model per chain.
-2. **Separate Models Mode** (`encoding='separate'`): Each chain maintains `K` independent models internally (one per arm).
-
-The second mode is more complicated and suggested for most multi-arm bandit problems, so we present it here (with 2 chains) and omit the first mode for simplicity.
-
-```mermaid
-sequenceDiagram
-    participant Client as Agent
-    participant MC as MultiChainBART
-    participant Worker1 as BARTActor 1
-    participant Worker2 as BARTActor 2
-    
-    Note over Client, Worker2: Initialization (n_ensembles=2, n_models=K)
-    Client->>MC: __init__()
-    MC->>Worker1: remote(seed=s1, n_models=K)
-    MC->>Worker2: remote(seed=s2, n_models=K)
-    
-    Note over Client, Worker2: Data Handling
-    Client->>MC: fit(X, y)
-    MC->>MC: Preprocessor.fit_transform(X, y)
-    MC->>MC: ray.put(dataset) -> data_ref
-    MC->>MC: ray.put(preprocessor) -> preproc_ref
-    
-    Note over Client, Worker2: Parallel Training (Separate Mode)
-    loop For each Arm k
-        Client->>MC: set_active_model(k)
-        MC->>Worker1: set_active_model(k)
-        MC->>Worker2: set_active_model(k)
-        
-        Client->>MC: fit(X_k, y_k)
-        MC->>Worker1: fit.remote(data_ref, preproc_ref)
-        MC->>Worker2: fit.remote(data_ref, preproc_ref)
-        Note right of Worker2: Trains ONLY active model[k]
-    end 
-    
-    Worker1-->>MC: Ready
-    Worker2-->>MC: Ready
-    MC-->>Client: self
-
-    Note over Client, Worker2: Parallel Inference
-    
-    Client->>MC: posterior_f_batch(X)
-    par Parallel Batch
-        MC->>Worker1: posterior_f_batch.remote(X)
-        MC->>Worker2: posterior_f_batch.remote(X)
-        Note right of Worker2: Computes for ALL models
-    end
-    Worker1-->>MC: result_1 (K, n_samples, ndpost_per_chain)
-    Worker2-->>MC: result_2 (K, n_samples, ndpost_per_chain)
-    MC->>MC: concatenate -> (K, n_samples, total_ndpost) 
-    
-    MC-->>Client: Result
-```
-
-#### Key Concepts
-
-- **Active Model**: For stateful operations like `fit()`, `MultiChainBART` sets an "active" model index on all actors. Subsequent calls operate only on that specific model (e.g., training arm $k$).
-- **Batch APIs**: For inference, methods like `posterior_f_batch` trigger computation across **all** internal models simultaneously within each actor, reducing Ray overhead by $K$ times.
 </details>
 
 
