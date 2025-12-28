@@ -254,16 +254,16 @@ class MultiChainBART:
         """Get full posterior distribution from all instances."""
         preds_futures = [actor.posterior_predict.remote(X) for actor in self.bart_actors]
         preds_list = ray.get(preds_futures)
-        return np.concatenate(preds_list, axis=1)
+        return np.concatenate(preds_list, axis=1)[:, :self.ndpost]
 
     def posterior_f(self, X, backtransform=True):
         """Get posterior distribution of f(x) from all instances.
 
-        Returns an array of shape (n_rows, ndpost_per_chain * n_ensembles).
+        Returns an array of shape (n_rows, ndpost).
         """
         preds_futures = [actor.posterior_f.remote(X, backtransform=backtransform) for actor in self.bart_actors]
         preds_list = ray.get(preds_futures)
-        return np.concatenate(preds_list, axis=1)
+        return np.concatenate(preds_list, axis=1)[:, :self.ndpost]
     
     def posterior_f_batch(self, X, backtransform=True):
         """
@@ -290,8 +290,8 @@ class MultiChainBART:
         if not results_per_actor:
             return np.zeros((0, 0, 0), dtype=float)
         
-        # Concatenate along posterior dimension (axis=2)
-        return np.concatenate(results_per_actor, axis=2)
+        # Concatenate along posterior dimension (axis=2) and clip to ndpost
+        return np.concatenate(results_per_actor, axis=2)[:, :, :self.ndpost]
 
     
     def posterior_sample(self, X, schedule: Callable[[int], float]):
