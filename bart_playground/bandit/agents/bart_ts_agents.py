@@ -514,7 +514,8 @@ class DefaultBARTTSAgent(BARTTSAgent):
                  n_chains: int = 1,
                  refresh_schedule: str = 'log',
                  bart_kwargs: Optional[Dict[str, Any]] = None,
-                 feel_good_lambda: float = 0.0) -> None:
+                 feel_good_lambda: float = 0.0,
+                 feel_good_mu: Optional[float] = None) -> None:
         
         default_bart_kwargs: Dict[str, Any] = {
             "ndpost": 500,
@@ -525,6 +526,11 @@ class DefaultBARTTSAgent(BARTTSAgent):
         }
         
         base_ndpost, user_max_bins, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)
+        
+        # Compute fixed sigma2 from feel_good_mu if provided
+        if feel_good_mu is not None and feel_good_mu > 0:
+            fixed_sigma2 = 1.0 / (2.0 * feel_good_mu)
+            merged_bart_kwargs["fixed_eps_sigma2"] = fixed_sigma2
         
         if n_chains > 1:
             def model_factory(new_ndpost=base_ndpost, max_bins=None):
@@ -553,13 +559,14 @@ class DefaultBARTTSAgent(BARTTSAgent):
         if user_max_bins is not None:
             self._fixed_max_bins_value = user_max_bins
 
-    def _posterior_f_by_arm(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int, int, int]:
+    def _posterior_f_by_arm(self, X_probes: np.ndarray, backtransform: bool = True) -> Tuple[np.ndarray, int, int, int]:
         """
         Get posterior f values with shape (n_probes, n_arms, n_post).
         Used by both posterior_draws_on_probes and feel_good_weights.
 
         Args:
             X_probes: Array of shape (n_probes, n_features)
+            backtransform: Whether to backtransform to original scale (default True)
 
         Returns:
             f_by_arm: (n_probes, n_arms, n_post)
@@ -571,7 +578,7 @@ class DefaultBARTTSAgent(BARTTSAgent):
             # Encode all probes for all arms
             encoded_list = [self.encoder.encode(X_probes[i, :], arm=-1) for i in range(n_probes)]
             X_all = np.vstack(encoded_list)  # (n_probes * n_arms, combined_dim)
-            f_rows = self.model.posterior_f(X_all, backtransform=True)  # (n_probes * n_arms, n_post)
+            f_rows = self.model.posterior_f(X_all, backtransform=backtransform)  # (n_probes * n_arms, n_post)
             f_by_arm = f_rows.reshape(n_probes, n_arms, -1)  # (n_probes, n_arms, n_post)
         else:
             # Separate models: check for batch optimization
@@ -581,12 +588,12 @@ class DefaultBARTTSAgent(BARTTSAgent):
             
             if use_batch:
                 # OPTIMIZED: Single parallel Ray call for all arms
-                f_stack = self.models.posterior_f_batch(X_probes, backtransform=True)
+                f_stack = self.models.posterior_f_batch(X_probes, backtransform=backtransform)
                 # f_stack: (n_arms, n_probes, n_post)
                 f_by_arm = np.transpose(f_stack, (1, 0, 2))  # (n_probes, n_arms, n_post)
             else:
                 # STANDARD: Loop over arms (for list[BART] or old MultiChainBART)
-                f_list = [self.models[arm].posterior_f(X_probes, backtransform=True) 
+                f_list = [self.models[arm].posterior_f(X_probes, backtransform=backtransform) 
                          for arm in range(n_arms)]
                 f_by_arm = np.stack(f_list, axis=1)  # (n_probes, n_arms, n_post)
 
@@ -615,8 +622,9 @@ class DefaultBARTTSAgent(BARTTSAgent):
             return
         
         X_probes = np.asarray(self.all_features)
-        f_by_arm, _, _, _ = self._posterior_f_by_arm(X_probes)
+        f_by_arm, _, _, _ = self._posterior_f_by_arm(X_probes, backtransform=False)
         max_over_arms = np.max(f_by_arm, axis=1)  # (n_probes, n_post)
+        max_over_arms = np.minimum(0.5, max_over_arms)
         self._fg_S = np.sum(max_over_arms, axis=0)  # (n_post,)
         
         # Record ESS after refresh
@@ -643,8 +651,9 @@ class DefaultBARTTSAgent(BARTTSAgent):
         
         # Compute contribution of the new point
         x_new_2d = x_new.reshape(1, -1)  # (1, n_features)
-        f_by_arm, _, _, _ = self._posterior_f_by_arm(x_new_2d)
+        f_by_arm, _, _, _ = self._posterior_f_by_arm(x_new_2d, backtransform=False)
         max_over_arms = np.max(f_by_arm, axis=1)  # (1, n_post)
+        max_over_arms = np.minimum(0.5, max_over_arms)
         delta = max_over_arms[0]  # (n_post,)
         self._fg_S += delta
 
@@ -652,10 +661,19 @@ class DefaultBARTTSAgent(BARTTSAgent):
         r"""
         Compute feel-good weights for posterior samples based on historical features.
         $$
+        posterior_fg = prior * exp(-mu * residual^2) * exp(lambda * S(\Theta))
+        $$
+        If mu = 1/2sigma^2, then we have:
+        $$
+        posterior_fg = posterior * exp(lambda * S(\Theta))
+        $$
+        Inversely, in the feel-good TS setting, we may fix sigma = sqrt(2*mu).
+        Use SIS
+        $$
         S(\Theta)=\sum_{i} \min \left(b, \max _{a \in\{1, \ldots, K\}} f_{\Theta}\left(x_i, a\right)\right) \\
         w_j = \exp(\lambda S(\Theta_j))
         $$
-        Here we assume b=1/2, so that f \in [-b, b] always holds for not backtransformed rewards; There is therefore no need to clip the rewards.
+        Here we assume b=1, i.e. [0, 1] range in the original paper. In our implementation, equivalent to [-0.5, 0.5], so we use 0.5 to clip f.
         
         Returns:
             Un-normalized log weights (log w_1, ..., log w_{n_post}) of shape (n_post,)

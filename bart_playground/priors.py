@@ -246,7 +246,7 @@ class GlobalParamPrior:
         specification (str): Method for initial variance estimate
         generator: Random number generator
     """
-    def __init__(self, eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha):
+    def __init__(self, eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha, fixed_eps_sigma2=None):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda : float
@@ -254,6 +254,7 @@ class GlobalParamPrior:
         self.generator = generator
         self.dirichlet_prior = dirichlet_prior
         self.s_alpha = s_alpha
+        self.fixed_eps_sigma2 = fixed_eps_sigma2
 
     def fit_hyperparameters(self, data):
         """Fit the prior hyperparameters to the data"""
@@ -275,8 +276,11 @@ class GlobalParamPrior:
             dict: A dictionary containing the initialized global parameter:
                 - eps_sigma2 (float): The sampled epsilon sigma squared value.
         """
-        self.fit_hyperparameters(data)
-        eps_sigma2 = self._sample_eps_sigma2(data.y)
+        if self.fixed_eps_sigma2 is not None:
+            eps_sigma2 = np.array([self.fixed_eps_sigma2], dtype=float)
+        else:
+            self.fit_hyperparameters(data)
+            eps_sigma2 = self._sample_eps_sigma2(data.y)
         global_params = {"eps_sigma2": eps_sigma2}
         if self.dirichlet_prior:
             s = np.ones(data.X.shape[1]) / data.X.shape[1]
@@ -300,7 +304,10 @@ class GlobalParamPrior:
             dict: A dictionary containing the resampled global parameters.
         """
         global_params = dict({})
-        global_params["eps_sigma2"] = self._sample_eps_sigma2(data_y - bart_params.evaluate())
+        if self.fixed_eps_sigma2 is not None:
+            global_params["eps_sigma2"] = np.array([self.fixed_eps_sigma2], dtype=float)
+        else:
+            global_params["eps_sigma2"] = self._sample_eps_sigma2(data_y - bart_params.evaluate())
         if self.dirichlet_prior:
             s, s_cumsum = self._resample_s(bart_params)
             global_params["s"] = s
@@ -469,9 +476,9 @@ class BARTLikelihood:
 
 class ComprehensivePrior:
     def __init__(self, n_trees, tree_alpha, tree_beta, f_k, eps_q, eps_nu, 
-                 specification, generator, dirichlet_prior, quick_decay, s_alpha):
+                 specification, generator, dirichlet_prior, quick_decay, s_alpha, fixed_eps_sigma2=None):
         self.tree_prior = TreesPrior(int(n_trees), tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
-        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha)
+        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha, fixed_eps_sigma2=fixed_eps_sigma2)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
 class ProbitPrior:

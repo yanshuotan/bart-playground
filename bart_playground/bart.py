@@ -280,13 +280,13 @@ class DefaultBART(BART):
                  eps_nu: float=3, specification="linear", 
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, dirichlet_prior=False, quick_decay: bool = False,
-                 s_alpha: float = 2.0):
+                 s_alpha: float = 2.0, fixed_eps_sigma2: Optional[float] = None):
         if max_bins is None:
             max_bins = 100
         preprocessor = self.preprocessor_class(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
-                             eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay, s_alpha=s_alpha)
+                             eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay, s_alpha=s_alpha, fixed_eps_sigma2=fixed_eps_sigma2)
         temp_schedule = self._check_temperature(temperature)
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
@@ -306,7 +306,8 @@ class DefaultBART(BART):
             "specification": self.sampler.prior.global_prior.specification,
             "dirichlet_prior": self.sampler.prior.global_prior.dirichlet_prior,
             "quick_decay": self.sampler.tree_prior.quick_decay,
-            "proposal_probs": self.sampler.proposals
+            "proposal_probs": self.sampler.proposals,
+            "fixed_eps_sigma2": self.sampler.prior.global_prior.fixed_eps_sigma2
         }
         
     def predict_proba(self, X):
