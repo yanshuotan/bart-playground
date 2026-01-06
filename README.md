@@ -201,7 +201,7 @@ sequenceDiagram
         end
         
         S->>G: resample_global_params()
-        Note right of G: Sample σ² (and s if Dirichlet)
+        Note right of G: Sample σ² (unless fixed), and s if Dirichlet
         G-->>S: updated global_params
         
         S->>S: append Parameters to trace
@@ -333,6 +333,8 @@ sequenceDiagram
     participant Model as BART / MultiChainBART
     participant FG as Feel-Good Score
 
+    Note over Agent, Model: if feel_good_eta > 0: σ² = 1/(2*eta) (fixed)
+
     loop for draw in n_draws
         Sim->>Scen: generate_covariates()
         Scen-->>Sim: x (Features)
@@ -351,7 +353,7 @@ sequenceDiagram
                 FG-->>Agent: sample k ~ p (with replacement)
             end
 
-            Agent->>Model: predict_trace(k, x)
+            Agent->>Model: predict_trace(k, x, backtransform=True)
             Model-->>Agent: f_k(x, arm=0..K-1)
             Agent-->>Sim: arm = argmax_a f_k(x,a)
         end
@@ -364,11 +366,15 @@ sequenceDiagram
             Model-->>Agent: fitted
             Agent->>Agent: reset posterior queue
             opt feel_good_lambda != 0
-                Agent->>FG: full recompute S_k using all_features
+                Agent->>Model: posterior_f(all_features, backtransform=False)
+                Model-->>Agent: latent f
+                Agent->>FG: full recompute S_k = sum(min(0.5, max_a f))
             end
         else no refresh
             opt feel_good_lambda != 0 AND fitted
-                Agent->>FG: incremental update S_k
+                Agent->>Model: posterior_f(new_x, backtransform=False)
+                Model-->>Agent: latent f
+                Agent->>FG: incremental update S_k += min(0.5, max_a f)
             end
         end
     end

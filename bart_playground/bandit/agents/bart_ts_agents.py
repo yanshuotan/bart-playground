@@ -515,7 +515,7 @@ class DefaultBARTTSAgent(BARTTSAgent):
                  refresh_schedule: str = 'log',
                  bart_kwargs: Optional[Dict[str, Any]] = None,
                  feel_good_lambda: float = 0.0,
-                 feel_good_mu: Optional[float] = None) -> None:
+                 feel_good_eta: Optional[float] = None) -> None:
         
         default_bart_kwargs: Dict[str, Any] = {
             "ndpost": 500,
@@ -527,9 +527,9 @@ class DefaultBARTTSAgent(BARTTSAgent):
         
         base_ndpost, user_max_bins, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)
         
-        # Compute fixed sigma2 from feel_good_mu if provided
-        if feel_good_mu is not None and feel_good_mu > 0:
-            fixed_sigma2 = 1.0 / (2.0 * feel_good_mu)
+        # Compute fixed sigma2 from feel_good_eta if provided
+        if feel_good_eta is not None and feel_good_eta > 0:
+            fixed_sigma2 = 1.0 / (2.0 * feel_good_eta)
             merged_bart_kwargs["fixed_eps_sigma2"] = fixed_sigma2
         
         if n_chains > 1:

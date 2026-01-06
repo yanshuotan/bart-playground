@@ -37,8 +37,8 @@ class TestFixedSigmaAndClipping(unittest.TestCase):
             sigma2 = param.global_params["eps_sigma2"][0]
             self.assertEqual(sigma2, fixed_val)
 
-    def test_agent_feel_good_mu_sets_fixed_sigma(self):
-        """Test that DefaultBARTTSAgent correctly translates feel_good_mu to fixed_eps_sigma2."""
+    def test_agent_feel_good_eta_sets_fixed_sigma(self):
+        """Test that DefaultBARTTSAgent correctly translates feel_good_eta to fixed_eps_sigma2."""
         mu = 0.5
         # Formula: sigma^2 = 1 / (2 * mu) = 1 / 1 = 1.0
         expected_sigma2 = 1.0
@@ -46,7 +46,7 @@ class TestFixedSigmaAndClipping(unittest.TestCase):
         agent = DefaultBARTTSAgent(
             n_arms=self.n_arms, 
             n_features=self.n_features,
-            feel_good_mu=mu,
+            feel_good_eta=mu,
             random_state=42
         )
         
