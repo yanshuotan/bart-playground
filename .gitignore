@@ -19,6 +19,8 @@ notebooks/*.md
 bart_playground/bandit/agents/_deprecated
 profile_output/
 
+tmp/
+
 .vscode/*
 .idea/*
 .cursor/*

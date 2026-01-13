@@ -463,7 +463,46 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
 
         return X_probes, n_probes, n_arms, n_post
 
-    @abstractmethod
+    def _posterior_f_by_arm(self, X_probes: np.ndarray, backtransform: bool = True) -> Tuple[np.ndarray, int, int, int]:
+        """
+        Get posterior f values with shape (n_probes, n_arms, n_post).
+        Used by both posterior_draws_on_probes and feel_good_weights.
+
+        Args:
+            X_probes: Array of shape (n_probes, n_features)
+            backtransform: Whether to backtransform to original scale (default True)
+
+        Returns:
+            f_by_arm: (n_probes, n_arms, n_post)
+            n_probes, n_arms, n_post
+        """
+        X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
+
+        if not self.separate_models:
+            # Encode all probes for all arms
+            encoded_list = [self.encoder.encode(X_probes[i, :], arm=-1) for i in range(n_probes)]
+            X_all = np.vstack(encoded_list)  # (n_probes * n_arms, combined_dim)
+            f_rows = self.model.posterior_f(X_all, backtransform=backtransform)  # (n_probes * n_arms, n_post)
+            f_by_arm = f_rows.reshape(n_probes, n_arms, -1)  # (n_probes, n_arms, n_post)
+        else:
+            # Separate models: check for batch optimization
+            use_batch = (isinstance(self.models, MultiChainBART) and 
+                         getattr(self.models, "n_models", 1) == self.n_arms and
+                         hasattr(self.models, 'posterior_f_batch'))
+            
+            if use_batch:
+                # OPTIMIZED: Single parallel Ray call for all arms
+                f_stack = self.models.posterior_f_batch(X_probes, backtransform=backtransform)
+                # f_stack: (n_arms, n_probes, n_post)
+                f_by_arm = np.transpose(f_stack, (1, 0, 2))  # (n_probes, n_arms, n_post)
+            else:
+                # STANDARD: Loop over arms (for list[BART] or old MultiChainBART)
+                f_list = [self.models[arm].posterior_f(X_probes, backtransform=backtransform) 
+                         for arm in range(n_arms)]
+                f_by_arm = np.stack(f_list, axis=1)  # (n_probes, n_arms, n_post)
+
+        return f_by_arm, n_probes, n_arms, n_post
+
     def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
         """
         Compute posterior draws over all arms for provided probe covariates.
@@ -477,12 +516,15 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
 
         Notes:
             - For regression BART: draws correspond to posterior samples of f(x, arm).
-            - For logistic BART: draws correspond to expected reward used in selection:
-              * encoding in {'multi','one-hot','separate'}: P(y=1 | x, arm)
+            - For logistic BART: this method should be overridden (e.g. LogisticBARTTSAgent).
         """
-        pass
+        if self.is_logistic:
+            raise NotImplementedError("posterior_draws_on_probes for logistic BART must be overridden.")
+            
+        f_by_arm, n_probes, n_arms, n_post = self._posterior_f_by_arm(X_probes)
+        draws = np.transpose(f_by_arm, (2, 0, 1))  # (n_post, n_probes, n_arms)
+        return draws, n_post
 
-    @abstractmethod
     def _feel_good_full_recompute(self) -> None:
         """
         Full recompute of feel-good cache S(Theta).
@@ -490,7 +532,6 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
         """
         pass
 
-    @abstractmethod
     def _feel_good_incremental_recompute(self, x_new: np.ndarray) -> None:
         """
         Incremental update of feel-good cache with new observation x_new.
@@ -558,46 +599,6 @@ class DefaultBARTTSAgent(BARTTSAgent):
         
         if user_max_bins is not None:
             self._fixed_max_bins_value = user_max_bins
-
-    def _posterior_f_by_arm(self, X_probes: np.ndarray, backtransform: bool = True) -> Tuple[np.ndarray, int, int, int]:
-        """
-        Get posterior f values with shape (n_probes, n_arms, n_post).
-        Used by both posterior_draws_on_probes and feel_good_weights.
-
-        Args:
-            X_probes: Array of shape (n_probes, n_features)
-            backtransform: Whether to backtransform to original scale (default True)
-
-        Returns:
-            f_by_arm: (n_probes, n_arms, n_post)
-            n_probes, n_arms, n_post
-        """
-        X_probes, n_probes, n_arms, n_post = self._preprocess_probes(X_probes)
-
-        if not self.separate_models:
-            # Encode all probes for all arms
-            encoded_list = [self.encoder.encode(X_probes[i, :], arm=-1) for i in range(n_probes)]
-            X_all = np.vstack(encoded_list)  # (n_probes * n_arms, combined_dim)
-            f_rows = self.model.posterior_f(X_all, backtransform=backtransform)  # (n_probes * n_arms, n_post)
-            f_by_arm = f_rows.reshape(n_probes, n_arms, -1)  # (n_probes, n_arms, n_post)
-        else:
-            # Separate models: check for batch optimization
-            use_batch = (isinstance(self.models, MultiChainBART) and 
-                         getattr(self.models, "n_models", 1) == self.n_arms and
-                         hasattr(self.models, 'posterior_f_batch'))
-            
-            if use_batch:
-                # OPTIMIZED: Single parallel Ray call for all arms
-                f_stack = self.models.posterior_f_batch(X_probes, backtransform=backtransform)
-                # f_stack: (n_arms, n_probes, n_post)
-                f_by_arm = np.transpose(f_stack, (1, 0, 2))  # (n_probes, n_arms, n_post)
-            else:
-                # STANDARD: Loop over arms (for list[BART] or old MultiChainBART)
-                f_list = [self.models[arm].posterior_f(X_probes, backtransform=backtransform) 
-                         for arm in range(n_arms)]
-                f_by_arm = np.stack(f_list, axis=1)  # (n_probes, n_arms, n_post)
-
-        return f_by_arm, n_probes, n_arms, n_post
 
     def _compute_fg_ess(self) -> float:
         """Compute Effective Sample Size (ESS) from feel-good weights: 1/sum(p^2)."""
@@ -682,25 +683,6 @@ class DefaultBARTTSAgent(BARTTSAgent):
             # Cache not initialized yet, return zeros
             return np.zeros(self.n_post)
         return lam(self.t) * self._fg_S
-
-    def posterior_draws_on_probes(self, X_probes: np.ndarray) -> Tuple[np.ndarray, int]:
-        """
-        Compute posterior draws over all arms for provided probe covariates using DefaultBART.
-
-        Args:
-            X_probes: Array of shape (n_probes, n_features)
-
-        Returns:
-            draws: np.ndarray shaped (n_post, n_probes, n_arms)
-            n_post: int, actual number of posterior draws used
-
-        Notes:
-            - Draws correspond to posterior samples of f(x, arm).
-        """
-        f_by_arm, n_probes, n_arms, n_post = self._posterior_f_by_arm(X_probes)
-        draws = np.transpose(f_by_arm, (2, 0, 1))  # (n_post, n_probes, n_arms)
-        return draws, n_post
-
 
 class LogisticBARTTSAgent(BARTTSAgent):
     """

@@ -280,7 +280,7 @@ class DefaultBART(BART):
                  eps_nu: float=3, specification="linear", 
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, dirichlet_prior=False, quick_decay: bool = False,
-                 s_alpha: float = 2.0, fixed_eps_sigma2: Optional[float] = None):
+                 s_alpha: float = 1.0, fixed_eps_sigma2: Optional[float] = None):
         if max_bins is None:
             max_bins = 100
         preprocessor = self.preprocessor_class(max_bins=max_bins)
