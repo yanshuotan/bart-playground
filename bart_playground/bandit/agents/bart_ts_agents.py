@@ -98,7 +98,6 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
             if isinstance(first_model, MultiChainBART) and getattr(first_model, "n_models", 1) == self.n_arms:
                 self.models = first_model
             else:
-                assert isinstance(first_model, BART), "Must be a BART model"
                 self.models = [first_model]
                 for _ in range(1, n_arms):
                     self.models.append(model_factory())
@@ -177,6 +176,10 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
         """Determine the number of posterior samples needed for the next refresh. At most self.max_ndpost."""
         return int(min(self.max_ndpost, max_needed * self.choices_per_iter))
     
+    def _model_factory_for_refresh(self) -> Callable:
+        """Hook to determine the factory to use for THIS refresh."""
+        return self.model_factory
+
     def _current_max_bins(self) -> int:
         """Return the max_bins value to use for the next refresh."""
         if self._fixed_max_bins_value is not None:
@@ -203,10 +206,12 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
         try:
             # Determine maximum number of actions until next refresh
             max_needed = self._steps_until_next_refresh(self.t)
+            ndpost_need = self._ndpost_needed(max_needed)
+            factory = self._model_factory_for_refresh()
+
             if self.separate_models:
                 use_multichain = isinstance(self.models, MultiChainBART) and getattr(self.models, "n_models", 1) == self.n_arms
                 if use_multichain:
-                    ndpost_need = self._ndpost_needed(max_needed)
                     self.models: MultiChainBART
                     self.models.set_ndpost(ndpost_need)
                     self.models.set_max_bins(current_max_bins)
@@ -223,7 +228,7 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
                         arm_mask = np.array(self.all_arms) == arm
                         X_arm = X[arm_mask]
                         y_arm = y[arm_mask]
-                        model = self.model_factory(self._ndpost_needed(max_needed), max_bins=current_max_bins) 
+                        model = factory(ndpost_need, max_bins=current_max_bins) 
                         model.fit(X_arm, y_arm, quietly=True)
                         new_models.append(model)
 
@@ -231,7 +236,7 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
                     self.models = new_models
 
             else:
-                new_model = self.model_factory(self._ndpost_needed(max_needed), max_bins=current_max_bins) 
+                new_model = factory(ndpost_need, max_bins=current_max_bins) 
                 new_model.fit(X, y, quietly=True)
                 # Only replace on success
                 self.model = new_model

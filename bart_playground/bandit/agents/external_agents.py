@@ -2,6 +2,73 @@ import numpy as np
 from typing import Optional, Dict, Any, Callable
 from .bart_ts_agents import BARTTSAgent, _prepare_bart_kwargs
 from .external_wrappers import BartzWrapper, StochTreeWrapper
+from bart_playground.mcbart import MultiChainBART
+from bart_playground.bart import DefaultBART
+
+class HybridBARTTSAgent(BARTTSAgent):
+    """
+    A hybrid agent that switches from StochTree to MultiChainBART.
+    Enforces encoding='separate'.
+    """
+    def __init__(self, n_arms: int, n_features: int,
+                 switch_t: int = 100,
+                 initial_random_selections: int = 10,
+                 random_state: int = 42,
+                 refresh_schedule: str = 'log',
+                 use_gfr: bool = True,
+                 bart_kwargs: Optional[Dict[str, Any]] = None,
+                 feel_good_lambda: float = 0.0) -> None:
+        
+        # Enforce separate encoding for List[StochTree] -> MultiChain transition
+        encoding = 'separate'
+
+        self.switch_t = int(switch_t)
+        self._hybrid_random_state = int(random_state)
+        self._hybrid_use_gfr = bool(use_gfr)
+        self._hybrid_bart_kwargs: Dict[str, Any] = dict(bart_kwargs or {})
+        self._mc: Optional[MultiChainBART] = None
+
+        def early_factory(new_ndpost: int = 500, max_bins: Optional[int] = None):
+            return StochTreeWrapper(
+                ndpost=new_ndpost,
+                use_gfr=self._hybrid_use_gfr,
+                random_state=self._hybrid_random_state,
+                **self._hybrid_bart_kwargs,
+            )
+        
+        super().__init__(n_arms, n_features, early_factory,
+                         initial_random_selections, random_state, encoding, refresh_schedule,
+                         feel_good_lambda)
+
+        # Initialize max_ndpost from kwargs if provided
+        if "ndpost" in self._hybrid_bart_kwargs:
+            self.max_ndpost = int(self._hybrid_bart_kwargs["ndpost"])
+
+    def _ensure_multichain_initialized(self) -> None:
+        if self._mc is None:
+            self._mc = MultiChainBART(
+                n_ensembles=1,
+                bart_class=DefaultBART,
+                random_state=self._hybrid_random_state,
+                ndpost=int(self.max_ndpost),
+                max_bins=int(self._current_max_bins()),
+                n_models=self.n_arms,
+                **self._hybrid_bart_kwargs,
+            )
+        if self.models is not self._mc:
+            self.models = self._mc
+
+    def _model_factory_for_refresh(self) -> Callable:
+        """Switch decision lives here; factories are pure (no agent mutation)."""
+        if self.t < self.switch_t:
+            return self.model_factory
+        self._ensure_multichain_initialized()
+
+        def _mc_factory(new_ndpost: int = 500, max_bins: Optional[int] = None):
+            return self._mc
+
+        return _mc_factory
+
 
 class BartzTSAgent(BARTTSAgent):
     """
@@ -64,6 +131,7 @@ class StochTreeTSAgent(BARTTSAgent):
             return StochTreeWrapper(
                 ndpost=new_ndpost,
                 use_gfr=use_gfr,
+                random_state=random_state,
                 **merged_bart_kwargs
             )
             

@@ -2,7 +2,7 @@ from .agent import BanditAgent
 from .bart_ts_agents import BARTTSAgent, DefaultBARTTSAgent, LogisticBARTTSAgent
 from .basic_agents import LinearAgentStable, SillyAgent
 from .external_wrappers import BartzWrapper, StochTreeWrapper
-from .external_agents import BartzTSAgent, StochTreeTSAgent
+from .external_agents import BartzTSAgent, StochTreeTSAgent, HybridBARTTSAgent
 
 __all__ = [
     "BanditAgent",
@@ -15,4 +15,5 @@ __all__ = [
     "StochTreeWrapper",
     "BartzTSAgent",
     "StochTreeTSAgent",
+    "HybridBARTTSAgent",
 ]
