@@ -375,11 +375,12 @@ class GlobalParamPrior:
         prior_beta = self.eps_nu * self.eps_lambda / 2
         post_alpha = prior_alpha + n / 2
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
+        # size=1 returns a 1-element numpy array, so we use [0] for indexing
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)
-        # if eps_sigma2[0] <= 1e-8:
-        #     _sim_logger.warning("Sampled eps_sigma2 is non-positive, returning a small positive value to avoid numerical issues.")
-        #     _sim_logger.info(f"Sampled eps_sigma2: {eps_sigma2}, prior_alpha: {prior_alpha}, prior_beta: {prior_beta}, post_alpha: {post_alpha}, post_beta: {post_beta}")
-        #     eps_sigma2[0] = 1e-8
+        if eps_sigma2[0] <= 1e-8:
+            logger.warning("Sampled eps_sigma2 is non-positive, returning a small positive value to avoid numerical issues.")
+            logger.info(f"Sampled eps_sigma2: {eps_sigma2}, prior_alpha: {prior_alpha}, prior_beta: {prior_beta}, post_alpha: {post_alpha}, post_beta: {post_beta}")
+            eps_sigma2[0] = 1e-8
         return eps_sigma2
 
 class BARTLikelihood:

@@ -41,6 +41,13 @@ class BartzWrapper:
         # type='wbart' is used in the example
         self.model = Bartz(X_T, y_float, ndpost=self.ndpost, nskip=self.nskip, 
                            type='wbart', printevery=None if quietly else 100, **actual_kwargs)
+        self.is_fitted = True
+        self.trace = [] # Dummy for diagnostics_mixin
+        self.sampler = type('DummySampler', (), {
+            'move_selected_counts': {}, 
+            'move_success_counts': {}, 
+            'move_accepted_counts': {}
+        })()
         return self
 
     @property
@@ -77,6 +84,9 @@ class BartzWrapper:
             "nskip": self.nskip,
             **self.kwargs
         }
+
+    def feature_inclusion_frequency(self, normalize: str = "split"):
+        raise NotImplementedError("feature_inclusion_frequency not supported for BartzWrapper")
 
 
 class StochTreeWrapper:
@@ -120,6 +130,13 @@ class StochTreeWrapper:
         # stochtree.sample(X, y, ...)
         # Assuming X is (n_samples, n_features) which is standard
         self.model.sample(X, y, **sample_kwargs)
+        self.is_fitted = True
+        self.trace = [] # Dummy for diagnostics_mixin
+        self.sampler = type('DummySampler', (), {
+            'move_selected_counts': {}, 
+            'move_success_counts': {}, 
+            'move_accepted_counts': {}
+        })()
         return self
 
     @property
@@ -133,10 +150,13 @@ class StochTreeWrapper:
         # Assuming stochtree has a predict method for new data
         if hasattr(self.model, "predict"):
             # predict likely returns (n_samples, ndpost) or (ndpost, n_samples)
-            # Need to verify. Based on example y_hat_test.T -> (ndpost, n_samples)
-            # Implies y_hat_test is (n_samples, ndpost)
-            # If predict returns same shape as y_hat_test:
+            # Some versions might return a dict.
             preds = self.model.predict(X)
+            if isinstance(preds, dict):
+                preds = preds.get('y_hat', preds.get('mean', None))
+            
+            preds = np.asarray(preds)
+            
             # Check shape logic: if we pass 1 sample, we expect (1, ndpost)
             if preds.shape[0] == X.shape[0]:
                  return preds[:, k]
@@ -156,6 +176,11 @@ class StochTreeWrapper:
             
         if hasattr(self.model, "predict"):
             preds = self.model.predict(X)
+            if isinstance(preds, dict):
+                preds = preds.get('y_hat', preds.get('mean', None))
+            
+            preds = np.asarray(preds)
+
             # Ensure shape is (n_samples, ndpost)
             if preds.shape[0] != X.shape[0] and preds.shape[1] == X.shape[0]:
                 preds = preds.T
@@ -171,3 +196,6 @@ class StochTreeWrapper:
             "use_gfr": self.use_gfr,
             **self.kwargs
         }
+
+    def feature_inclusion_frequency(self, normalize: str = "split"):
+        raise NotImplementedError("feature_inclusion_frequency not supported for StochTreeWrapper")
