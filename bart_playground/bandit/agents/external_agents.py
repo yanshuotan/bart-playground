@@ -12,7 +12,7 @@ class HybridBARTTSAgent(BARTTSAgent):
     """
     def __init__(self, n_arms: int, n_features: int,
                  switch_t: int = 100,
-                 initial_random_selections: int = 10,
+                 initial_random_selections: int = 5,
                  random_state: int = 42,
                  encoding: str = 'separate',
                  n_chains: int = 1,
@@ -93,7 +93,7 @@ class BartzTSAgent(BARTTSAgent):
     BART agent using the bartz library backend.
     """
     def __init__(self, n_arms: int, n_features: int,
-                 initial_random_selections: int = 10,
+                 initial_random_selections: int = 5,
                  random_state: int = 42,
                  encoding: str = 'multi',
                  refresh_schedule: str = 'log',
@@ -129,7 +129,7 @@ class StochTreeTSAgent(BARTTSAgent):
     BART agent using the stochtree library backend.
     """
     def __init__(self, n_arms: int, n_features: int,
-                 initial_random_selections: int = 10,
+                 initial_random_selections: int = 5,
                  random_state: int = 42,
                  encoding: str = 'multi',
                  refresh_schedule: str = 'log',

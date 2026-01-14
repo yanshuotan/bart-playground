@@ -76,14 +76,15 @@ class RefreshScheduleMixin:
         Check if model should be refreshed at the current time step.
         
         A refresh is triggered when:
-        1. We're past the initial random selection phase
+        1. We're past the initial warm-start phase (n_arms * initial_random_selections)
         2. We have sufficient data
         3. The refresh index increases from the previous time step
         
         Returns:
             bool: True if a refresh should occur, False otherwise
         """
-        if self.t < self.initial_random_selections or not self._has_sufficient_data():
+        warmstart_steps = getattr(self, "n_arms", 1) * self.initial_random_selections
+        if self.t <= warmstart_steps or not self._has_sufficient_data():
             return False
         return self._refresh_idx(self.t) > self._refresh_idx(self.t - 1)
     

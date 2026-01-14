@@ -52,7 +52,7 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
     """
     
     def __init__(self, n_arms: int, n_features: int, model_factory: Callable,
-                 initial_random_selections: int = 10,
+                 initial_random_selections: int = 5,
                  random_state: int = 42,
                  encoding: str = 'multi',
                  refresh_schedule: str = 'log',
@@ -64,7 +64,8 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
             n_arms (int): Number of arms
             n_features (int): Number of features
             model_factory (Callable): Factory function to create BART models
-            initial_random_selections (int): Number of initial random selections before using model
+            initial_random_selections (int): Number of warm-start selections per arm before using model.
+                Total warm-start steps = n_arms * initial_random_selections.
             random_state (int): Random seed
             encoding (str): Encoding strategy ('multi', 'one-hot', 'separate')
             refresh_schedule (str): Strategy to control model refresh frequency:
@@ -81,6 +82,11 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
         self.initial_random_selections = initial_random_selections
         self.random_state = random_state
         self.rng = np.random.default_rng(self.random_state)
+
+        # Build warm-start queue: initial_random_selections rounds of random permutations of all arms.
+        self._warmstart_arms: List[int] = []
+        for _ in range(self.initial_random_selections):
+            self._warmstart_arms.extend(self.rng.permutation(self.n_arms).tolist())
         
         # Encoding setup
         self.encoding = encoding
@@ -388,11 +394,16 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
         Returns:
             int: The index of the selected arm
         """
-        # Random selection during initial phase
-        if self.t < self.initial_random_selections or not self.is_model_fitted:
+        # 1. Warm-start phase: use pre-generated permutation rounds
+        idx = self.t - 1
+        if idx < len(self._warmstart_arms):
+            return int(self._warmstart_arms[idx])
+            
+        # 2. Fallback to random if model is not yet fitted
+        if not self.is_model_fitted:
             return int(self.rng.integers(0, self.n_arms))
         
-        # Use BART model for arm selection
+        # 3. Use BART model for arm selection
         action_estimates = self._get_action_estimates(x)
         return int(np.argmax(action_estimates))
     
@@ -554,7 +565,7 @@ class DefaultBARTTSAgent(BARTTSAgent):
     When n_chains > 1, uses MultiChainBART for ensemble modeling.
     """
     def __init__(self, n_arms: int, n_features: int,
-                 initial_random_selections: int = 10,
+                 initial_random_selections: int = 5,
                  random_state: int = 42,
                  encoding: str = 'multi',
                  n_chains: int = 1,
@@ -562,6 +573,22 @@ class DefaultBARTTSAgent(BARTTSAgent):
                  bart_kwargs: Optional[Dict[str, Any]] = None,
                  feel_good_lambda: float = 0.0,
                  feel_good_eta: Optional[float] = None) -> None:
+        """
+        Initialize DefaultBARTTSAgent.
+        
+        Parameters:
+            n_arms (int): Number of arms
+            n_features (int): Number of features
+            initial_random_selections (int): Number of warm-start selections per arm before using model.
+                Total warm-start steps = n_arms * initial_random_selections.
+            random_state (int): Random seed
+            encoding (str): Encoding strategy ('multi', 'one-hot', 'separate')
+            n_chains (int): Number of MCMC chains/ensembles
+            refresh_schedule (str): Strategy to control model refresh frequency
+            bart_kwargs (dict): Optional keyword arguments for BART models
+            feel_good_lambda (float): Lambda for feel-good weights
+            feel_good_eta (float): Optional eta for feel-good sigma2 computation
+        """
         
         default_bart_kwargs: Dict[str, Any] = {
             "ndpost": 500,
@@ -694,7 +721,7 @@ class LogisticBARTTSAgent(BARTTSAgent):
     Refresh BART agent for binary outcomes using logistic regression.
     """
     def __init__(self, n_arms: int, n_features: int,
-                 initial_random_selections: int = 10,
+                 initial_random_selections: int = 5,
                  random_state: int = 42,
                  encoding: str = 'multi',
                  refresh_schedule: str = 'log',

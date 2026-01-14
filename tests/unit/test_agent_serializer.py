@@ -38,7 +38,7 @@ def test_default_bart_agent_choose_arm_roundtrip():
     agent = DefaultBARTTSAgent(
         n_arms=3,
         n_features=4,
-        initial_random_selections=10,
+        initial_random_selections=5,
         random_state=7,
         encoding='multi',
         n_chains=1,
@@ -57,7 +57,7 @@ def test_default_bart_agent_multichain_choose_arm_roundtrip():
     agent = DefaultBARTTSAgent(
         n_arms=3,
         n_features=4,
-        initial_random_selections=10,
+        initial_random_selections=5,
         random_state=11,
         encoding='multi',
         n_chains=2,

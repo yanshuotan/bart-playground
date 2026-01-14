@@ -25,7 +25,7 @@ def test_instantiation():
         print(f"  {name} chose arm: {arm}")
         
         # Test update_state (this triggers fit)
-        # We need more than 10 selections if initial_random_selections is 10
+        # We need more than 5 selections if initial_random_selections is 5
         for i in range(20):
             x_i = np.random.rand(n_features)
             y_i = np.random.rand()
