@@ -60,20 +60,57 @@ class TestExternalWrappers:
             mp.setattr("bart_playground.bandit.agents.external_wrappers.STOCHTREE_AVAILABLE", True)
             
             mock_stoch_model = MagicMock()
-            mock_stoch_model.predict.return_value = np.zeros((1, 10))
+            # X will have 3 samples, ndpost is 10
+            mock_stoch_model.predict.return_value = np.zeros((3, 10))
+            mp.setattr("bart_playground.bandit.agents.external_wrappers.BARTModel", lambda: mock_stoch_model)
             
-            wrapper = StochTreeWrapper(ndpost=10, nskip=5, use_gfr=True)
-            wrapper.model = mock_stoch_model
-            
+            # Pass n_trees to test mapping
+            wrapper = StochTreeWrapper(ndpost=10, nskip=5, use_gfr=True, n_trees=42)
             assert wrapper.use_gfr is True
             
-            X = np.random.rand(1, 5)
+            X = np.random.rand(3, 5)
+            y = np.random.rand(3)
+            wrapper.fit(X, y)
+            
+            # Verify n_trees -> num_trees mapping
+            assert mock_stoch_model.sample.called
+            _, kwargs = mock_stoch_model.sample.call_args
+            assert kwargs["mean_forest_params"]["num_trees"] == 42
+            assert kwargs["num_mcmc"] == 10
+            assert kwargs["num_burnin"] == 5
             
             pred = wrapper.predict_trace(0, X)
-            assert pred.shape == (1,)
+            assert pred.shape == (3,)
             
             post_f = wrapper.posterior_f(X)
-            assert post_f.shape == (1, 10)
+            assert post_f.shape == (3, 10)
+
+    def test_stochtree_wrapper_constant_y_short_circuit(self):
+        """Constant y should short-circuit and never call stochtree.sample()."""
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("bart_playground.bandit.agents.external_wrappers.STOCHTREE_AVAILABLE", True)
+            mock_bartmodel_cls = MagicMock()
+            mp.setattr("bart_playground.bandit.agents.external_wrappers.BARTModel", mock_bartmodel_cls)
+
+            wrapper = StochTreeWrapper(ndpost=7, nskip=5, use_gfr=True)
+
+            X = np.random.rand(3, 5)
+            y = np.ones(3) * 2.5
+            wrapper.fit(X, y, quietly=True)
+
+            # No model constructed / no sample called
+            assert not mock_bartmodel_cls.called
+
+            # Predict should return constant with correct shapes
+            pred = wrapper.predict_trace(0, X)
+            assert pred.shape == (3,)
+            np.testing.assert_allclose(pred, 2.5)
+
+            post_f = wrapper.posterior_f(X)
+            assert post_f.shape == (3, 7)
+            np.testing.assert_allclose(post_f, 2.5)
+
+            assert len(wrapper.range_post) == 7
 
     def test_agent_integration_mock(self):
         """Test that BARTTSAgent accepts these wrappers."""

@@ -8,7 +8,7 @@ from bart_playground.mcbart import MultiChainBART
 class TestHybridAgent:
     
     def test_hybrid_agent_initialization(self):
-        """Verify HybridBARTTSAgent correctly sets up its factory."""
+        """Verify HybridBARTTSAgent correctly sets up its factory and aligns defaults."""
         n_arms = 3
         n_features = 4
         switch_t = 50
@@ -17,19 +17,36 @@ class TestHybridAgent:
             n_arms=n_arms,
             n_features=n_features,
             switch_t=switch_t,
-            initial_random_selections=0
+            initial_random_selections=0,
+            bart_kwargs={"n_trees": 150} # Override default
         )
         
         assert agent.n_arms == n_arms
         assert agent.encoding == 'separate'
         assert agent.switch_t == switch_t
         assert callable(agent.model_factory)
+        
+        # Verify defaults aligned with DefaultBARTTSAgent
+        assert agent._hybrid_bart_kwargs["n_trees"] == 150
+        assert agent._hybrid_bart_kwargs["nskip"] == 500 # Default
+        assert agent.max_ndpost == 500 # Default ndpost
+
+
+    def test_hybrid_agent_unsupported_encoding(self):
+        """Verify HybridBARTTSAgent raises NotImplementedError for non-separate encoding."""
+        with pytest.raises(NotImplementedError, match="only supports 'separate' encoding"):
+            HybridBARTTSAgent(
+                n_arms=2,
+                n_features=2,
+                encoding='multi'
+            )
 
     def test_hybrid_agent_transition_mock(self):
         """Mocked integration test for the transition boundary."""
         n_arms = 2
         n_features = 2
         switch_t = 5
+        n_chains = 2
 
         class FakeStochTree:
             def __init__(self, ndpost: int = 500, **kwargs):
@@ -94,6 +111,7 @@ class TestHybridAgent:
                 n_arms=n_arms,
                 n_features=n_features,
                 switch_t=switch_t,
+                n_chains=n_chains,
                 initial_random_selections=0,
             )
 
@@ -107,6 +125,7 @@ class TestHybridAgent:
             agent._refresh_model()
             assert len(mc_calls) == 1
             assert mc_calls[0][1]["n_models"] == n_arms
+            assert mc_calls[0][1]["n_ensembles"] == n_chains
 
             # Step 3: Subsequent refresh reuses cached MultiChain (no new init)
             agent.t = switch_t + 1

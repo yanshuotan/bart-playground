@@ -14,21 +14,36 @@ class HybridBARTTSAgent(BARTTSAgent):
                  switch_t: int = 100,
                  initial_random_selections: int = 10,
                  random_state: int = 42,
+                 encoding: str = 'separate',
+                 n_chains: int = 1,
                  refresh_schedule: str = 'log',
                  use_gfr: bool = True,
                  bart_kwargs: Optional[Dict[str, Any]] = None,
                  feel_good_lambda: float = 0.0) -> None:
         
-        # Enforce separate encoding for List[StochTree] -> MultiChain transition
-        encoding = 'separate'
+        if encoding != 'separate':
+            raise NotImplementedError("HybridBARTTSAgent currently only supports 'separate' encoding.")
+
+        # Define default parameters aligned with DefaultBARTTSAgent
+        default_bart_kwargs: Dict[str, Any] = {
+            "ndpost": 500,
+            "nskip": 500,
+            "n_trees": 100,
+            "specification": "naive",
+            "eps_nu": 1.0
+        }
+        
+        # Merge defaults with user-provided bart_kwargs
+        base_ndpost, user_max_bins, merged_bart_kwargs = _prepare_bart_kwargs(default_bart_kwargs, bart_kwargs)
 
         self.switch_t = int(switch_t)
+        self.n_chains = int(n_chains)
         self._hybrid_random_state = int(random_state)
         self._hybrid_use_gfr = bool(use_gfr)
-        self._hybrid_bart_kwargs: Dict[str, Any] = dict(bart_kwargs or {})
+        self._hybrid_bart_kwargs = merged_bart_kwargs
         self._mc: Optional[MultiChainBART] = None
 
-        def early_factory(new_ndpost: int = 500, max_bins: Optional[int] = None):
+        def early_factory(new_ndpost: int = base_ndpost, max_bins: Optional[int] = None):
             return StochTreeWrapper(
                 ndpost=new_ndpost,
                 use_gfr=self._hybrid_use_gfr,
@@ -40,14 +55,17 @@ class HybridBARTTSAgent(BARTTSAgent):
                          initial_random_selections, random_state, encoding, refresh_schedule,
                          feel_good_lambda)
 
-        # Initialize max_ndpost from kwargs if provided
-        if "ndpost" in self._hybrid_bart_kwargs:
-            self.max_ndpost = int(self._hybrid_bart_kwargs["ndpost"])
+        # Carry over the max_bins if provided
+        if user_max_bins is not None:
+            self._fixed_max_bins_value = user_max_bins
+        
+        # Initialize max_ndpost from processed base_ndpost
+        self.max_ndpost = int(base_ndpost)
 
     def _ensure_multichain_initialized(self) -> None:
         if self._mc is None:
             self._mc = MultiChainBART(
-                n_ensembles=1,
+                n_ensembles=self.n_chains,
                 bart_class=DefaultBART,
                 random_state=self._hybrid_random_state,
                 ndpost=int(self.max_ndpost),

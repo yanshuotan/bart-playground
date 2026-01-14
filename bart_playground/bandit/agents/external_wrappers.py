@@ -94,7 +94,7 @@ class StochTreeWrapper:
     Wrapper for stochtree library to be used with BARTTSAgent.
     Supports toggling GFR (Gradient Forest Restoration/Regression).
     """
-    def __init__(self, ndpost: int = 1000, nskip: int = 100, use_gfr: bool = True, **kwargs):
+    def __init__(self, ndpost: int = 500, nskip: int = 500, use_gfr: bool = True, **kwargs):
         if not STOCHTREE_AVAILABLE:
             raise ImportError("stochtree library is not installed.")
         self.ndpost = int(ndpost)
@@ -102,9 +102,24 @@ class StochTreeWrapper:
         self.use_gfr = use_gfr
         self.kwargs = kwargs
         self.model = None
+        self._constant_y: Optional[float] = None
         self._range_post = range(self.ndpost)
 
     def fit(self, X: np.ndarray, y: np.ndarray, quietly: bool = True):
+        # Short-circuit constant outcomes (stochtree can fail / waste work here)
+        if np.unique(y).size == 1:
+            self._constant_y = float(np.ravel(y)[0])
+            self.model = None
+            self.is_fitted = True
+            self.trace = [] # Dummy for diagnostics_mixin
+            self.sampler = type('DummySampler', (), {
+                'move_selected_counts': {}, 
+                'move_success_counts': {}, 
+                'move_accepted_counts': {}
+            })()
+            return self
+        
+        self._constant_y = None
         self.model = BARTModel()
         
         # Mapping: ndpost -> num_mcmc, nskip -> num_burnin
@@ -119,11 +134,19 @@ class StochTreeWrapper:
             
         # Standardize parameter names if they come from _prepare_bart_kwargs
         actual_kwargs = dict(self.kwargs)
+        if "n_trees" in actual_kwargs:
+            n_trees = int(actual_kwargs.pop("n_trees"))
+            mean_forest_params = dict(actual_kwargs.get("mean_forest_params") or {})
+            mean_forest_params["num_trees"] = n_trees
+            actual_kwargs["mean_forest_params"] = mean_forest_params
+            
         if "random_state" in actual_kwargs:
             val = actual_kwargs.pop("random_state")
+            # Ensure seed is within 32-bit signed int range (Pybind11 int)
+            safe_seed = int(val % 2147483647)
             if "general_params" not in actual_kwargs:
                 actual_kwargs["general_params"] = {}
-            actual_kwargs["general_params"]["random_seed"] = val
+            actual_kwargs["general_params"]["random_seed"] = safe_seed
             
         sample_kwargs.update(actual_kwargs)
         
@@ -144,6 +167,9 @@ class StochTreeWrapper:
         return self._range_post
 
     def predict_trace(self, k: int, X: np.ndarray, backtransform: bool = True) -> np.ndarray:
+        if self._constant_y is not None:
+            return np.full((X.shape[0],), self._constant_y, dtype=float)
+        
         if self.model is None:
             raise RuntimeError("Model is not fitted.")
         
@@ -171,6 +197,9 @@ class StochTreeWrapper:
              raise NotImplementedError("stochtree.BARTModel.predict method required for Bandit usage.")
 
     def posterior_f(self, X: np.ndarray, backtransform: bool = True) -> np.ndarray:
+        if self._constant_y is not None:
+            return np.full((X.shape[0], self.ndpost), self._constant_y, dtype=float)
+        
         if self.model is None:
             raise RuntimeError("Model is not fitted.")
             
