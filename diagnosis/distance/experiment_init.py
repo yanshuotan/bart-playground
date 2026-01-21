@@ -129,7 +129,7 @@ def run_experiment(run_id, chain_id, X, y, ndpost, nskip, n_trees, m_tries,
     depths_mtmh = [calculate_avg_depth_per_trace(trace) for trace in bart_mtmh.sampler.trace]
     feature_ratios_mtmh = get_feature_split_ratios(bart_mtmh.sampler.trace, n_features)
     vector_distances_mtmh = compute_vector_distances(bart_mtmh.sampler.trace, X_train)
-    subspace_distances_mtmh = compute_subspace_distances(bart_mtmh.sampler.trace, n_trees, run_id, chain_id)
+    # subspace_distances_mtmh = compute_subspace_distances(bart_mtmh.sampler.trace, n_trees, run_id, chain_id)
 
     del bart_mtmh
     gc.collect()
@@ -154,7 +154,7 @@ def run_experiment(run_id, chain_id, X, y, ndpost, nskip, n_trees, m_tries,
     depths_default = [calculate_avg_depth_per_trace(trace) for trace in bart_default.sampler.trace]
     feature_ratios_default = get_feature_split_ratios(bart_default.sampler.trace, n_features)
     vector_distances_default = compute_vector_distances(bart_default.sampler.trace, X_train)
-    subspace_distances_default = compute_subspace_distances(bart_default.sampler.trace, n_trees, run_id, chain_id)
+    # subspace_distances_default = compute_subspace_distances(bart_default.sampler.trace, n_trees, run_id, chain_id)
 
     del bart_default
     gc.collect()
@@ -169,7 +169,7 @@ def run_experiment(run_id, chain_id, X, y, ndpost, nskip, n_trees, m_tries,
             'depths': np.array(depths_default),
             'feature_ratios': feature_ratios_default,  # shape: [n_iterations, n_features]
             'vector_distances': np.array(vector_distances_default),
-            'subspace_distances': np.array(subspace_distances_default)
+            # 'subspace_distances': np.array(subspace_distances_default)
         },
         'mtmh': {
             'sigmas': np.array(sigmas_mtmh),
@@ -178,12 +178,13 @@ def run_experiment(run_id, chain_id, X, y, ndpost, nskip, n_trees, m_tries,
             'depths': np.array(depths_mtmh),
             'feature_ratios': feature_ratios_mtmh,  # shape: [n_iterations, n_features]
             'vector_distances': np.array(vector_distances_mtmh),
-            'subspace_distances': np.array(subspace_distances_mtmh)
+            # 'subspace_distances': np.array(subspace_distances_mtmh)
         }
     }
     if store_preds:
         if n_test_points is not None and n_test_points < preds_default.shape[0]:
-            idx = np.random.choice(preds_default.shape[0], n_test_points, replace=False)
+            rng = np.random.default_rng(run_id)
+            idx = rng.choice(preds_default.shape[0], n_test_points, replace=False)
             result['default']['preds'] = np.array(preds_default[idx])
             result['mtmh']['preds'] = np.array(preds_mtmh[idx])
         else:
@@ -214,7 +215,7 @@ def run_experiment_multiple_chains(run_id, X, y, ndpost, nskip, n_trees, m_tries
 
 def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook, 
                              tree_alpha=0.95, tree_beta=2.0, m_tries=10, 
-                             n_runs=5, n_jobs=-1, store_preds=True, n_test_points=20, n_chains=4):
+                             n_runs=5, n_jobs=-1, store_preds=False, n_test_points=None, n_chains=4):
     """Run parallel experiments, each with multiple chains under same init/seed"""
     results = Parallel(n_jobs=n_jobs, verbose=10)(
         delayed(run_experiment_multiple_chains)(
@@ -232,7 +233,7 @@ def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook,
             'depths': np.array([[chain['default']['depths'] for chain in run] for run in results]),
             'feature_ratios': np.array([[chain['default']['feature_ratios'] for chain in run] for run in results]),
             'vector_distances': np.array([[chain['default']['vector_distances'] for chain in run] for run in results]),
-            'subspace_distances': np.array([[chain['default']['subspace_distances'] for chain in run] for run in results])
+            # 'subspace_distances': np.array([[chain['default']['subspace_distances'] for chain in run] for run in results])
         },
         'mtmh': {
             'sigmas': np.array([[chain['mtmh']['sigmas'] for chain in run] for run in results]),
@@ -241,7 +242,7 @@ def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook,
             'depths': np.array([[chain['mtmh']['depths'] for chain in run] for run in results]),
             'feature_ratios': np.array([[chain['mtmh']['feature_ratios'] for chain in run] for run in results]),
             'vector_distances': np.array([[chain['mtmh']['vector_distances'] for chain in run] for run in results]),
-            'subspace_distances': np.array([[chain['mtmh']['subspace_distances'] for chain in run] for run in results])
+            # 'subspace_distances': np.array([[chain['mtmh']['subspace_distances'] for chain in run] for run in results])
         },
         'metadata': {
             'n_runs': n_runs,
