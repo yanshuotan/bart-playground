@@ -179,8 +179,8 @@ class BARTTSAgent(BanditAgent, RefreshScheduleMixin, DiagnosticsMixin):
             return self._enough_data(rewards)
         
     def _ndpost_needed(self, max_needed: int) -> int:
-        """Determine the number of posterior samples needed for the next refresh. At most self.max_ndpost."""
-        return int(min(self.max_ndpost, max_needed * self.choices_per_iter))
+        """Determine the number of posterior samples needed for the next refresh. At most self.max_ndpost. At least 100."""
+        return int(max(100, min(self.max_ndpost, max_needed * (self.choices_per_iter+1))))
     
     def _model_factory_for_refresh(self) -> Callable:
         """Hook to determine the factory to use for THIS refresh."""

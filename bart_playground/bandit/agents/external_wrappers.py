@@ -122,33 +122,32 @@ class StochTreeWrapper:
         self._constant_y = None
         self.model = BARTModel()
         
-        # Mapping: ndpost -> num_mcmc, nskip -> num_burnin
-        sample_kwargs = {
+        # Base whitelist parameters
+        sample_kwargs: Dict[str, Any] = {
             "num_mcmc": self.ndpost,
-            "num_burnin": self.nskip
+            "num_burnin": self.nskip,
+            "num_gfr": self.kwargs.get("num_gfr", 5) if self.use_gfr else 0
         }
         
-        # If GFR is disabled, set num_gfr=0 (based on external_example.py)
-        if not self.use_gfr:
-            sample_kwargs["num_gfr"] = 0
+        # Map nested parameter dictionaries if provided
+        for key in ["general_params", "mean_forest_params", "variance_forest_params", "random_effects_params"]:
+            if key in self.kwargs:
+                sample_kwargs[key] = dict(self.kwargs[key])
+        
+        # Handle our standard "n_trees" -> "mean_forest_params['num_trees']" mapping
+        if "n_trees" in self.kwargs:
+            n_trees = int(self.kwargs["n_trees"])
+            if "mean_forest_params" not in sample_kwargs:
+                sample_kwargs["mean_forest_params"] = {}
+            sample_kwargs["mean_forest_params"]["num_trees"] = n_trees
             
-        # Standardize parameter names if they come from _prepare_bart_kwargs
-        actual_kwargs = dict(self.kwargs)
-        if "n_trees" in actual_kwargs:
-            n_trees = int(actual_kwargs.pop("n_trees"))
-            mean_forest_params = dict(actual_kwargs.get("mean_forest_params") or {})
-            mean_forest_params["num_trees"] = n_trees
-            actual_kwargs["mean_forest_params"] = mean_forest_params
-            
-        if "random_state" in actual_kwargs:
-            val = actual_kwargs.pop("random_state")
-            # Ensure seed is within 32-bit signed int range (Pybind11 int)
+        # Handle "random_state" -> "general_params['random_seed']" mapping
+        if "random_state" in self.kwargs:
+            val = self.kwargs["random_state"]
             safe_seed = int(val % 2147483647)
-            if "general_params" not in actual_kwargs:
-                actual_kwargs["general_params"] = {}
-            actual_kwargs["general_params"]["random_seed"] = safe_seed
-            
-        sample_kwargs.update(actual_kwargs)
+            if "general_params" not in sample_kwargs:
+                sample_kwargs["general_params"] = {}
+            sample_kwargs["general_params"]["random_seed"] = safe_seed
         
         # stochtree.sample(X, y, ...)
         # Assuming X is (n_samples, n_features) which is standard

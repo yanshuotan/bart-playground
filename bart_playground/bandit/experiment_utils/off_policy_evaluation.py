@@ -13,7 +13,8 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
                    agent_names: list[str] | None = None,
                    n_choices_per_iter: int = 1,
                    show_progress: bool = True,
-                   return_final_states: bool = False) -> dict[str, dict[str, NDArray[Any] | BanditAgent]]:
+                   return_final_states: bool = False,
+                   update_mode: str = "replay") -> dict[str, dict[str, NDArray[Any] | BanditAgent]]:
     """Simulate bandit agents and generate actions for off-policy evaluation.
     
     Args:
@@ -23,12 +24,14 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
         n_choices_per_iter: Number of choose_arm calls per iteration to calculate agent_actions probability
         show_progress: Whether to show progress bar
         return_final_states: Whether to return final states of agents
+        update_mode: "logged" (always update with logged action) or "replay" (update only on action match)
     
     Returns:
         Dict containing simulation results for each agent:
         - 'actions': array of logged actions (0-indexed)
         - 'agent_actions': per-time per-arm selection frequency (counts / n_choices_per_iter)
         - 'rewards': array of rewards
+        - 'matched': array of 0/1 indicating replay action match (or always 1 in logged mode)
         - 'final_state': agent's final state (if return_final_states=True)
     """
     
@@ -62,6 +65,8 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
         agent_actions: NDArray[Any] = np.zeros((n_draw, n_arms), dtype=float)
         # Store computation time per step
         agent_times: NDArray[Any] = np.zeros(n_draw, dtype=float)
+        # Store per-step replay match indicator
+        matched: NDArray[Any] = np.zeros(n_draw, dtype=int)
         
         iterator = tqdm(range(n_draw), desc=f"Simulating {agent_name}") if show_progress else range(n_draw)
         
@@ -73,22 +78,32 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
             t0 = time.time()
             # Get agent's action multiple times and track per-arm frequencies
             counts = np.zeros(n_arms, dtype=int)
-            for _ in range(n_choices_per_iter):
-                agent_action = agent.choose_arm(x_t)
+            first_action = None
+            for j in range(n_choices_per_iter):
+                agent_action = int(agent.choose_arm(x_t))
+                if j == 0:
+                    first_action = agent_action
                 counts[agent_action] += 1
             
             # Record per-arm selection frequency at time t
             agent_actions[t, :] = counts.astype(float) / float(n_choices_per_iter)
             
             # Update agent state
-            _ = agent.update_state(a_t, x_t, r_t)
+            if update_mode == "replay":
+                if first_action == a_t:
+                    _ = agent.update_state(a_t, x_t, r_t)
+                    matched[t] = 1
+            else:
+                _ = agent.update_state(a_t, x_t, r_t)
+                matched[t] = 1
             agent_times[t] = time.time() - t0
         
         result_dict: dict[str, NDArray[Any] | BanditAgent] = {
             'actions': actions, # This is the real action that was in the data
             'agent_actions': agent_actions, # This is the action that the agent chose
             'rewards': rewards,
-            'times': agent_times
+            'times': agent_times,
+            'matched': matched
         }
         
         if return_final_states:

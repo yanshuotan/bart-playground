@@ -64,8 +64,8 @@ class TestExternalWrappers:
             mock_stoch_model.predict.return_value = np.zeros((3, 10))
             mp.setattr("bart_playground.bandit.agents.external_wrappers.BARTModel", lambda: mock_stoch_model)
             
-            # Pass n_trees to test mapping
-            wrapper = StochTreeWrapper(ndpost=10, nskip=5, use_gfr=True, n_trees=42)
+            # Pass n_trees and an UNKNOWN param 'specification' to test whitelist
+            wrapper = StochTreeWrapper(ndpost=10, nskip=5, use_gfr=True, n_trees=42, specification="naive")
             assert wrapper.use_gfr is True
             
             X = np.random.rand(3, 5)
@@ -78,6 +78,8 @@ class TestExternalWrappers:
             assert kwargs["mean_forest_params"]["num_trees"] == 42
             assert kwargs["num_mcmc"] == 10
             assert kwargs["num_burnin"] == 5
+            # CRITICAL: 'specification' must NOT be in kwargs
+            assert "specification" not in kwargs
             
             pred = wrapper.predict_trace(0, X)
             assert pred.shape == (3,)
