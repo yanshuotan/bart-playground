@@ -378,7 +378,7 @@ class GlobalParamPrior:
         # size=1 returns a 1-element numpy array, so we use [0] for indexing
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)
         if eps_sigma2[0] <= 1e-8:
-            logger.info(f"Sampled eps_sigma2 is non-positive, returning 1e-8. Sampled eps_sigma2: {eps_sigma2}, prior_alpha: {prior_alpha}, prior_beta: {prior_beta}, post_alpha: {post_alpha}, post_beta: {post_beta}")
+            # logger.info(f"Sampled eps_sigma2 is non-positive, returning 1e-8. Sampled eps_sigma2: {eps_sigma2}, prior_alpha: {prior_alpha}, prior_beta: {prior_beta}, post_alpha: {post_alpha}, post_beta: {post_beta}")
             eps_sigma2[0] = 1e-8
         return eps_sigma2
 
