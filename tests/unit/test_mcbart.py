@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from bart_playground.mcbart import MultiChainBART
+from bart_playground.util import Dataset
 
 
 def _toy_regression(n=40, d=3, rng=None):
@@ -91,5 +92,43 @@ class TestMultiChainBART:
         s4 = m.posterior_sample(X[:4], schedule)
         any_diff = (not np.allclose(s1, s3)) or (not np.allclose(s1, s4))
         assert equal is False or any_diff is True
+
+        m.clean_up()
+
+    def test_feature_inclusion_frequency(self):
+        X, y = _toy_regression(n=40, d=3, rng=4)
+        m = MultiChainBART(n_ensembles=3, random_state=777, ndpost=40, nskip=10, n_trees=15)
+        m.fit(X, y, quietly=True)
+
+        freq = m.feature_inclusion_frequency("split")
+        assert freq.shape == (X.shape[1],)
+        assert np.all(freq >= 0.0)
+        total = float(freq.sum())
+        assert total > 0.0
+        np.testing.assert_allclose(total, 1.0, atol=1e-6)
+
+        # Deterministic when the model state does not change
+        freq2 = m.feature_inclusion_frequency("split")
+        np.testing.assert_allclose(freq, freq2, atol=0, rtol=0)
+
+        m.clean_up()
+
+    def test_shared_dataset_reference_reused(self):
+        X, y = _toy_regression(n=20, d=2, rng=5)
+        m = MultiChainBART(n_ensembles=2, random_state=42, ndpost=20, nskip=5, n_trees=8)
+        m.fit(X, y, quietly=True)
+
+        assert m._dataset is not None
+        dataset: Dataset = m._dataset
+
+        transformed = m._driver_preprocessor.transform(X, y)
+        np.testing.assert_allclose(dataset.X, transformed.X)
+        np.testing.assert_allclose(dataset.y, transformed.y)
+
+        old_dataset = m._dataset
+        m.update_fit(X[:5], y[:5], add_ndpost=5, quietly=True)
+        updated_dataset: Dataset = m._dataset
+        assert updated_dataset is not old_dataset
+        assert updated_dataset.n == transformed.n + 5
 
         m.clean_up()

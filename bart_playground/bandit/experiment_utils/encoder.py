@@ -16,10 +16,8 @@ class BanditEncoder:
             self.combined_dim = n_features + n_arms
         elif encoding == 'multi':
             self.combined_dim = n_features * n_arms
-        elif encoding == 'separate' or encoding == 'native':
+        elif encoding == 'separate':
             self.combined_dim = n_features
-            # "native" encoding is just the feature vector itself
-            # This is useful for models that can handle categorical features directly
             # "separate" encoding means that we will use different models with the feature vector as is
         else:
             raise ValueError(f"Unknown encoding: {encoding}")
@@ -56,7 +54,7 @@ class BanditEncoder:
                 start_idx = arm * self.n_features
                 end_idx = start_idx + self.n_features
                 x_combined[row_idx, start_idx:end_idx] = x
-        elif self.encoding == 'separate' or self.encoding == 'native':
+        elif self.encoding == 'separate':
             x_combined = x
         else:
             raise ValueError(f"Unknown encoding: {self.encoding}")

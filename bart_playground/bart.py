@@ -1,17 +1,19 @@
 from warnings import warn
 import numpy as np
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, Any
 from scipy.stats import norm
 
 from .samplers import Sampler, DefaultSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
 from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
-from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor
+from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor, Dataset
 
 
 class BART:
     """
     API for the BART model.
     """
+    preprocessor_class = None  # Must be overridden by subclasses
+    
     def __init__(self, preprocessor : Preprocessor, sampler : Sampler, 
                  ndpost=1000, nskip=100):
         """
@@ -25,15 +27,27 @@ class BART:
         self.is_fitted = False
         self.data = None
 
+    def get_params(self) -> Dict[str, Any]:
+        """Get effective parameters for this model instance."""
+        return {"ndpost": self.ndpost, "nskip": self.nskip}
+
     def fit(self, X, y, quietly = False):
         """
         Fit the BART model.
         """
-        self.data = self.preprocessor.fit_transform(X, y)
+        data = self.preprocessor.fit_transform(X, y)
+        return self.fit_with_data(data, quietly=quietly)
+    
+    def fit_with_data(self, data: Dataset, quietly=False):
+        """
+        Fit the BART model using a preprocessed dataset.
+        """
+        self.data = data
         self.sampler.add_data(self.data)
         self.sampler.add_thresholds(self.preprocessor.thresholds)
         self.trace = self.sampler.run(self.ndpost + self.nskip, quietly=quietly, n_skip=self.nskip)
         self.is_fitted = True
+        return self
     
     def update_fit(self, X, y, add_ndpost=20, quietly=False):
         """
@@ -58,17 +72,22 @@ class BART:
             self.fit(X_combined, y_combined, quietly=quietly)
             return self
 
+        updated_data = self.preprocessor.update_transform(X, y, self.data)
+        return self.update_fit_with_data(updated_data, add_ndpost=add_ndpost, quietly=quietly)
+    
+    def update_fit_with_data(self, data: Dataset, add_ndpost=20, quietly=False):
+        """
+        Update an existing fitted model with a new preprocessed dataset.
+        """
+        if self.data is None or not self.is_fitted:
+            return self.fit_with_data(data, quietly=quietly)
         additional_iters = add_ndpost
         # Set all previous iterations as burn-in
         self.nskip += self.ndpost
         # Set new add_ndpost iterations as post-burn-in
         self.ndpost = add_ndpost
-        
-        # Update the dataset using the appropriate preprocessor method
-        self.data = self.preprocessor.update_transform(X, y, self.data)
-            
-        # Update thresholds 
-        # if needed TODO
+
+        self.data = data
         self.sampler.add_thresholds(self.preprocessor.thresholds)
         
         # Run the sampler for additional iterations
@@ -254,19 +273,42 @@ class BART:
             self.trace[k] = None
 
 class DefaultBART(BART):
+    preprocessor_class = DefaultPreprocessor
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
-                 random_state=42, temperature=1.0, dirichlet_prior=False, quick_decay: bool = False):
-        preprocessor = DefaultPreprocessor(max_bins=max_bins)
+                 random_state=42, temperature=1.0, dirichlet_prior=False, quick_decay: bool = False,
+                 s_alpha: float = 1.0, fixed_eps_sigma2: Optional[float] = None):
+        if max_bins is None:
+            max_bins = 100
+        preprocessor = self.preprocessor_class(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
-                             eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay)
+                             eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay, s_alpha=s_alpha, fixed_eps_sigma2=fixed_eps_sigma2)
         temp_schedule = self._check_temperature(temperature)
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, temp_schedule=temp_schedule)
         super().__init__(preprocessor, sampler, ndpost, nskip)
+        
+    def get_params(self) -> Dict[str, Any]:
+        """Get all effective parameters for this model instance."""
+        return {
+            "model_type": "DefaultBART",
+            "ndpost": self.ndpost,
+            "nskip": self.nskip,
+            "n_trees": self.sampler.tree_prior.n_trees,
+            "tree_alpha": self.sampler.tree_prior.alpha,
+            "tree_beta": self.sampler.tree_prior.beta,
+            "f_k": self.sampler.tree_prior.f_k,
+            "eps_nu": self.sampler.prior.global_prior.eps_nu,
+            "eps_q": self.sampler.prior.global_prior.eps_q,
+            "specification": self.sampler.prior.global_prior.specification,
+            "dirichlet_prior": self.sampler.prior.global_prior.dirichlet_prior,
+            "quick_decay": self.sampler.tree_prior.quick_decay,
+            "proposal_probs": self.sampler.proposals,
+            "fixed_eps_sigma2": self.sampler.prior.global_prior.fixed_eps_sigma2
+        }
         
     def predict_proba(self, X):
         """
@@ -301,12 +343,12 @@ class DefaultBART(BART):
 
         for k in self.range_post:
             # trace[k] is Parameters for regression BART
+            # vars_histogram is now a numpy array of shape (p,)
             hist = self.trace[k].vars_histogram
-            if not hist:
+            if hist.size == 0:
                 continue
-            for var_idx, count in hist.items():
-                if 0 <= var_idx < p and count > 0:
-                    probs[var_idx] += 1.0
+            # Mark features that were used at least once
+            probs += (hist > 0).astype(float)
 
         probs /= float(self.ndpost)
         return probs
@@ -338,13 +380,12 @@ class DefaultBART(BART):
         if normalize == 'split':
             total_splits = 0.0
             for k in self.range_post:
+                # vars_histogram is now a numpy array of shape (p,)
                 hist = self.trace[k].vars_histogram
-                if not hist:
+                if hist.size == 0:
                     continue
-                for var_idx, count in hist.items():
-                    if 0 <= var_idx < p and count > 0:
-                        freq[var_idx] += float(count)
-                        total_splits += float(count)
+                freq += hist.astype(float)
+                total_splits += float(hist.sum())
             if total_splits > 0.0:
                 freq /= total_splits
             else:
@@ -356,14 +397,12 @@ class DefaultBART(BART):
         draws_count = 0
         for k in self.range_post:
             hist = self.trace[k].vars_histogram
-            if not hist:
+            if hist.size == 0:
                 continue
-            draw_total = float(sum(hist.values()))
+            draw_total = float(hist.sum())
             if draw_total <= 0.0:
                 continue
-            for var_idx, count in hist.items():
-                if 0 <= var_idx < p and count > 0:
-                    freq[var_idx] += float(count) / draw_total
+            freq += hist.astype(float) / draw_total
             draws_count += 1
 
         if draws_count > 0:
@@ -376,13 +415,14 @@ class ProbitBART(BART):
     """
     Binary BART implementation using Albert-Chib data augmentation and probit link.
     """
+    preprocessor_class = ClassificationPreprocessor
 
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95,
                  tree_beta: float=2.0,
                  f_k=2.0,
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, quick_decay: bool = False):
-        preprocessor = ClassificationPreprocessor(max_bins=max_bins)
+        preprocessor = self.preprocessor_class(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ProbitPrior(n_trees, tree_alpha, tree_beta, f_k, rng, quick_decay=quick_decay)
         temp_schedule = self._check_temperature(temperature)
@@ -460,12 +500,16 @@ class LogisticBART(BART):
     """
     Logistic BART implementation using logistic link function.
     """
+    preprocessor_class = ClassificationPreprocessor
+
     def __init__(self, ndpost=1000, nskip=100, n_trees=25, tree_alpha: float=0.95,
                  tree_beta: float=2.0, 
                  c: float = 0.0, d: float = 0.0,
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, quick_decay: bool = False):
-        preprocessor = ClassificationPreprocessor(max_bins=max_bins)
+        if max_bins is None:
+            max_bins = 100
+        preprocessor = self.preprocessor_class(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = LogisticPrior(n_trees, tree_alpha, tree_beta, c, d, rng, quick_decay=quick_decay)
         temp_schedule = self._check_temperature(temperature)
@@ -473,6 +517,21 @@ class LogisticBART(BART):
                                generator=rng, tol=tol, temp_schedule=temp_schedule)
         self.sampler : LogisticSampler
         super().__init__(preprocessor, sampler, ndpost, nskip)
+
+    def get_params(self) -> Dict[str, Any]:
+        """Get all effective parameters for this model instance."""
+        return {
+            "model_type": "LogisticBART",
+            "ndpost": self.ndpost,
+            "nskip": self.nskip,
+            "n_trees": self.sampler.tree_prior.n_trees,
+            "tree_alpha": self.sampler.tree_prior.alpha,
+            "tree_beta": self.sampler.tree_prior.beta,
+            "c": self.sampler.tree_prior.c,
+            "d": self.sampler.tree_prior.d,
+            "quick_decay": self.sampler.tree_prior.quick_decay,
+            "proposal_probs": self.sampler.proposals
+        }
         
     @property
     def n_categories(self):
@@ -484,7 +543,12 @@ class LogisticBART(BART):
     def fit(self, X, y, quietly=False):
         y = y.flatten()
         self.sampler.n_categories = np.unique(y).size
-        super().fit(X, y, quietly=quietly)
+        return super().fit(X, y, quietly=quietly)
+
+    def fit_with_data(self, data: Dataset, quietly=False):
+        # data.y is already encoded to 0..K-1 by ClassificationPreprocessor
+        self.sampler.n_categories = int(np.max(data.y)) + 1
+        return super().fit_with_data(data, quietly=quietly)
         
     def posterior_f(self, X, backtransform=True):
         """

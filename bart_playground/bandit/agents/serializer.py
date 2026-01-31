@@ -64,6 +64,7 @@ class DefaultBARTTSAgentDTO(BaseModel):
     t: int
     is_model_fitted: bool
     rng: RNGStateDTO
+    warmstart_arms: List[int]
 
     # Serialized DefaultBART or MultiChain (portable) model JSON
     bart_json: Optional[str] = None
@@ -127,6 +128,7 @@ def serialize_agent(agent: Any) -> str:
             t=agent.t,
             is_model_fitted=agent.is_model_fitted,
             rng=RNGStateDTO.from_generator(agent.rng),
+            warmstart_arms=agent._warmstart_arms,
             bart_json=bart_json_val,
             multichain_json=multichain_json_val,
         )
@@ -182,6 +184,7 @@ def deserialize_agent(s: str) -> Any:
         agent.t = dto.t
         agent.is_model_fitted = dto.is_model_fitted
         agent.rng = dto.rng.to_generator()
+        agent._warmstart_arms = dto.warmstart_arms
 
         # Restore model from JSON
         if dto.bart_json is not None:

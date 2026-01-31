@@ -14,14 +14,17 @@ notebooks/results
 notebooks/bandit/results
 notebooks/bandit/*.png
 notebooks/bandit/data
-bart_playground/bandit/baselines
-.idea/
-.vscode/
-.cursor/
+notebooks/tmp*
+notebooks/*.md
+bart_playground/bandit/agents/_deprecated
+profile_output/
+
+tmp/
 
 .vscode/*
 .idea/*
 .cursor/*
+CLAUDE.md
 
 benchmarks/*.csv
 tests/unit/plan/*
@@ -31,5 +34,4 @@ tests/*.md
 
 /benchmarks/
 /experiments/
-/notebooks/
 /legacy/

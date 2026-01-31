@@ -1,24 +1,52 @@
+import copy
 import numpy as np
 import ray
-from typing import Callable, Any, List, Dict
+import math
+from typing import Callable, Any, List, Dict, Optional
 from .bart import DefaultBART 
 from .serializer import bart_to_json
+from .util import Dataset
 
 @ray.remote
 class BARTActor:
-    """A Ray Actor to hold and manage a single stateful BART instance."""
-    def __init__(self, bart_class, random_state, **kwargs):
-        # Each actor gets its own BART instance, initialized with a unique random state.
-        self.model = bart_class(random_state=random_state, **kwargs)
+    """A Ray Actor that can hold multiple stateful BART instances (one per arm)."""
+    def __init__(self, bart_class, random_state, n_models: int = 1, **kwargs):
+        self._bart_class = bart_class
+        self._kwargs = dict(kwargs)
+        self._n_models = int(n_models)
+        seed_seq = random_state if isinstance(random_state, np.random.SeedSequence) else np.random.SeedSequence(int(random_state))
+        self._seeds = seed_seq.spawn(self._n_models)
+        self.models = [
+            bart_class(random_state=s, **self._kwargs)
+            for s in self._seeds
+        ]
+        self._active = 0
 
-    def fit(self, X, y, quietly=False):
-        self.model.fit(X, y, quietly=quietly)
-        # We don't need to return the model itself, as its state is maintained within the actor.
-        return True # Return a success signal
+    def set_active_model(self, model_id: int):
+        self._active = int(model_id)
+        return True
 
-    def update_fit(self, X, y, add_ndpost=20, quietly=False):
-        self.model.update_fit(X, y, add_ndpost=add_ndpost, quietly=quietly)
-        return True # Return a success signal
+    @property
+    def model(self):
+        return self.models[self._active]
+
+    def _reinit_active_model(self):
+        """Re-build the active BART instance from scratch (fresh sampler state)."""
+        self.models[self._active] = self._bart_class(
+            random_state=self._seeds[self._active],
+            **self._kwargs,
+        )
+
+    def fit(self, dataset, preprocessor, quietly=False):
+        self._reinit_active_model()
+        self.model.preprocessor = preprocessor
+        self.model.fit_with_data(dataset, quietly=quietly)
+        return True
+
+    def update_fit(self, dataset, preprocessor, add_ndpost=20, quietly=False):
+        self.model.preprocessor = preprocessor
+        self.model.update_fit_with_data(dataset, add_ndpost=add_ndpost, quietly=quietly)
+        return True
 
     def predict(self, X):
         return self.model.predict(X)
@@ -36,6 +64,22 @@ class BARTActor:
     def predict_trace(self, k: int, X, backtransform: bool = True):
         """Evaluate prediction at a specific trace index k using the in-actor model."""
         return self.model.predict_trace(k, X, backtransform=backtransform)
+
+    def predict_trace_batch(self, k: int, X, backtransform: bool = True):
+        """
+        Evaluate prediction at trace index k for ALL models in this actor. Note: This is used for batch prediction and ignores the active model state.
+        """
+        return [m.predict_trace(k, X, backtransform) for m in self.models]
+
+    def posterior_f_batch(self, X, backtransform=True):
+        """
+        Get posterior f from ALL models in this actor.
+
+        
+        Returns:
+            Array of shape (n_models, n_samples, ndpost_per_chain)
+        """
+        return np.stack([m.posterior_f(X, backtransform=backtransform) for m in self.models], axis=0)
 
     def get_attributes(self):
         """Helper to retrieve attributes from the model inside the actor."""
@@ -60,35 +104,95 @@ class BARTActor:
     def apply(self, func, *args, **kwargs):
         return func(self.model, *args, **kwargs)
 
+    def feature_inclusion_frequency(self, normalize: str = "split"):
+        """
+        Return per-feature inclusion frequency for this actor's model.
+        """
+        return self.model.feature_inclusion_frequency(normalize=normalize)
+
+    def get_params(self):
+        """Proxy to get params from the underlying model."""
+        base = self.model.get_params()
+        base["n_models"] = self._n_models
+        return base
+
+    def set_ndpost(self, ndpost: int):
+        nd = int(ndpost)
+        self._kwargs["ndpost"] = nd
+        for m in self.models:
+            m.ndpost = nd
+        return True
+
 class MultiChainBART:
     """
     Multi-chain BART model that runs multiple BART chains in parallel using Ray.
-    This allows for efficient, low-overhead updates.
+    Supports multiple models per chain.
     """
-    def __init__(self, n_ensembles, bart_class=DefaultBART, random_state=42, ndpost=1000, **kwargs):
-        self.n_ensembles = n_ensembles
+    def __init__(self, n_ensembles, bart_class=DefaultBART, random_state=42, ndpost=1000, n_models: int = 1, **kwargs):
+        self.n_ensembles = int(n_ensembles)
         self.bart_class = bart_class
-        self.ndpost = ndpost
+        
+        self._calculate_ndpost(ndpost)
+        
+        self.n_models = int(n_models)
+        max_bins_val = kwargs.get('max_bins', 100)
+        if max_bins_val is None:
+            max_bins_val = 100
+        self._driver_preprocessor = bart_class.preprocessor_class(max_bins=max_bins_val)
+        self._dataset: Optional[Dataset] = None
         
         # Initialize Ray. ignore_reinit_error is useful in interactive environments.
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
 
         # Initialize parent random state for chain picking
-        self.rng = np.random.default_rng(random_state)
+        parent_seed = random_state if isinstance(random_state, np.random.SeedSequence) else np.random.SeedSequence(int(random_state))
+        self.rng = np.random.default_rng(parent_seed)
 
         # Generate children random states for reproducibility
-        def _make_child_states(master_seed: int, chain_id: int) -> np.random.SeedSequence:
-            return np.random.SeedSequence(master_seed, spawn_key=(chain_id,))
-
-        child_states = [_make_child_states(int(random_state), i) for i in range(n_ensembles)]
+        child_states = parent_seed.spawn(self.n_ensembles)
 
         # Create stateful actors. Each actor will build and hold one BART instance.
         self.bart_actors: List[Any] = [
-            BARTActor.remote(bart_class, random_state=seed_sequence, ndpost=ndpost, **kwargs)  # type: ignore
+            BARTActor.remote(
+                bart_class,
+                random_state=seed_sequence,
+                n_models=self.n_models,
+                ndpost=self.ndpost_per_chain,
+                **kwargs,
+            )  # type: ignore
             for seed_sequence in child_states
         ]
-        print(f"Created {n_ensembles} BARTActor(s) using BART class: {bart_class.__name__}")
+        print(f"Created {self.n_ensembles} BARTActor(s) using {bart_class.__name__} with {self.n_models} model(s) each.")
+
+    def set_active_model(self, model_id: int):
+        idx = int(model_id)
+        ray.get([actor.set_active_model.remote(idx) for actor in self.bart_actors])
+        return self
+    
+    def _calculate_ndpost(self, ndpost: int):
+        # User requested TOTAL ndpost
+        self.ndpost = int(ndpost)
+        self.ndpost_per_chain = math.ceil(self.ndpost / self.n_ensembles)
+
+    def set_ndpost(self, ndpost: int):
+        self._calculate_ndpost(ndpost)
+        
+        ray.get([actor.set_ndpost.remote(self.ndpost_per_chain) for actor in self.bart_actors])
+        return self
+
+    def set_max_bins(self, max_bins: int):
+        """Set max_bins for the driver preprocessor."""
+        self._driver_preprocessor.max_bins = int(max_bins)
+        return self
+
+    def __len__(self):
+        return max(1, self.n_models)
+
+    def __getitem__(self, i: int):
+        if not (0 <= i < len(self)):
+            raise IndexError("model index out of range")
+        return self.set_active_model(i)
         
     @property
     def is_fitted(self):
@@ -111,27 +215,34 @@ class MultiChainBART:
     @property
     def range_post(self):
         """
-        Get the range of posterior samples.
+        Global range of posterior samples [0, actual_total_ndpost).
         """
-        total_iterations = self._trace_length
-        if total_iterations < self.ndpost:
-            raise ValueError(f"Not enough posterior samples: {total_iterations} < {self.ndpost} (provided ndpost).")
-        return range(total_iterations - self.ndpost, total_iterations)
+        return range(self.ndpost)
 
     def fit(self, X, y, quietly=False):
         """Fit all BART instances in parallel using Ray actors."""
-        # This is a non-blocking call. It returns futures immediately.
-        fit_futures = [actor.fit.remote(X, y, quietly) for actor in self.bart_actors]
+        dataset = self._driver_preprocessor.fit_transform(X, y)
+        data_ref, prep_ref = self._share_dataset(dataset)
+        fit_futures = [actor.fit.remote(data_ref, prep_ref, quietly) for actor in self.bart_actors]
         # This is a blocking call that waits for all actors to finish their fit.
         ray.get(fit_futures)
+        return self
     
     def update_fit(self, X, y, add_ndpost=20, quietly=False):
         """
         Update all BART instances in parallel with very low overhead.
         This sends a command to the existing actors without process creation.
         """
-        update_futures = [actor.update_fit.remote(X, y, add_ndpost, quietly) for actor in self.bart_actors]
+        if self._dataset is None:
+            return self.fit(X, y, quietly=quietly)
+        updated_dataset = self._driver_preprocessor.update_transform(X, y, self._dataset)
+        data_ref, prep_ref = self._share_dataset(updated_dataset)
+        update_futures = [
+            actor.update_fit.remote(data_ref, prep_ref, add_ndpost, quietly)
+            for actor in self.bart_actors
+        ]
         ray.get(update_futures)
+        return self
 
     def predict(self, X):
         """Predict using all BART instances and average the results."""
@@ -143,16 +254,45 @@ class MultiChainBART:
         """Get full posterior distribution from all instances."""
         preds_futures = [actor.posterior_predict.remote(X) for actor in self.bart_actors]
         preds_list = ray.get(preds_futures)
-        return np.concatenate(preds_list, axis=1)
+        return np.concatenate(preds_list, axis=1)[:, :self.ndpost]
 
     def posterior_f(self, X, backtransform=True):
         """Get posterior distribution of f(x) from all instances.
 
-        Returns an array of shape (n_rows, ndpost_per_chain * n_ensembles).
+        Returns an array of shape (n_rows, ndpost).
         """
         preds_futures = [actor.posterior_f.remote(X, backtransform=backtransform) for actor in self.bart_actors]
         preds_list = ray.get(preds_futures)
-        return np.concatenate(preds_list, axis=1)
+        return np.concatenate(preds_list, axis=1)[:, :self.ndpost]
+    
+    def posterior_f_batch(self, X, backtransform=True):
+        """
+        Get posterior f from all models across all chains.
+        
+        Args:
+            X: Input covariates (n_samples, n_features)
+            backtransform: Whether to backtransform predictions
+        
+        Returns:
+            Array of shape (n_models, n_samples, total_ndpost)
+            where total_ndpost = ndpost_per_chain * n_ensembles
+        
+        Notes:
+            - Parallelizes across chains via Ray
+            - Concatenates results from each chain along posterior dimension
+        """
+        # Parallel call to all actors
+        futures = [actor.posterior_f_batch.remote(X, backtransform=backtransform) 
+                   for actor in self.bart_actors]
+        results_per_actor = ray.get(futures)
+        # Each result: (n_models, n_samples, ndpost_per_chain)
+        
+        if not results_per_actor:
+            return np.zeros((0, 0, 0), dtype=float)
+        
+        # Concatenate along posterior dimension (axis=2) and clip to ndpost
+        return np.concatenate(results_per_actor, axis=2)[:, :, :self.ndpost]
+
     
     def posterior_sample(self, X, schedule: Callable[[int], float]):
         """
@@ -164,10 +304,23 @@ class MultiChainBART:
         return ray.get(sample_future)
 
     def predict_trace(self, k: int, X, backtransform: bool = True):
-        """Predict using a specific trace index by averaging across all actors (chains)."""
-        preds_futures = [actor.predict_trace.remote(k, X, backtransform) for actor in self.bart_actors]
-        all_preds = np.array(ray.get(preds_futures))
-        return np.mean(all_preds, axis=0)
+        """Predict using specific trace index k mapping to specific chain."""
+        # Map global k -> (chain_id, local_k)
+        # Note: No bounds check here; internal contract ensures 0 <= k < self.ndpost
+        chain_id = k // self.ndpost_per_chain
+        local_k = k % self.ndpost_per_chain
+
+        return ray.get(self.bart_actors[chain_id].predict_trace.remote(local_k, X, backtransform))
+
+    def predict_trace_batch(self, k: int, X, backtransform: bool = True):
+        """
+        Predict using a specific trace index for ALL models (arms).
+        """
+        chain_id = k // self.ndpost_per_chain
+        local_k = k % self.ndpost_per_chain
+        
+        preds = ray.get(self.bart_actors[chain_id].predict_trace_batch.remote(local_k, X, backtransform))
+        return np.array(preds)
 
     def collect_model_states(self):
         """Return the in-actor BART models."""
@@ -198,8 +351,38 @@ class MultiChainBART:
         futures = [actor.apply.remote(func, *args, **kwargs) for actor in self.bart_actors]
         return ray.get(futures)
 
+    def feature_inclusion_frequency(self, normalize: str = "split") -> np.ndarray:
+        """
+        Aggregate per-feature inclusion frequency across chains.
+
+        Each actor computes its own normalized frequency vector; we average them.
+        """
+        per_chain = ray.get(
+            [actor.feature_inclusion_frequency.remote(normalize) for actor in self.bart_actors]
+        )
+        if not per_chain:
+            return np.zeros(0, dtype=float)
+        return np.mean(np.stack(per_chain, axis=0), axis=0)
+
     def clean_up(self):
         for actor in self.bart_actors:
             ray.kill(actor)
         print("Ray Actors have been cleaned up.")
+        
+    def get_params(self) -> Dict[str, Any]:
+        """Get parameters from the first actor and add ensemble info."""
+        if not self.bart_actors:
+            return {}
+        # Get params from the first actor
+        base_params : Dict[str, Any] = ray.get(self.bart_actors[0].get_params.remote())
+        # Add ensemble-level params
+        base_params["n_ensembles"] = self.n_ensembles
+        base_params["model_type"] = f"MultiChainBART({base_params.get('model_type', 'Unknown')})"
+        return base_params
+
+    def _share_dataset(self, dataset: Dataset):
+        self._dataset = dataset
+        data_ref = ray.put(dataset)
+        preproc_ref = ray.put(self._driver_preprocessor)
+        return data_ref, preproc_ref
         
