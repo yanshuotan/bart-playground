@@ -63,6 +63,8 @@ class Sampler(ABC):
         self.move_selected_counts = {k: 0 for k in self.proposals}
         self.move_success_counts = {k: 0 for k in self.proposals}
         self.move_accepted_counts = {k: 0 for k in self.proposals}
+
+        self.accepted_moves_logmh = [] # log MH ratios of accepted moves
         
     @property
     def data(self) -> Dataset:
@@ -170,8 +172,8 @@ class Sampler(ABC):
     def log_mh_ratio(self, move : Move, temp, move_key: str, data_y = None, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio with proposal-probability correction."""
         data_y = self.data.y if data_y is None else data_y
-        return (self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize)) / temp + \
+        return self.tree_prior.trees_log_prior_ratio(move) + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize) / temp + \
             move.log_tran_ratio + \
             np.log(self.proposals[contrary_moves[move_key]]) - np.log(self.proposals[move_key])
     
@@ -272,10 +274,6 @@ class DefaultSampler(Sampler):
 
         # store seed forest for XGBoost init
         self.init_trees = init_trees
-        # --- Add move statistics ---
-        self.move_selected_counts = {k: 0 for k in self.proposals}
-        self.move_success_counts = {k: 0 for k in self.proposals}
-        self.move_accepted_counts = {k: 0 for k in self.proposals}
 
     def get_init_state(self) -> Parameters:
         """
@@ -306,6 +304,7 @@ class DefaultSampler(Sampler):
         """
         iter_current = current#.copy() # First make a copy
         iter_trace = [(0, iter_current)]
+        accepted_moves_this_iter = [] # To store accepted moves in this iteration
         for k in range(self.tree_prior.n_trees):
             move_key, move_cls = self.sample_move()
             self.move_selected_counts[move_key] += 1
@@ -316,13 +315,16 @@ class DefaultSampler(Sampler):
                 self.move_success_counts[move_key] += 1
                 Z = self.generator.uniform(0, 1)
                 marginalize = getattr(self, 'marginalize', False)
-                if np.log(Z) < self.log_mh_ratio(move, temp, move_key=move_key, marginalize=marginalize):
+                log_mh = self.log_mh_ratio(move, temp, move_key=move_key, marginalize=marginalize)
+                if np.log(Z) < log_mh:
                     self.move_accepted_counts[move_key] += 1
+                    accepted_moves_this_iter.append((move_key, log_mh))
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
                         iter_trace.append((k+1, move.proposed))
+        self.accepted_moves_logmh.append(accepted_moves_this_iter)
         iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
         if return_trace:
             return iter_trace
@@ -409,7 +411,7 @@ class ProbitSampler(Sampler):
         
 class MultiSampler(Sampler):
     """
-    Default implementation of the BART sampler.
+    Multiple-try Metropolis Hastings.
     """
     def __init__(self, prior : ComprehensivePrior, proposal_probs: dict,
                  generator : np.random.Generator, temp_schedule=TemperatureSchedule(), tol=1, 
@@ -424,17 +426,6 @@ class MultiSampler(Sampler):
         self.likelihood = prior.likelihood
         self.multi_tries = multi_tries
         super().__init__(prior, proposal_probs, generator, temp_schedule, tol)
-        # --- Add move statistics ---
-        self.move_selected_counts = {k: 0 for k in self.proposals}
-        self.move_success_counts = {k: 0 for k in self.proposals}
-        self.move_accepted_counts = {k: 0 for k in self.proposals}
-        self.multi_ratios = {
-            "multigrow": [],
-            "multiprune": [],
-            "multichange": [],
-            "multiswap": []
-        }
-
 
     def get_init_state(self) -> Parameters:
         """
@@ -462,7 +453,6 @@ class MultiSampler(Sampler):
     
     def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
         """Calculate total log Metropolis-Hastings ratio"""
-        data_y = self.data.y if data_y is None else data_y
         return move.log_tran_ratio # Already considers prior and likelihood in move.py
 
     def one_iter(self, current, temp, return_trace=False):
@@ -471,6 +461,7 @@ class MultiSampler(Sampler):
         """
         iter_current = current.copy() # First make a copy
         iter_trace = [(0, iter_current)]
+        accepted_moves_this_iter = [] # To store accepted moves in this iteration
         for k in range(self.tree_prior.n_trees):
             move_key, move_cls = self.sample_move()
             self.move_selected_counts[move_key] += 1
@@ -481,20 +472,17 @@ class MultiSampler(Sampler):
             )
             if move.propose(self.generator): # Check if a valid move was proposed
                 self.move_success_counts[move_key] += 1
-                move_name = type(move).__name__.lower()
-                if hasattr(move, "candidate_sampling_ratio"): # Record the sampling ratio for multi-moves
-                    for key in self.multi_ratios:
-                        if key in move_name:
-                            self.multi_ratios[key].append(move.candidate_sampling_ratio)
-                            break
                 Z = self.generator.uniform(0, 1)
-                if np.log(Z) < self.log_mh_ratio(move, temp): # Already consider prior and likelihood in move
+                log_mh = self.log_mh_ratio(move, temp)
+                if np.log(Z) < log_mh: # Already consider prior and likelihood in move
                     self.move_accepted_counts[move_key] += 1
+                    accepted_moves_this_iter.append((move_key, log_mh))
                     new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
                         iter_trace.append((k+1, move.proposed))
+        self.accepted_moves_logmh.append(accepted_moves_this_iter)
         iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
         if return_trace:
             return iter_trace

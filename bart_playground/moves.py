@@ -329,7 +329,6 @@ class MultiPrune(Prune):
         eps_sigma2 = self.current.global_params["eps_sigma2"][0]
         n_samples = self.get_n_samples(tree)
         all_candidates = tree.terminal_split_nodes
-        self.candidate_sampling_ratio = 1 # Just a placeholder, not used in MultiPrune because prune always succeeds
 
         if not all_candidates:
             return False
@@ -557,8 +556,6 @@ class MultiSwap(Swap):
                     log_pi = -np.inf  # Invalid swap
                 log_pi_cache[cache_key] = log_pi
             candidates.append((parent_id, child_id, 0.5*float(log_pi)))
-
-        self.candidate_sampling_ratio = n_candidate_trials / min(n_samples, len(all_candidates)) if all_candidates else 1
 
         log_bwd_weights = np.array([w for _, _, w in candidates])
 
