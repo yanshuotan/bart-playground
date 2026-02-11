@@ -34,3 +34,5 @@ tests/*.md
 /experiments/
 /notebooks/
 /legacy/
+
+diagnosis/**/store/
