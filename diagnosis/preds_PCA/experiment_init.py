@@ -138,11 +138,8 @@ def run_experiment(run_id, chain_id, X, y, ndpost, nskip, n_trees, m_tries, temp
     # subspace_distances_mtmh = compute_subspace_distances(bart_mtmh.sampler.trace, n_trees, run_id, chain_id)
     accepted_moves_logmh_mtmh = np.array(bart_mtmh.sampler.accepted_moves_logmh, dtype=object)
 
-    # MTMH prediction interval and coverage
+    # MTMH posterior predictive draws
     mtmh_pred_all_test = bart_mtmh.posterior_predict(X_test)  # shape (n_test, n_mcmc)
-    mtmh_lower = np.percentile(mtmh_pred_all_test, 2.5, axis=1)
-    mtmh_upper = np.percentile(mtmh_pred_all_test, 97.5, axis=1)
-    mtmh_covered_bool = ((y_test >= mtmh_lower) & (y_test <= mtmh_upper))  # shape (n_test,)
 
     del bart_mtmh
     gc.collect()
@@ -171,11 +168,8 @@ def run_experiment(run_id, chain_id, X, y, ndpost, nskip, n_trees, m_tries, temp
     # subspace_distances_default = compute_subspace_distances(bart_default.sampler.trace, n_trees, run_id, chain_id)
     accepted_moves_logmh_default = np.array(bart_default.sampler.accepted_moves_logmh, dtype=object)
 
-    # Default prediction interval and coverage
+    # Default posterior predictive draws
     default_pred_all_test = bart_default.posterior_predict(X_test)  # shape (n_test, n_mcmc)
-    default_lower = np.percentile(default_pred_all_test, 2.5, axis=1)
-    default_upper = np.percentile(default_pred_all_test, 97.5, axis=1)
-    default_covered_bool = ((y_test >= default_lower) & (y_test <= default_upper))  # shape (n_test,)
 
     del bart_default
     gc.collect()
@@ -210,13 +204,13 @@ def run_experiment(run_id, chain_id, X, y, ndpost, nskip, n_trees, m_tries, temp
             idx = rng.choice(preds_default.shape[0], n_test_points, replace=False)
             result['default']['preds'] = np.array(preds_default[idx])
             result['mtmh']['preds'] = np.array(preds_mtmh[idx])
-            result['default']['coverage'] = np.array(default_covered_bool[idx])
-            result['mtmh']['coverage'] = np.array(mtmh_covered_bool[idx])
+            result['default']['preds_obs'] = np.array(default_pred_all_test[idx])
+            result['mtmh']['preds_obs'] = np.array(mtmh_pred_all_test[idx])
         else:
             result['default']['preds'] = np.array(preds_default)
             result['mtmh']['preds'] = np.array(preds_mtmh)
-            result['default']['coverage'] = np.array(default_covered_bool)
-            result['mtmh']['coverage'] = np.array(mtmh_covered_bool)
+            result['default']['preds_obs'] = np.array(default_pred_all_test)
+            result['mtmh']['preds_obs'] = np.array(mtmh_pred_all_test)
     return result
 
 def run_experiment_multiple_chains(run_id, X, y, ndpost, nskip, n_trees, m_tries, temperature, 
@@ -288,7 +282,7 @@ def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook,
     if store_preds:
         combined_results['default']['preds'] = np.array([[chain['default']['preds'] for chain in run] for run in results])
         combined_results['mtmh']['preds'] = np.array([[chain['mtmh']['preds'] for chain in run] for run in results])
-        combined_results['default']['coverage'] = np.array([[chain['default']['coverage'] for chain in run] for run in results])
-        combined_results['mtmh']['coverage'] = np.array([[chain['mtmh']['coverage'] for chain in run] for run in results])
+        combined_results['default']['preds_obs'] = np.array([[chain['default']['preds_obs'] for chain in run] for run in results])
+        combined_results['mtmh']['preds_obs'] = np.array([[chain['mtmh']['preds_obs'] for chain in run] for run in results])
     np.savez_compressed(f'store/{notebook}.npz', **combined_results)
     return results

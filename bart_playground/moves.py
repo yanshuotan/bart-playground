@@ -227,11 +227,13 @@ class Swap(Move):
     
 class MultiGrow(Grow):
     def __init__(self, current, trees_changed, possible_thresholds, tol=100,
-                 likelihood=None, tree_prior=None, data_y=None, n_samples_list=[10, 5], **kwargs):
+                 likelihood=None, tree_prior=None, data_y=None,
+                 n_samples_list=[10, 5], temp: float = 1.0, **kwargs):
         self.likelihood = likelihood
         self.tree_prior = tree_prior
         self.data_y = data_y
         self.n_samples_list = n_samples_list
+        self.temp = temp
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
     
     def try_propose(self, proposed, generator):
@@ -261,7 +263,8 @@ class MultiGrow(Grow):
                 # Calculate prior using simulated data
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
                 
-                log_pi = log_likelihood + log_prior
+                # Apply temperature when forming log_pi
+                log_pi = log_likelihood / self.temp + log_prior
                 candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
             else:
                 # Invalid split - set weight to 0 (log weight to -inf)
@@ -300,7 +303,7 @@ class MultiGrow(Grow):
                     new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                log_pi = log_likelihood + log_prior
+                log_pi = log_likelihood / self.temp + log_prior
                 log_pi_cache[prune_node_id] = log_pi
             log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_weights = np.array(log_fwd_weights)
@@ -314,11 +317,13 @@ class MultiGrow(Grow):
     
 class MultiPrune(Prune):
     def __init__(self, current, trees_changed, possible_thresholds, tol=100,
-                 likelihood=None, tree_prior=None, data_y=None, n_samples_list=[10, 5], **kwargs):
+                 likelihood=None, tree_prior=None, data_y=None,
+                 n_samples_list=[10, 5], temp: float = 1.0, **kwargs):
         self.likelihood = likelihood
         self.tree_prior = tree_prior
         self.data_y = data_y
         self.n_samples_list = n_samples_list
+        self.temp = temp
         if possible_thresholds is None:
             raise ValueError("possible_thresholds must be provided for MultiPrune.")
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
@@ -349,7 +354,7 @@ class MultiPrune(Prune):
                 )
                 # Calculate prior using simulated data
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                log_pi = log_likelihood + log_prior
+                log_pi = log_likelihood / self.temp + log_prior
                 log_pi_cache[node_id] = log_pi
             candidates.append((node_id, 0.5*float(log_pi)))
 
@@ -379,7 +384,7 @@ class MultiPrune(Prune):
             new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
         )
         log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-        log_pi = log_likelihood + log_prior
+        log_pi = log_likelihood / self.temp + log_prior
         log_fwd_weights.append(0.5 * float(log_pi))
 
         for _ in range(n_samples - 1):
@@ -394,7 +399,7 @@ class MultiPrune(Prune):
                     new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                log_pi = log_likelihood + log_prior
+                log_pi = log_likelihood / self.temp + log_prior
                 log_fwd_weights.append(0.5 * float(log_pi))
             else:
                 log_fwd_weights.append(-np.inf)  # Invalid split
@@ -410,11 +415,13 @@ class MultiPrune(Prune):
     
 class MultiChange(Change):
     def __init__(self, current, trees_changed, possible_thresholds, tol=100,
-                 likelihood=None, tree_prior=None, data_y=None, n_samples_list=[10, 5], **kwargs):
+                 likelihood=None, tree_prior=None, data_y=None,
+                 n_samples_list=[10, 5], temp: float = 1.0, **kwargs):
         self.likelihood = likelihood
         self.tree_prior = tree_prior
         self.data_y = data_y
         self.n_samples_list = n_samples_list
+        self.temp = temp
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
 
     def try_propose(self, proposed, generator):
@@ -443,7 +450,7 @@ class MultiChange(Change):
                 log_likelihood = self.likelihood.calculate_simulated_likelihood(
                     new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
-                log_pi = log_likelihood
+                log_pi = log_likelihood / self.temp
                 candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
             else:
                 candidates.append((node_id, var, threshold, -np.inf))
@@ -471,7 +478,7 @@ class MultiChange(Change):
         log_likelihood = self.likelihood.calculate_simulated_likelihood(
             new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
         )
-        log_pi = log_likelihood
+        log_pi = log_likelihood / self.temp
         log_fwd_weights.append(0.5*float(log_pi))
 
         for _ in range(n_samples - 1):
@@ -493,8 +500,8 @@ class MultiChange(Change):
                 log_likelihood = self.likelihood.calculate_simulated_likelihood(
                     new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                 )
-                
-                log_pi = log_likelihood
+
+                log_pi = log_likelihood / self.temp
                 log_fwd_weights.append(0.5*float(log_pi))
             else:
                 log_fwd_weights.append(-np.inf)  # Invalid change
@@ -510,11 +517,13 @@ class MultiChange(Change):
 
 class MultiSwap(Swap):
     def __init__(self, current, trees_changed, possible_thresholds=None, tol=100,
-                 likelihood=None, tree_prior=None, data_y=None, n_samples_list=[10, 5], **kwargs):
+                 likelihood=None, tree_prior=None, data_y=None,
+                 n_samples_list=[10, 5], temp: float = 1.0, **kwargs):
         self.likelihood = likelihood
         self.tree_prior = tree_prior
         self.data_y = data_y
         self.n_samples_list = n_samples_list
+        self.temp = temp
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
 
     def try_propose(self, proposed, generator):
@@ -551,7 +560,7 @@ class MultiSwap(Swap):
                     log_likelihood = self.likelihood.calculate_simulated_likelihood(
                         new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                     )
-                    log_pi = log_likelihood
+                    log_pi = log_likelihood / self.temp
                 else:
                     log_pi = -np.inf  # Invalid swap
                 log_pi_cache[cache_key] = log_pi
@@ -580,7 +589,7 @@ class MultiSwap(Swap):
         log_likelihood = self.likelihood.calculate_simulated_likelihood(
             new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
         )
-        log_pi = log_likelihood
+        log_pi = log_likelihood / self.temp
         log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_pi_cache[(parent_id, child_id)] = log_pi
 
@@ -601,7 +610,7 @@ class MultiSwap(Swap):
                     log_likelihood = self.likelihood.calculate_simulated_likelihood(
                         new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
                     )
-                    log_pi = log_likelihood
+                    log_pi = log_likelihood / self.temp
                 else:
                     log_pi = -np.inf  # Invalid swap
                 log_fwd_pi_cache[cache_key] = log_pi
