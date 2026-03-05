@@ -71,11 +71,8 @@ def compute_vector_distances(trace, X):
         distances.append(dist)
     return distances
 
-def compute_subspace_distances(trace, n_trees, chain_id=None):
-    """Compute subspace distances between consecutive states in a trace.
-
-    Note: To obtain .leaf_basis, turn on copy_cache=True inside samplers.py.
-    """
+def compute_subspace_distances(trace, n_trees, run_id=None, chain_id=None):
+    # Note: To obtain .leaf_basis, should turn on copy_cache=True inside samplers.py (line 130)
     distances = []
     tree_ids = list(range(n_trees))
     for i in range(len(trace) - 1):
@@ -90,47 +87,19 @@ def compute_subspace_distances(trace, n_trees, chain_id=None):
         except Exception as e:
             print(f"Memory used: {psutil.Process(os.getpid()).memory_info().rss / 1024**2:.2f} MB")
             raise RuntimeError(
-                f"Error in compute_subspace_distances at chain_id={chain_id}, i={i}: {e}"
+                f"Error in compute_subspace_distances at run_id={run_id}, chain_id={chain_id}, i={i}: {e}"
             ) from e
     return distances
 
 
-def make_temperature_schedule(nskip: int, start_temp: float, end_temp: float) -> TemperatureSchedule:
-    """Create a temperature schedule that cools from start_temp to end_temp over nskip iterations.
-
-    For iteration t < nskip, the temperature decreases linearly from start_temp to end_temp.
-    For t >= nskip, the temperature is fixed at end_temp (typically 1.0).
-    """
-
-    def schedule(t: int) -> float:
-        if t >= nskip:
-            return end_temp
-        if nskip <= 1:
-            # Degenerate case: no real burn-in, just use end_temp
-            return end_temp
-        frac = t / (nskip - 1)
-        return start_temp + (end_temp - start_temp) * frac
-
-    return TemperatureSchedule(schedule)
-
-
-def run_chain(chain_id, X, y, ndpost, nskip, n_trees, m_tries,
-              tree_alpha, tree_beta, start_temp=1.0, end_temp=1.0,
-              store_preds=False, n_test_points=None):
-    """Run a single MCMC chain with a cooling temperature schedule.
-
-    The temperature starts at start_temp and linearly decreases to end_temp over the
-    burn-in period of length nskip. After that, ndpost samples are collected
-    at temperature end_temp (usually 1.0).
-    """
-
+def run_experiment(run_id, chain_id, X, y, ndpost, nskip, n_trees, m_tries, temperature, 
+                   tree_alpha, tree_beta, store_preds=False, n_test_points=None):
+    """Run a single experiment with same train-test split but different initial trees"""
+    
     n_features = X.shape[1]
 
-    # Use the same train test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=42)
-
-    # Temperature schedule: start_temp -> end_temp over nskip iterations, then fixed at end_temp
-    temp_schedule = make_temperature_schedule(nskip, start_temp=start_temp, end_temp=end_temp)
+    # Use different train test split for diffrent run_id
+    X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=run_id)
 
     # Train MTMH BART model
     proposal_probs_mtmh = {
@@ -142,8 +111,8 @@ def run_chain(chain_id, X, y, ndpost, nskip, n_trees, m_tries,
     bart_mtmh = MultiBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees,
                           proposal_probs=proposal_probs_mtmh, multi_tries=m_tries, tol=1, 
                           tree_alpha=tree_alpha, tree_beta=tree_beta, # Only for mtmh prior
-                          temperature=temp_schedule,
-                          random_state=chain_id)
+                          temperature=temperature, 
+                          random_state=run_id*100+chain_id)
     bart_mtmh.fit(X_train, y_train)
     
     # Extract MTMH BART results
@@ -175,8 +144,8 @@ def run_chain(chain_id, X, y, ndpost, nskip, n_trees, m_tries,
     }
     bart_default = DefaultBART(ndpost=ndpost, nskip=nskip, n_trees=n_trees, tol=1, 
                                proposal_probs=proposal_probs_default, 
-                               temperature=temp_schedule,
-                               random_state=chain_id)
+                               temperature=temperature, 
+                               random_state=run_id*100+chain_id)
     bart_default.fit(X_train, y_train)
     
     # Extract default BART results
@@ -201,7 +170,7 @@ def run_chain(chain_id, X, y, ndpost, nskip, n_trees, m_tries,
 
     # Return results as dictionary, optionally include preds
     result = {
-        'chain_id': chain_id,
+        'run_id': run_id,
         'default': {
             'sigmas': np.array(sigmas_default),
             'rmses': np.array(rmses_default),
@@ -210,7 +179,8 @@ def run_chain(chain_id, X, y, ndpost, nskip, n_trees, m_tries,
             'feature_ratios': feature_ratios_default,  # shape: [n_iterations, n_features]
             'vector_distances': np.array(vector_distances_default),
             # 'subspace_distances': np.array(subspace_distances_default),
-            'accepted_moves_logmh': accepted_moves_logmh_default
+            'accepted_moves_logmh': accepted_moves_logmh_default,
+            'coverage': np.array(default_covered_bool)
         },
         'mtmh': {
             'sigmas': np.array(sigmas_mtmh),
@@ -220,7 +190,8 @@ def run_chain(chain_id, X, y, ndpost, nskip, n_trees, m_tries,
             'feature_ratios': feature_ratios_mtmh,  # shape: [n_iterations, n_features]
             'vector_distances': np.array(vector_distances_mtmh),
             # 'subspace_distances': np.array(subspace_distances_mtmh),
-            'accepted_moves_logmh': accepted_moves_logmh_mtmh
+            'accepted_moves_logmh': accepted_moves_logmh_mtmh,
+            'coverage': np.array(mtmh_covered_bool)
         }
     }
     if store_preds:
@@ -229,77 +200,81 @@ def run_chain(chain_id, X, y, ndpost, nskip, n_trees, m_tries,
             idx = rng.choice(preds_default.shape[0], n_test_points, replace=False)
             result['default']['preds'] = np.array(preds_default[idx])
             result['mtmh']['preds'] = np.array(preds_mtmh[idx])
-            result['default']['coverage'] = np.array(default_covered_bool[idx])
-            result['mtmh']['coverage'] = np.array(mtmh_covered_bool[idx])
         else:
             result['default']['preds'] = np.array(preds_default)
             result['mtmh']['preds'] = np.array(preds_mtmh)
-            result['default']['coverage'] = np.array(default_covered_bool)
-            result['mtmh']['coverage'] = np.array(mtmh_covered_bool)
     return result
 
-def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook, 
-                             tree_alpha=0.95, tree_beta=2.0, m_tries=10,
-                             n_chains=1000, n_jobs=-1, store_preds=False, n_test_points=None,
-                             start_temp: float = 1.0, end_temp: float = 1.0):
-    """Run many independent chains in parallel with a cooling temperature schedule.
-
-    Each chain uses the same train-test split but a different random seed
-    (based on chain_id). For each chain, the temperature starts at start_temp
-    and cools down to end_temp over nskip iterations, then ndpost samples are
-    collected at temperature end_temp.
-    """
-
-    # results: list of per-chain dictionaries
-    results = Parallel(n_jobs=n_jobs, verbose=10)(
-        delayed(run_chain)(
-            chain_id, X, y, ndpost, nskip, n_trees, m_tries,
-            tree_alpha, tree_beta, start_temp, end_temp,
-            store_preds, n_test_points
+def run_experiment_multiple_chains(run_id, X, y, ndpost, nskip, n_trees, m_tries, temperature, 
+                                  tree_alpha, tree_beta, store_preds=False, n_test_points=None, n_chains=4):
+    """Run multiple chains (experiments) under the same init/seed, record all results"""
+    chain_results = []
+    for chain_id in range(n_chains):
+        result = run_experiment(
+            run_id=run_id, 
+            chain_id=chain_id,
+            X=X, y=y, 
+            ndpost=ndpost, nskip=nskip, n_trees=n_trees, m_tries=m_tries, temperature=temperature,
+            tree_alpha=tree_alpha, tree_beta=tree_beta, 
+            store_preds=store_preds, n_test_points=n_test_points
         )
-        for chain_id in range(n_chains)
-    )
+        result['chain_id'] = chain_id
+        chain_results.append(result)
 
-    # Stack results into structured arrays: shape [n_chains, ndpost, ...]
+        del result
+        gc.collect()
+        print(f"Memory used: {psutil.Process(os.getpid()).memory_info().rss / 1024**2:.2f} MB")
+    return chain_results
+
+def run_parallel_experiments(X, y, ndpost, nskip, n_trees, notebook, 
+                             tree_alpha=0.95, tree_beta=2.0, m_tries=10, temperature=1.0,
+                             n_runs=5, n_jobs=-1, store_preds=False, n_test_points=None, n_chains=4):
+    """Run parallel experiments, each with multiple chains under same init/seed"""
+    results = Parallel(n_jobs=n_jobs, verbose=10)(
+        delayed(run_experiment_multiple_chains)(
+            run_id, X, y, ndpost, nskip, n_trees, m_tries, temperature,
+            tree_alpha, tree_beta, store_preds, n_test_points, n_chains
+        )
+        for run_id in range(n_runs)
+    )
+    # results: [n_runs, n_chains, ...]
     combined_results = {
         'default': {
-            'sigmas': np.array([r['default']['sigmas'] for r in results]),
-            'rmses': np.array([r['default']['rmses'] for r in results]),
-            'leaves': np.array([r['default']['leaves'] for r in results]),
-            'depths': np.array([r['default']['depths'] for r in results]),
-            'feature_ratios': np.array([r['default']['feature_ratios'] for r in results]),
-            'vector_distances': np.array([r['default']['vector_distances'] for r in results]),
-            # 'subspace_distances': np.array([r['default']['subspace_distances'] for r in results]),
-            'accepted_moves_logmh': np.array([r['default']['accepted_moves_logmh'] for r in results], dtype=object),
+            'sigmas': np.array([[chain['default']['sigmas'] for chain in run] for run in results]),
+            'rmses': np.array([[chain['default']['rmses'] for chain in run] for run in results]),
+            'leaves': np.array([[chain['default']['leaves'] for chain in run] for run in results]),
+            'depths': np.array([[chain['default']['depths'] for chain in run] for run in results]),
+            'feature_ratios': np.array([[chain['default']['feature_ratios'] for chain in run] for run in results]),
+            'vector_distances': np.array([[chain['default']['vector_distances'] for chain in run] for run in results]),
+            # 'subspace_distances': np.array([[chain['default']['subspace_distances'] for chain in run] for run in results]),
+            'accepted_moves_logmh': np.array([[chain['default']['accepted_moves_logmh'] for chain in run] for run in results], dtype=object),
+            'coverage': np.array([[chain['default']['coverage'] for chain in run] for run in results])
         },
         'mtmh': {
-            'sigmas': np.array([r['mtmh']['sigmas'] for r in results]),
-            'rmses': np.array([r['mtmh']['rmses'] for r in results]),
-            'leaves': np.array([r['mtmh']['leaves'] for r in results]),
-            'depths': np.array([r['mtmh']['depths'] for r in results]),
-            'feature_ratios': np.array([r['mtmh']['feature_ratios'] for r in results]),
-            'vector_distances': np.array([r['mtmh']['vector_distances'] for r in results]),
-            # 'subspace_distances': np.array([r['mtmh']['subspace_distances'] for r in results]),
-            'accepted_moves_logmh': np.array([r['mtmh']['accepted_moves_logmh'] for r in results], dtype=object),
+            'sigmas': np.array([[chain['mtmh']['sigmas'] for chain in run] for run in results]),
+            'rmses': np.array([[chain['mtmh']['rmses'] for chain in run] for run in results]),
+            'leaves': np.array([[chain['mtmh']['leaves'] for chain in run] for run in results]),
+            'depths': np.array([[chain['mtmh']['depths'] for chain in run] for run in results]),
+            'feature_ratios': np.array([[chain['mtmh']['feature_ratios'] for chain in run] for run in results]),
+            'vector_distances': np.array([[chain['mtmh']['vector_distances'] for chain in run] for run in results]),
+            # 'subspace_distances': np.array([[chain['mtmh']['subspace_distances'] for chain in run] for run in results]),
+            'accepted_moves_logmh': np.array([[chain['mtmh']['accepted_moves_logmh'] for chain in run] for run in results], dtype=object),
+            'coverage': np.array([[chain['mtmh']['coverage'] for chain in run] for run in results])
         },
         'metadata': {
-            'n_chains': n_chains,
+            'n_runs': n_runs,
             'ndpost': ndpost,
             'nskip': nskip,
             'n_trees': n_trees,
             'm_tries': m_tries,
+            'n_chains': n_chains,
             'tree_alpha': tree_alpha,
             'tree_beta': tree_beta,
-            'temperature_start': start_temp,
-            'temperature_end': end_temp,
-        },
+            'temperature': temperature
+        }
     }
-
     if store_preds:
-        combined_results['default']['preds'] = np.array([r['default']['preds'] for r in results])
-        combined_results['mtmh']['preds'] = np.array([r['mtmh']['preds'] for r in results])
-        combined_results['default']['coverage'] = np.array([r['default']['coverage'] for r in results])
-        combined_results['mtmh']['coverage'] = np.array([r['mtmh']['coverage'] for r in results])
-
+        combined_results['default']['preds'] = np.array([[chain['default']['preds'] for chain in run] for run in results])
+        combined_results['mtmh']['preds'] = np.array([[chain['mtmh']['preds'] for chain in run] for run in results])
     np.savez_compressed(f'store/{notebook}.npz', **combined_results)
     return results
