@@ -280,7 +280,8 @@ class DefaultBART(BART):
                  eps_nu: float=3, specification="linear", 
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, dirichlet_prior=False, quick_decay: bool = False,
-                 s_alpha: float = 1.0, fixed_eps_sigma2: Optional[float] = None):
+                 s_alpha: float = 1.0, fixed_eps_sigma2: Optional[float] = None,
+                 init_trees=None, init_sigma2=None):
         if max_bins is None:
             max_bins = 100
         preprocessor = self.preprocessor_class(max_bins=max_bins)
@@ -674,11 +675,12 @@ class MultiBART(BART):
                  eps_nu: float=3, specification="linear", 
                  proposal_probs=default_proposal_probs, tol=1, max_bins=100,
                  random_state=42, temperature=1.0, multi_tries=10, dirichlet_prior=False, 
+                 s_alpha: float = 1.0, fixed_eps_sigma2: Optional[float] = None,
                  quick_decay: bool = False, init_trees=None, init_sigma2=None):
         preprocessor = DefaultPreprocessor(max_bins=max_bins)
         rng = np.random.default_rng(random_state)
         prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q, 
-                             eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay, init_sigma2=init_sigma2)
+                             eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay, s_alpha=s_alpha, fixed_eps_sigma2=fixed_eps_sigma2, init_sigma2=init_sigma2)
         temp_schedule = self._check_temperature(temperature)
         sampler = MultiSampler(
             prior=prior, proposal_probs=proposal_probs, generator=rng, tol=tol, 

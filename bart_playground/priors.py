@@ -258,13 +258,14 @@ class GlobalParamPrior:
         specification (str): Method for initial variance estimate
         generator: Random number generator
     """
-    def __init__(self, eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha, fixed_eps_sigma2=None):
+    def __init__(self, eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha, fixed_eps_sigma2=None, init_sigma2=None):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda : float
         self.specification = specification
         self.generator = generator
         self.dirichlet_prior = dirichlet_prior
+        self.init_sigma2 = init_sigma2
         self.s_alpha = s_alpha
         self.fixed_eps_sigma2 = fixed_eps_sigma2
 
@@ -290,6 +291,8 @@ class GlobalParamPrior:
         """
         if self.fixed_eps_sigma2 is not None:
             eps_sigma2 = np.array([self.fixed_eps_sigma2], dtype=float)
+        elif self.init_sigma2 is not None:
+            eps_sigma2 = self.init_sigma2
         else:
             self.fit_hyperparameters(data)
             eps_sigma2 = self._sample_eps_sigma2(data.y)
@@ -500,9 +503,9 @@ class BARTLikelihood:
 
 class ComprehensivePrior:
     def __init__(self, n_trees, tree_alpha, tree_beta, f_k, eps_q, eps_nu, 
-                 specification, generator, dirichlet_prior, quick_decay, s_alpha, fixed_eps_sigma2=None):
+                 specification, generator, dirichlet_prior, quick_decay, s_alpha, fixed_eps_sigma2=None, init_sigma2=None):
         self.tree_prior = TreesPrior(int(n_trees), tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
-        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha, fixed_eps_sigma2=fixed_eps_sigma2)
+        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha, fixed_eps_sigma2=fixed_eps_sigma2, init_sigma2=init_sigma2)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
 class ProbitPrior:
