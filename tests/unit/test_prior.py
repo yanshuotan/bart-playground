@@ -19,7 +19,12 @@ class TestPrior(unittest.TestCase):
         self.beta = 0.5
 
     def test_default_prior(self):
-        prior = ComprehensivePrior(n_trees=len(self.trees), tree_alpha=self.alpha, tree_beta=self.beta)
+        rng = np.random.default_rng(42)
+        prior = ComprehensivePrior(
+            n_trees=len(self.trees), tree_alpha=self.alpha, tree_beta=self.beta, f_k=2.0,
+            eps_q=0.9, eps_nu=3.0, specification="linear", generator=rng,
+            dirichlet_prior=False, quick_decay=False, s_alpha=2.0
+        )
         # empty tree
         empty_prior_first_tree = prior.tree_prior.trees_log_prior(self.tree_params, np.array([0]))
         self.assertEqual(empty_prior_first_tree, np.log(1-self.alpha), f"The log prior for an empty tree should be {np.log(1-self.alpha)}.")
@@ -48,7 +53,12 @@ class TestPrior2(unittest.TestCase):
         """
         Set up a default prior instance and mock dataset.
         """
-        self.prior = ComprehensivePrior()
+        rng = np.random.default_rng(42)
+        self.prior = ComprehensivePrior(
+            n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0,
+            eps_q=0.9, eps_nu=3.0, specification="linear", generator=rng,
+            dirichlet_prior=False, quick_decay=False, s_alpha=2.0
+        )
         self.mock_data = MagicMock(spec=Dataset)
         self.mock_data.X = np.random.randn(100, 5)
         self.mock_data.y = np.random.randn(100)

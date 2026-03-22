@@ -35,7 +35,15 @@ def test_linear_agent_stable_choose_arm_roundtrip():
 
 def test_default_bart_agent_choose_arm_roundtrip():
     # Keep early phase to use RNG-only path for speed and determinism
-    agent = DefaultBARTTSAgent(n_arms=3, n_features=4, ndpost=10, nskip=5, initial_random_selections=10, random_state=7, encoding='multi', n_chains=1)
+    agent = DefaultBARTTSAgent(
+        n_arms=3,
+        n_features=4,
+        initial_random_selections=5,
+        random_state=7,
+        encoding='multi',
+        n_chains=1,
+        bart_kwargs={"ndpost": 10, "nskip": 5},
+    )
 
     s = serialize_agent(agent)
     agent2 = deserialize_agent(s)
@@ -49,12 +57,11 @@ def test_default_bart_agent_multichain_choose_arm_roundtrip():
     agent = DefaultBARTTSAgent(
         n_arms=3,
         n_features=4,
-        ndpost=10,
-        nskip=5,
-        initial_random_selections=10,
+        initial_random_selections=5,
         random_state=11,
         encoding='multi',
         n_chains=2,
+        bart_kwargs={"ndpost": 10, "nskip": 5},
     )
 
     s = serialize_agent(agent)

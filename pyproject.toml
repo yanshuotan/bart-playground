@@ -49,6 +49,13 @@ test = [
     "xgboost",
     "ray[default]",
 ]
+test-unit = [
+    "pytest",
+    "xgboost",
+    "bartz",
+    "stochtree",
+    "ray[default]",
+]
 test-full = [
     "pytest",
     "xgboost",

@@ -1,5 +1,5 @@
 # Off Policy Evaluation (OPE) for Bandit Problems
-
+import time
 from typing import Any
 import numpy as np
 import pandas as pd
@@ -13,7 +13,8 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
                    agent_names: list[str] | None = None,
                    n_choices_per_iter: int = 1,
                    show_progress: bool = True,
-                   return_final_states: bool = False) -> dict[str, dict[str, NDArray[Any] | BanditAgent]]:
+                   return_final_states: bool = False,
+                   update_mode: str = "replay") -> dict[str, dict[str, NDArray[Any] | BanditAgent]]:
     """Simulate bandit agents and generate actions for off-policy evaluation.
     
     Args:
@@ -23,12 +24,14 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
         n_choices_per_iter: Number of choose_arm calls per iteration to calculate agent_actions probability
         show_progress: Whether to show progress bar
         return_final_states: Whether to return final states of agents
+        update_mode: "logged" (always update with logged action) or "replay" (update only on action match)
     
     Returns:
         Dict containing simulation results for each agent:
         - 'actions': array of logged actions (0-indexed)
         - 'agent_actions': per-time per-arm selection frequency (counts / n_choices_per_iter)
         - 'rewards': array of rewards
+        - 'matched': array of 0/1 indicating replay action match (or always 1 in logged mode)
         - 'final_state': agent's final state (if return_final_states=True)
     """
     
@@ -60,6 +63,10 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
         n_arms: int = int(getattr(agent, 'n_arms'))
         # Store per-time probabilities of selecting each arm (counts / n_choices_per_iter)
         agent_actions: NDArray[Any] = np.zeros((n_draw, n_arms), dtype=float)
+        # Store computation time per step
+        agent_times: NDArray[Any] = np.zeros(n_draw, dtype=float)
+        # Store per-step replay match indicator
+        matched: NDArray[Any] = np.zeros(n_draw, dtype=int)
         
         iterator = tqdm(range(n_draw), desc=f"Simulating {agent_name}") if show_progress else range(n_draw)
         
@@ -68,22 +75,35 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
             a_t = int(actions[t])
             r_t = float(rewards[t])
             
+            t0 = time.time()
             # Get agent's action multiple times and track per-arm frequencies
             counts = np.zeros(n_arms, dtype=int)
-            for _ in range(n_choices_per_iter):
-                agent_action = agent.choose_arm(x_t)
+            first_action = None
+            for j in range(n_choices_per_iter):
+                agent_action = int(agent.choose_arm(x_t))
+                if j == 0:
+                    first_action = agent_action
                 counts[agent_action] += 1
             
             # Record per-arm selection frequency at time t
             agent_actions[t, :] = counts.astype(float) / float(n_choices_per_iter)
             
             # Update agent state
-            _ = agent.update_state(a_t, x_t, r_t)
+            if update_mode == "replay":
+                if first_action == a_t:
+                    _ = agent.update_state(a_t, x_t, r_t)
+                    matched[t] = 1
+            else:
+                _ = agent.update_state(a_t, x_t, r_t)
+                matched[t] = 1
+            agent_times[t] = time.time() - t0
         
         result_dict: dict[str, NDArray[Any] | BanditAgent] = {
             'actions': actions, # This is the real action that was in the data
             'agent_actions': agent_actions, # This is the action that the agent chose
-            'rewards': rewards
+            'rewards': rewards,
+            'times': agent_times,
+            'matched': matched
         }
         
         if return_final_states:
@@ -92,50 +112,3 @@ def sim_propensities(data: dict[str, NDArray[Any] | pd.DataFrame],
         simulation_results[agent_name] = result_dict
     
     return simulation_results
-
-
-def calculate_policy_values(simulation_results: dict[str, dict[str, NDArray[Any] | BanditAgent]], 
-                          propensity_scores: NDArray[Any]) -> dict[str, float]:
-    """Calculate policy values using importance sampling from simulation results.
-    
-    Args:
-        simulation_results: Dictionary containing simulation results from sim_propensities
-        propensity_scores: Matrix of propensity scores (n_samples x n_arms)
-        
-    Returns:
-        Dictionary mapping agent names to their estimated policy values
-    """
-    
-    agent_results: dict[str, float] = {}
-    
-    for agent_name, results in simulation_results.items():
-        rewards = results['rewards']
-        actions = results['actions']
-        agent_actions = results['agent_actions']
-
-        # Cast to ensure proper types
-        rewards_arr: NDArray[Any] = np.array(rewards)
-        actions_arr: NDArray[Any] = np.array(actions).astype(int)
-        agent_actions_arr: NDArray[Any] = np.array(agent_actions)
-
-        # Reconstruct pi_t as the probability of the logged action under the target policy
-        pi_t_arr: NDArray[Any] = agent_actions_arr[np.arange(len(actions_arr)), actions_arr]
-
-        # Extract propensity scores for logged actions
-        propensity_values: NDArray[Any] = propensity_scores[np.arange(len(actions_arr)), actions_arr]
-
-        # Calculate importance weights: w_t = pi_t / p_t
-        importance_weights: NDArray[Any] = pi_t_arr / propensity_values
-        
-        numerator: float = float(np.sum(importance_weights * rewards_arr))
-        denominator: float = float(np.sum(importance_weights))
-        
-        # Compute policy value estimate
-        V_hat = numerator / denominator if denominator > 0 else 0.0
-        if denominator == 0:
-            print(f"Warning: Zero denominator for agent {agent_name}")
-        
-        agent_results[agent_name] = V_hat
-    
-    print("Done estimating policy values.")
-    return agent_results

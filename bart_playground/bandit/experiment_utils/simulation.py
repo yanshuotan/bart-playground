@@ -46,7 +46,7 @@ class Scenario:
 
     def generate_covariates(self):
         # Generate a vector of P covariates (features) sampled from a uniform distribution.
-        return np.asarray(self.rng.uniform(-1, 1, size=self.P), dtype=np.float32)
+        return np.asarray(self.rng.uniform(0, 1, size=self.P), dtype=np.float32)
 
     def reward_function(self, x):
         """
@@ -146,7 +146,7 @@ def simulate(
         elif draw_idx == n_draws:  # Always log the final draw
             should_log = True
             
-        if should_log:   
+        if should_log:
                 df = pd.DataFrame({
                     "AgentName":       agent_names,
                     "CumRegret":   cum_regrets[draw, :],

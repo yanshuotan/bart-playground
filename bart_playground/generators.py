@@ -2,7 +2,7 @@
 import numpy as np
 import math
 from bart_playground.params import Tree
-from bart_playground.util import DefaultPreprocessor, fast_choice
+from bart_playground.util import DefaultPreprocessor, fast_choice, fast_choice_with_weights
 from bart_playground.priors import TreesPrior
 from scipy.stats import invgamma
 
@@ -37,6 +37,8 @@ def generate_data_from_defaultbart_prior(
     min_node_size: int = 1,
     quick_decay: bool = False,
     max_bins: int = 100,
+    dirichlet_prior: bool = False,
+    s_alpha: float = 1.0,
     return_latent: bool = False,
 ):
     """
@@ -65,7 +67,13 @@ def generate_data_from_defaultbart_prior(
     thresholds_by_var = preprocessor.gen_thresholds(X)
 
     # Prior container for consistency with DefaultBART (for f_sigma2)
-    tree_prior = TreesPrior(n_trees=n_trees, tree_alpha=tree_alpha, tree_beta=tree_beta, f_k=f_k, generator=rng, quick_decay=quick_decay)
+    tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, rng, quick_decay=quick_decay)
+    
+    split_weights = None
+    split_weights_cumsum = None
+    if dirichlet_prior:
+        split_weights = rng.dirichlet(np.full(p, s_alpha / p))
+        split_weights_cumsum = np.cumsum(split_weights)
 
     def p_split(depth: int) -> float:
         if quick_decay:
@@ -93,7 +101,12 @@ def generate_data_from_defaultbart_prior(
             # Try a few times to find a valid (var, threshold) that yields non-empty children
             success = False
             for _ in range(32):
-                var = int(fast_choice(rng, np.arange(p)))
+                var = int(fast_choice_with_weights(
+                    rng,
+                    np.arange(p),
+                    weights=split_weights,
+                    cum_weights=split_weights_cumsum,
+                ))
                 cands = thresholds_by_var[var]
                 if cands.size == 0:
                     continue

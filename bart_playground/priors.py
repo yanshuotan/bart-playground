@@ -143,7 +143,7 @@ class TreesPrior:
         f_sigma2 (float): Variance of the leaf parameters.
         generator: Random number generator.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng(), quick_decay: bool = False):
+    def __init__(self, n_trees, tree_alpha, tree_beta, f_k, generator, quick_decay: bool = False):
         self.n_trees = n_trees
         self.alpha = tree_alpha
         self.beta = tree_beta
@@ -258,19 +258,19 @@ class GlobalParamPrior:
         specification (str): Method for initial variance estimate
         generator: Random number generator
     """
-    def __init__(self, eps_q=0.9, eps_nu=3.0, specification="linear", generator=np.random.default_rng(),
-                 dirichlet_prior=False, init_sigma2=None):
+    def __init__(self, eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha, fixed_eps_sigma2=None):
         self.eps_q = eps_q
         self.eps_nu = eps_nu
         self.eps_lambda : float
         self.specification = specification
         self.generator = generator
         self.dirichlet_prior = dirichlet_prior
-        self.init_sigma2 = init_sigma2
+        self.s_alpha = s_alpha
+        self.fixed_eps_sigma2 = fixed_eps_sigma2
 
     def fit_hyperparameters(self, data):
         """Fit the prior hyperparameters to the data"""
-        self.eps_lambda = self._fit_eps_lambda(data)
+        self.eps_lambda = self._fit_eps_lambda(data, self.specification)
         
     def init_global_params(self, data):
         """
@@ -288,14 +288,16 @@ class GlobalParamPrior:
             dict: A dictionary containing the initialized global parameter:
                 - eps_sigma2 (float): The sampled epsilon sigma squared value.
         """
-        self.fit_hyperparameters(data)
-        if self.init_sigma2 is not None:
-            eps_sigma2 = self.init_sigma2
+        if self.fixed_eps_sigma2 is not None:
+            eps_sigma2 = np.array([self.fixed_eps_sigma2], dtype=float)
         else:
+            self.fit_hyperparameters(data)
             eps_sigma2 = self._sample_eps_sigma2(data.y)
         global_params = {"eps_sigma2": eps_sigma2}
         if self.dirichlet_prior:
-            global_params["s"] = np.ones(data.X.shape[1]) / data.X.shape[1]
+            s = np.ones(data.X.shape[1]) / data.X.shape[1]
+            global_params["s"] = s
+            global_params["s_cumsum"] = np.cumsum(s)
         return global_params
     
     def resample_global_params(self, bart_params : Parameters, data_y):
@@ -314,12 +316,17 @@ class GlobalParamPrior:
             dict: A dictionary containing the resampled global parameters.
         """
         global_params = dict({})
-        global_params["eps_sigma2"] = self._sample_eps_sigma2(data_y - bart_params.evaluate())
+        if self.fixed_eps_sigma2 is not None:
+            global_params["eps_sigma2"] = np.array([self.fixed_eps_sigma2], dtype=float)
+        else:
+            global_params["eps_sigma2"] = self._sample_eps_sigma2(data_y - bart_params.evaluate())
         if self.dirichlet_prior:
-            global_params["s"] = self._resample_s(bart_params)
+            s, s_cumsum = self._resample_s(bart_params)
+            global_params["s"] = s
+            global_params["s_cumsum"] = s_cumsum
         return global_params
     
-    def _resample_s(self, bart_params : Parameters, s_alpha=2.0):
+    def _resample_s(self, bart_params : Parameters):
         """
         Resample the split probabilities s.
 
@@ -327,19 +334,18 @@ class GlobalParamPrior:
             bart_params (Parameters): An instance of the Parameters class containing the data and model parameters for BART.
 
         Returns:
-            numpy.ndarray: Resampled s parameter.
+            tuple: (s, s_cumsum) where s is the resampled probabilities and s_cumsum is the precomputed cumulative sum.
         """
         if not self.dirichlet_prior:
             raise ValueError("Dirichlet prior is not enabled.")
-        vars_histogram = bart_params.vars_histogram
-        p = bart_params.trees[0].dataX.shape[1]
-        vars_histogram_array = np.zeros(p)
-        for var, count in vars_histogram.items():
-            vars_histogram_array[var] = count
-        s = self.generator.dirichlet(s_alpha / p + vars_histogram_array)
-        return s
+        # vars_histogram now returns numpy array directly
+        vars_histogram_array = bart_params.vars_histogram
+        p = len(vars_histogram_array)
+        s = self.generator.dirichlet(self.s_alpha / p + vars_histogram_array)
+        s_cumsum = np.cumsum(s)
+        return s, s_cumsum
     
-    def _fit_eps_lambda(self, data : Dataset, specification="linear") -> float:
+    def _fit_eps_lambda(self, data : Dataset, specification: str) -> float:
         """
         Compute the lambda parameter for the noise variance prior.
         Find lambda such that x ~ Gamma(nu/2, nu/(2*lambda) and P(x < q) = sigma_hat.
@@ -381,11 +387,11 @@ class GlobalParamPrior:
         prior_beta = self.eps_nu * self.eps_lambda / 2
         post_alpha = prior_alpha + n / 2
         post_beta = prior_beta + np.sum(residuals ** 2) / 2
+        # size=1 returns a 1-element numpy array, so we use [0] for indexing
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)
-        # if eps_sigma2[0] <= 1e-8:
-        #     _sim_logger.warning("Sampled eps_sigma2 is non-positive, returning a small positive value to avoid numerical issues.")
-        #     _sim_logger.info(f"Sampled eps_sigma2: {eps_sigma2}, prior_alpha: {prior_alpha}, prior_beta: {prior_beta}, post_alpha: {post_alpha}, post_beta: {post_beta}")
-        #     eps_sigma2[0] = 1e-8
+        if eps_sigma2[0] <= 1e-8:
+            # logger.info(f"Sampled eps_sigma2 is non-positive, returning 1e-8. Sampled eps_sigma2: {eps_sigma2}, prior_alpha: {prior_alpha}, prior_beta: {prior_beta}, post_alpha: {post_alpha}, post_beta: {post_beta}")
+            eps_sigma2[0] = 1e-8
         return eps_sigma2
 
 class BARTLikelihood:
@@ -493,18 +499,17 @@ class BARTLikelihood:
         )
 
 class ComprehensivePrior:
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, eps_q=0.9, eps_nu=3.0, 
-                 specification="linear", generator=np.random.default_rng(),
-                 dirichlet_prior=False, quick_decay: bool = False, init_sigma2=None):
+    def __init__(self, n_trees, tree_alpha, tree_beta, f_k, eps_q, eps_nu, 
+                 specification, generator, dirichlet_prior, quick_decay, s_alpha, fixed_eps_sigma2=None):
         self.tree_prior = TreesPrior(int(n_trees), tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
-        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior, init_sigma2)
+        self.global_prior = GlobalParamPrior(eps_q, eps_nu, specification, generator, dirichlet_prior, s_alpha, fixed_eps_sigma2=fixed_eps_sigma2)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
 class ProbitPrior:
     """
     BART Prior for binary classification tasks.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, f_k=2.0, generator=np.random.default_rng(), quick_decay: bool = False):
+    def __init__(self, n_trees, tree_alpha, tree_beta, f_k, generator, quick_decay: bool = False):
         self.tree_prior = TreesPrior(n_trees, tree_alpha, tree_beta, f_k, generator, quick_decay=quick_decay)
         self.likelihood = BARTLikelihood(self.tree_prior.f_sigma2)
 
@@ -514,7 +519,7 @@ class LogisticTreesPrior(TreesPrior):
     
     Inherits from TreesPrior and overrides the resample_leaf_vals method to handle logistic regression.
     """
-    def __init__(self, n_trees=200, tree_alpha=0.95, tree_beta=2.0, c = 0.0, d = 0.0, generator=np.random.default_rng(), parent = None, quick_decay: bool = False):
+    def __init__(self, n_trees, tree_alpha, tree_beta, c, d, generator, parent, quick_decay: bool = False):
         """
         Initialize the logistic trees prior with parameters.
         
