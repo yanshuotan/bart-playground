@@ -176,6 +176,66 @@ class Sampler(ABC):
             self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize) / temp + \
             move.log_tran_ratio + \
             np.log(self.proposals[contrary_moves[move_key]]) - np.log(self.proposals[move_key])
+
+    def cached_total_log_marginal_lkhd(
+        self,
+        state: Parameters | None = None,
+        data_y=None,
+        force: bool = False,
+    ) -> float:
+        """
+        Return total (untempered) log marginal likelihood for a regression BART state.
+
+        Uses per-leaf/per-tree cache when supported by the likelihood object.
+        """
+        if state is None:
+            if not self.trace:
+                raise ValueError("No available state in trace. Provide state explicitly.")
+            state = self.trace[-1]
+
+        if not isinstance(state, Parameters):
+            raise TypeError("cached_total_log_marginal_lkhd currently supports Parameters states only.")
+
+        data_y = self.data.y if data_y is None else data_y
+
+        if hasattr(self.likelihood, "total_log_marginal_lkhd_cached"):
+            return self.likelihood.total_log_marginal_lkhd_cached(
+                state,
+                data_y,
+                force=force,
+            )
+
+        tree_ids = np.arange(state.n_trees)
+        return float(self.likelihood.trees_log_marginal_lkhd(state, data_y, tree_ids))
+
+    def pt_swap_log_accept_ratio(
+        self,
+        state_a: Parameters,
+        temp_a: float,
+        state_b: Parameters,
+        temp_b: float,
+        data_y=None,
+        force_recompute: bool = False,
+    ) -> float:
+        """
+        Compute PT swap log acceptance ratio between two regression-BART states.
+
+        Acceptance uses likelihood tempering:
+            log alpha = (1/temp_a - 1/temp_b) * (L_b - L_a)
+        where L is the untempered log marginal likelihood.
+        """
+        data_y = self.data.y if data_y is None else data_y
+        log_lkhd_a = self.cached_total_log_marginal_lkhd(
+            state=state_a,
+            data_y=data_y,
+            force=force_recompute,
+        )
+        log_lkhd_b = self.cached_total_log_marginal_lkhd(
+            state=state_b,
+            data_y=data_y,
+            force=force_recompute,
+        )
+        return (1.0 / temp_a - 1.0 / temp_b) * (log_lkhd_b - log_lkhd_a)
     
     @abstractmethod
     def get_init_state(self) -> Any:

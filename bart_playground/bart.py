@@ -1,7 +1,8 @@
 from warnings import warn
 import numpy as np
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, Sequence
 from scipy.stats import norm
+from tqdm import tqdm
 
 from .samplers import Sampler, DefaultSampler, MultiSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
 from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
@@ -412,6 +413,234 @@ class DefaultBART(BART):
         else:
             freq[:] = 0.0
         return freq
+
+
+class ParallelTemperingBART(BART):
+    """
+    Regression BART with parallel tempering (PT).
+
+    Temperature affects likelihood only; tree/global priors are untouched.
+    """
+    preprocessor_class = DefaultPreprocessor
+
+    def __init__(
+        self,
+        ndpost=1000,
+        nskip=100,
+        n_trees=200,
+        tree_alpha: float = 0.95,
+        tree_beta: float = 2.0,
+        f_k=2.0,
+        eps_q: float = 0.9,
+        eps_nu: float = 3,
+        specification="linear",
+        proposal_probs=default_proposal_probs,
+        tol=100,
+        max_bins=100,
+        random_state=42,
+        temperatures: Optional[Sequence[float]] = None,
+        n_temperatures: int = 4,
+        max_temperature: float = 5.0,
+        swap_interval: int = 5,
+        dirichlet_prior=False,
+        quick_decay: bool = False,
+        s_alpha: float = 1.0,
+        fixed_eps_sigma2: Optional[float] = None,
+        init_trees=None,
+        init_sigma2=None,
+        store_chain_traces: bool = False,
+    ):
+        if max_bins is None:
+            max_bins = 100
+        if swap_interval <= 0:
+            raise ValueError("swap_interval must be a positive integer.")
+
+        preprocessor = self.preprocessor_class(max_bins=max_bins)
+
+        seed_seq = random_state if isinstance(random_state, np.random.SeedSequence) else np.random.SeedSequence(int(random_state))
+        temps = self._build_temperature_ladder(
+            temperatures=temperatures,
+            n_temperatures=n_temperatures,
+            max_temperature=max_temperature,
+        )
+        child_seeds = seed_seq.spawn(len(temps))
+
+        chain_samplers = []
+        for chain_idx, chain_seed in enumerate(child_seeds):
+            rng = np.random.default_rng(chain_seed)
+            prior = ComprehensivePrior(
+                n_trees,
+                tree_alpha,
+                tree_beta,
+                f_k,
+                eps_q,
+                eps_nu,
+                specification,
+                rng,
+                dirichlet_prior,
+                quick_decay=quick_decay,
+                s_alpha=s_alpha,
+                fixed_eps_sigma2=fixed_eps_sigma2,
+                init_sigma2=init_sigma2,
+            )
+            # In PT, each chain has a fixed temperature.
+            chain_temp = temps[chain_idx]
+            temp_schedule = TemperatureSchedule(lambda _t, _temp=chain_temp: _temp)
+            sampler = DefaultSampler(
+                prior=prior,
+                proposal_probs=proposal_probs,
+                generator=rng,
+                tol=tol,
+                temp_schedule=temp_schedule,
+                init_trees=init_trees,
+            )
+            chain_samplers.append(sampler)
+
+        # Keep BART base compatibility via the cold-chain sampler.
+        super().__init__(preprocessor, chain_samplers[0], ndpost, nskip)
+
+        self.temperatures = temps
+        self.n_temperatures = len(temps)
+        self.swap_interval = int(swap_interval)
+        self.chain_samplers = chain_samplers
+        self.store_chain_traces = bool(store_chain_traces)
+
+        self.swap_attempt_counts = np.zeros(max(0, self.n_temperatures - 1), dtype=np.int64)
+        self.swap_accept_counts = np.zeros(max(0, self.n_temperatures - 1), dtype=np.int64)
+        self.chain_traces = [[] for _ in range(self.n_temperatures)] if self.store_chain_traces else None
+
+    @staticmethod
+    def _build_temperature_ladder(
+        temperatures: Optional[Sequence[float]],
+        n_temperatures: int,
+        max_temperature: float,
+    ) -> list[float]:
+        if temperatures is not None:
+            if len(temperatures) == 0:
+                raise ValueError("temperatures cannot be empty.")
+            temps = sorted(float(t) for t in temperatures)
+            if any(t <= 0 for t in temps):
+                raise ValueError("All temperatures must be strictly positive.")
+            if temps[0] != 1.0:
+                temps = [1.0] + [t for t in temps if t != 1.0]
+            return temps
+
+        if n_temperatures < 1:
+            raise ValueError("n_temperatures must be >= 1.")
+        if max_temperature < 1.0:
+            raise ValueError("max_temperature must be >= 1.0.")
+        if n_temperatures == 1:
+            return [1.0]
+        return list(np.geomspace(1.0, float(max_temperature), int(n_temperatures)).astype(float))
+
+    def _compress_state_for_trace(self, state):
+        state_out = state.copy(copy_cache=False)
+        state_out.clear_cache()
+        return state_out
+
+    def _attempt_adjacent_swap(self, states, i: int, j: int) -> bool:
+        sampler = self.chain_samplers[i]
+        log_alpha = sampler.pt_swap_log_accept_ratio(
+            state_a=states[i],
+            temp_a=self.temperatures[i],
+            state_b=states[j],
+            temp_b=self.temperatures[j],
+            data_y=self.data.y,
+            force_recompute=False,
+        )
+
+        self.swap_attempt_counts[i] += 1
+        u = sampler.generator.uniform(0.0, 1.0)
+        if np.log(u) < log_alpha:
+            states[i], states[j] = states[j], states[i]
+            self.swap_accept_counts[i] += 1
+            return True
+        return False
+
+    def fit(self, X, y, quietly=False):
+        data = self.preprocessor.fit_transform(X, y)
+        return self.fit_with_data(data, quietly=quietly)
+
+    def fit_with_data(self, data: Dataset, quietly=False):
+        self.data = data
+        self.trace = []
+        if self.chain_traces is not None:
+            self.chain_traces = [[] for _ in range(self.n_temperatures)]
+        self.swap_attempt_counts[:] = 0
+        self.swap_accept_counts[:] = 0
+
+        current_states = []
+        for sampler in self.chain_samplers:
+            sampler.add_data(self.data)
+            sampler.add_thresholds(self.preprocessor.thresholds)
+            current_states.append(sampler.get_init_state())
+
+        total_iters = self.ndpost + self.nskip
+
+        iterator = range(total_iters) if quietly else tqdm(range(total_iters), desc="Iterations")
+
+        for it in iterator:
+
+            # Local updates at each chain temperature.
+            for chain_id, sampler in enumerate(self.chain_samplers):
+                current_states[chain_id] = sampler.one_iter(
+                    current_states[chain_id],
+                    temp=self.temperatures[chain_id],
+                    return_trace=False,
+                )
+
+            # Adjacent swap attempts with odd-even staggering.
+            if self.n_temperatures > 1 and ((it + 1) % self.swap_interval == 0):
+                offset = ((it + 1) // self.swap_interval) % 2
+                for left in range(offset, self.n_temperatures - 1, 2):
+                    self._attempt_adjacent_swap(current_states, left, left + 1)
+
+            if it >= self.nskip:
+                self.trace.append(self._compress_state_for_trace(current_states[0]))
+                if self.chain_traces is not None:
+                    for chain_id in range(self.n_temperatures):
+                        self.chain_traces[chain_id].append(
+                            self._compress_state_for_trace(current_states[chain_id])
+                        )
+
+        self.is_fitted = True
+        self.sampler = self.chain_samplers[0]
+        return self
+
+    def update_fit(self, X, y, add_ndpost=20, quietly=False):
+        # For PT, a full re-fit is the safest behavior to keep chain coupling coherent.
+        warn("ParallelTemperingBART.update_fit currently refits from scratch with updated data.")
+        X_combined = X if self.data is None else np.vstack((self.data.X, X))
+        y_combined = y if self.data is None else np.hstack((self.data.y, y))
+        self.ndpost = int(add_ndpost)
+        self.nskip = 0
+        return self.fit(X_combined, y_combined, quietly=quietly)
+
+    def get_params(self) -> Dict[str, Any]:
+        base = {
+            "model_type": "ParallelTemperingBART",
+            "ndpost": self.ndpost,
+            "nskip": self.nskip,
+            "n_temperatures": self.n_temperatures,
+            "temperatures": list(self.temperatures),
+            "swap_interval": self.swap_interval,
+            "store_chain_traces": self.store_chain_traces,
+        }
+        if self.swap_attempt_counts.size > 0:
+            rates = np.divide(
+                self.swap_accept_counts,
+                np.maximum(1, self.swap_attempt_counts),
+            )
+            base["swap_attempts"] = self.swap_attempt_counts.tolist()
+            base["swap_accepts"] = self.swap_accept_counts.tolist()
+            base["swap_accept_rates"] = rates.tolist()
+        return base
+
+    def predict_proba(self, X):
+        warn("predict_proba not recommended for regression BART. Use LogisticBART for classification.")
+        prob_1 = np.clip(self.predict(X).reshape(-1, 1), 0.0, 1.0)
+        prob_0 = 1 - prob_1
+        return np.column_stack([prob_0, prob_1])
 
 class ProbitBART(BART):
     """

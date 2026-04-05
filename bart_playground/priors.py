@@ -409,6 +409,65 @@ class BARTLikelihood:
         """
         self.f_sigma2 = f_sigma2
 
+    def _cache_signature(self, bart_params: Parameters, data_y):
+        eps_sigma2 = float(bart_params.global_params["eps_sigma2"][0])
+        cache_id = id(bart_params.cache) if bart_params.cache is not None else -1
+        return (id(data_y), float(self.f_sigma2), eps_sigma2, cache_id)
+
+    def build_single_tree_lkhd_cache(self, bart_params: Parameters, data_y, force: bool = False):
+        """
+        Build and store per-tree marginal likelihood cache on Parameters.
+
+        This is intended for PT swap acceptance where repeated likelihood evaluation
+        at fixed states can dominate cost.
+        """
+        signature = self._cache_signature(bart_params, data_y)
+        has_tree_cache = (
+            bart_params._lkhd_cache_signature == signature
+            and bart_params._tree_log_marginal_cache is not None
+        )
+        if (not force) and has_tree_cache:
+            return bart_params._tree_log_marginal_cache
+
+        n_trees = bart_params.n_trees
+        tree_log = bart_params._tree_log_marginal_cache if has_tree_cache and not force else np.empty(n_trees, dtype=np.float64)
+        use_fast_residual = bart_params.cache is not None and all(t.evals is not None for t in bart_params.trees)
+
+        for tree_id in range(n_trees):
+            tree = bart_params.trees[tree_id]
+            if use_fast_residual:
+                residuals = data_y - (bart_params.cache - tree.evals)
+            else:
+                residuals = data_y - bart_params.evaluate(all_except=[tree_id])
+
+            if (not has_tree_cache) or force:
+                tree_log[tree_id] = _single_tree_log_marginal_lkhd_numba(
+                    tree.leaf_ids,
+                    tree.n,
+                    residuals,
+                    bart_params.global_params["eps_sigma2"][0],
+                    self.f_sigma2,
+                )
+
+        bart_params._lkhd_cache_signature = signature
+        bart_params._tree_log_marginal_cache = tree_log
+        return tree_log
+
+    def total_log_marginal_lkhd_cached(self, bart_params: Parameters, data_y, force: bool = False) -> float:
+        tree_log = self.build_single_tree_lkhd_cache(
+            bart_params,
+            data_y,
+            force=force,
+        )
+        return float(np.sum(tree_log))
+
+    def tree_log_marginal_lkhd_cached(self, bart_params: Parameters, data_y, force: bool = False):
+        return self.build_single_tree_lkhd_cache(
+            bart_params,
+            data_y,
+            force=force,
+        )
+
     def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
         """
         Calculate the log marginal likelihood of the trees in a BART model.
