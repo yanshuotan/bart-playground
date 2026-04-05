@@ -177,16 +177,16 @@ class Sampler(ABC):
             move.log_tran_ratio + \
             np.log(self.proposals[contrary_moves[move_key]]) - np.log(self.proposals[move_key])
 
-    def cached_total_log_marginal_lkhd(
+    def total_log_full_lkhd(
         self,
         state: Parameters | None = None,
         data_y=None,
-        force: bool = False,
     ) -> float:
         """
-        Return total (untempered) log marginal likelihood for a regression BART state.
+        Return total (untempered) full likelihood for a regression BART state.
 
-        Uses per-leaf/per-tree cache when supported by the likelihood object.
+        This uses the current complete state (tree structures + leaf values + sigma2)
+        and does not marginalize over leaf parameters.
         """
         if state is None:
             if not self.trace:
@@ -194,19 +194,10 @@ class Sampler(ABC):
             state = self.trace[-1]
 
         if not isinstance(state, Parameters):
-            raise TypeError("cached_total_log_marginal_lkhd currently supports Parameters states only.")
+            raise TypeError("total_log_full_lkhd currently supports Parameters states only.")
 
         data_y = self.data.y if data_y is None else data_y
-
-        if hasattr(self.likelihood, "total_log_marginal_lkhd_cached"):
-            return self.likelihood.total_log_marginal_lkhd_cached(
-                state,
-                data_y,
-                force=force,
-            )
-
-        tree_ids = np.arange(state.n_trees)
-        return float(self.likelihood.trees_log_marginal_lkhd(state, data_y, tree_ids))
+        return float(self.likelihood.total_log_full_lkhd(state, data_y))
 
     def pt_swap_log_accept_ratio(
         self,
@@ -222,18 +213,17 @@ class Sampler(ABC):
 
         Acceptance uses likelihood tempering:
             log alpha = (1/temp_a - 1/temp_b) * (L_b - L_a)
-        where L is the untempered log marginal likelihood.
+        where L is the untempered full (uncollapsed) log likelihood.
         """
         data_y = self.data.y if data_y is None else data_y
-        log_lkhd_a = self.cached_total_log_marginal_lkhd(
+        _ = force_recompute  # Reserved for API compatibility.
+        log_lkhd_a = self.total_log_full_lkhd(
             state=state_a,
             data_y=data_y,
-            force=force_recompute,
         )
-        log_lkhd_b = self.cached_total_log_marginal_lkhd(
+        log_lkhd_b = self.total_log_full_lkhd(
             state=state_b,
             data_y=data_y,
-            force=force_recompute,
         )
         return (1.0 / temp_a - 1.0 / temp_b) * (log_lkhd_b - log_lkhd_a)
     
@@ -379,13 +369,22 @@ class DefaultSampler(Sampler):
                 if np.log(Z) < log_mh:
                     self.move_accepted_counts[move_key] += 1
                     accepted_moves_this_iter.append((move_key, log_mh))
-                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(
+                        move.proposed,
+                        data_y=self.data.y,
+                        tree_ids=[k],
+                        temp=temp,
+                    )
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
                         iter_trace.append((k+1, move.proposed))
         self.accepted_moves_logmh.append(accepted_moves_this_iter)
-        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
+        iter_current.global_params = self.global_prior.resample_global_params(
+            iter_current,
+            data_y=self.data.y,
+            temp=temp,
+        )
         if return_trace:
             return iter_trace
         else:
@@ -537,13 +536,22 @@ class MultiSampler(Sampler):
                 if np.log(Z) < log_mh: # Already consider prior and likelihood in move
                     self.move_accepted_counts[move_key] += 1
                     accepted_moves_this_iter.append((move_key, log_mh))
-                    new_leaf_vals = self.tree_prior.resample_leaf_vals(move.proposed, data_y = self.data.y, tree_ids = [k])
+                    new_leaf_vals = self.tree_prior.resample_leaf_vals(
+                        move.proposed,
+                        data_y=self.data.y,
+                        tree_ids=[k],
+                        temp=temp,
+                    )
                     move.proposed.update_leaf_vals([k], new_leaf_vals)
                     iter_current = move.proposed
                     if return_trace:
                         iter_trace.append((k+1, move.proposed))
         self.accepted_moves_logmh.append(accepted_moves_this_iter)
-        iter_current.global_params = self.global_prior.resample_global_params(iter_current, data_y = self.data.y)
+        iter_current.global_params = self.global_prior.resample_global_params(
+            iter_current,
+            data_y=self.data.y,
+            temp=temp,
+        )
         if return_trace:
             return iter_trace
         else:

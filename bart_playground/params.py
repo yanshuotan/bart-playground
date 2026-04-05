@@ -844,14 +844,6 @@ class Parameters:
         
         # Cache for fast forest eval
         self._forest_eval_cache = None  # (all_vars, all_thr, all_leaves, tree_starts)
-        # Cache for per-tree log marginal likelihoods.
-        # The cache is valid only for a specific (data_y, eps_sigma2, f_sigma2).
-        self._lkhd_cache_signature = None
-        self._tree_log_marginal_cache = None
-
-    def invalidate_likelihood_cache(self):
-        self._lkhd_cache_signature = None
-        self._tree_log_marginal_cache = None
             
     def init_cache(self, cache):
         if cache is None:
@@ -861,7 +853,6 @@ class Parameters:
     
     def clear_cache(self):
         self.cache = None
-        self.invalidate_likelihood_cache()
         for tree in self.trees:
             tree.evals = None
             tree.leaf_ids = None
@@ -880,8 +871,6 @@ class Parameters:
             global_params=self.global_params.copy(), # shallow copy suffices
             cache=self.cache.copy() if self.cache is not None else None
         )
-        # Likelihood cache may be stale after tree/global edits; recompute lazily on demand.
-        copied.invalidate_likelihood_cache()
         return copied
     
     def update_data(self, X_new):
@@ -1006,7 +995,6 @@ class Parameters:
         """
         # Invalidate forest eval cache when leaf values change
         self._forest_eval_cache = None
-        self.invalidate_likelihood_cache()
         
         leaf_counter = 0
         for tree_id in tree_ids:

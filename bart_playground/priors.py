@@ -27,7 +27,7 @@ def _get_resid_all(leaf_ids, node_counts, residuals):
     return resid_all, leaves
 
 @njit(cache=True)
-def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_sigma2, f_sigma2, random_normal_p):
+def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_sigma2, f_sigma2, random_normal_p, temp=1.0):
     """
     Numba-optimized function to resample leaf values using leaf_ids and sample_n_in_node.
     """
@@ -39,7 +39,8 @@ def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_s
         if leaves[node]:
             n_leaves += 1
             
-    noise_ratio = eps_sigma2 / f_sigma2
+    tempered_eps_sigma2 = temp * eps_sigma2
+    noise_ratio = tempered_eps_sigma2 / f_sigma2
     
     # Compute posterior parameters only for leaf nodes
     post_cov_diag = np.zeros(n_leaves, dtype=np.float32)
@@ -48,7 +49,7 @@ def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_s
     leaf_idx = 0
     for node in range(node_counts):
         if leaves[node]:
-            post_cov_diag[leaf_idx] = eps_sigma2 / (sample_n_in_node[node] + noise_ratio)
+            post_cov_diag[leaf_idx] = tempered_eps_sigma2 / (sample_n_in_node[node] + noise_ratio)
             post_mean[leaf_idx] = resid_all[node] / (sample_n_in_node[node] + noise_ratio)
             leaf_idx += 1
     
@@ -56,17 +57,18 @@ def _single_tree_resample_leaf_vals(leaf_ids, sample_n_in_node, residuals, eps_s
     return leaf_params_new
 
 @njit(cache=True)
-def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, random_normal_p):
+def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, random_normal_p, temp=1.0):
     """
     Numba-optimized function to resample leaf values.
     """
     p = leaf_basis.shape[1]
     # Explicitly convert boolean array to float32
     num_lbs = leaf_basis
+    tempered_eps_sigma2 = temp * eps_sigma2
     post_cov = np.linalg.inv(
-        num_lbs.T @ num_lbs / eps_sigma2 + np.eye(p) / f_sigma2
+        num_lbs.T @ num_lbs / tempered_eps_sigma2 + np.eye(p) / f_sigma2
         ).astype(np.float32)
-    post_mean = post_cov @ num_lbs.T @ residuals / eps_sigma2
+    post_mean = post_cov @ num_lbs.T @ residuals / tempered_eps_sigma2
     
     leaf_params_new = np.sqrt(np.diag(post_cov)) * random_normal_p + post_mean
     return leaf_params_new
@@ -156,7 +158,7 @@ class TreesPrior:
             if tree_alpha <= 0.0 or tree_alpha >= 0.5:
                 raise ValueError("tree_alpha must be between 0.0 and 0.5 for quick decay parameterization. See Rockova and Saha (2018) for more details.")
                 
-    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids):
+    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids, temp: float = 1.0):
         """
         Resample the values of the leaf nodes for the specified trees.
         
@@ -187,7 +189,8 @@ class TreesPrior:
                 residuals,
                 eps_sigma2=bart_params.global_params["eps_sigma2"][0],
                 f_sigma2=self.f_sigma2,
-                random_normal_p=self.generator.standard_normal(size=len(tree.leaves))
+                random_normal_p=self.generator.standard_normal(size=len(tree.leaves)),
+                temp=temp,
             )
         else:
             leaf_basis = bart_params.leaf_basis(tree_ids)
@@ -197,7 +200,8 @@ class TreesPrior:
                 residuals,
                 eps_sigma2=bart_params.global_params["eps_sigma2"],
                 f_sigma2 = self.f_sigma2,
-                random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1])
+                random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1]),
+                temp=temp,
             )
         return leaf_params_new
 
@@ -303,7 +307,7 @@ class GlobalParamPrior:
             global_params["s_cumsum"] = np.cumsum(s)
         return global_params
     
-    def resample_global_params(self, bart_params : Parameters, data_y):
+    def resample_global_params(self, bart_params : Parameters, data_y, temp: float = 1.0):
         """
         Resamples the global parameters for the BART model.
 
@@ -322,7 +326,7 @@ class GlobalParamPrior:
         if self.fixed_eps_sigma2 is not None:
             global_params["eps_sigma2"] = np.array([self.fixed_eps_sigma2], dtype=float)
         else:
-            global_params["eps_sigma2"] = self._sample_eps_sigma2(data_y - bart_params.evaluate())
+            global_params["eps_sigma2"] = self._sample_eps_sigma2(data_y - bart_params.evaluate(), temp=temp)
         if self.dirichlet_prior:
             s, s_cumsum = self._resample_s(bart_params)
             global_params["s"] = s
@@ -374,7 +378,7 @@ class GlobalParamPrior:
         eps_lambda_val = (sigma_hat**2 * c) / self.eps_nu
         return eps_lambda_val
 
-    def _sample_eps_sigma2(self, residuals):
+    def _sample_eps_sigma2(self, residuals, temp: float = 1.0):
         """
         Sample noise variance parameter.
 
@@ -384,12 +388,14 @@ class GlobalParamPrior:
         Returns:
             float: Sampled noise variance
         """
+        if temp <= 0:
+            raise ValueError("temp must be strictly positive.")
         n = len(residuals)
         # Convert to inverse gamma params
         prior_alpha = self.eps_nu / 2
         prior_beta = self.eps_nu * self.eps_lambda / 2
-        post_alpha = prior_alpha + n / 2
-        post_beta = prior_beta + np.sum(residuals ** 2) / 2
+        post_alpha = prior_alpha + n / (2 * temp)
+        post_beta = prior_beta + np.sum(residuals ** 2) / (2 * temp)
         # size=1 returns a 1-element numpy array, so we use [0] for indexing
         eps_sigma2 = invgamma.rvs(a=post_alpha, scale=post_beta, size=1, random_state = self.generator)
         if eps_sigma2[0] <= 1e-8:
@@ -409,64 +415,26 @@ class BARTLikelihood:
         """
         self.f_sigma2 = f_sigma2
 
-    def _cache_signature(self, bart_params: Parameters, data_y):
+    def total_log_full_lkhd(self, bart_params: Parameters, data_y) -> float:
+        """
+        Compute full (uncollapsed) Gaussian log likelihood for a complete state (up to additive constant).
+
+        Uses current tree structures and current leaf values without marginalizing
+        over leaf parameters.
+        """
         eps_sigma2 = float(bart_params.global_params["eps_sigma2"][0])
-        cache_id = id(bart_params.cache) if bart_params.cache is not None else -1
-        return (id(data_y), float(self.f_sigma2), eps_sigma2, cache_id)
+        if eps_sigma2 <= 0.0:
+            raise ValueError("eps_sigma2 must be strictly positive.")
 
-    def build_single_tree_lkhd_cache(self, bart_params: Parameters, data_y, force: bool = False):
-        """
-        Build and store per-tree marginal likelihood cache on Parameters.
+        if bart_params.cache is not None:
+            fitted = bart_params.cache
+        else:
+            fitted = bart_params.evaluate()
 
-        This is intended for PT swap acceptance where repeated likelihood evaluation
-        at fixed states can dominate cost.
-        """
-        signature = self._cache_signature(bart_params, data_y)
-        has_tree_cache = (
-            bart_params._lkhd_cache_signature == signature
-            and bart_params._tree_log_marginal_cache is not None
-        )
-        if (not force) and has_tree_cache:
-            return bart_params._tree_log_marginal_cache
-
-        n_trees = bart_params.n_trees
-        tree_log = bart_params._tree_log_marginal_cache if has_tree_cache and not force else np.empty(n_trees, dtype=np.float64)
-        use_fast_residual = bart_params.cache is not None and all(t.evals is not None for t in bart_params.trees)
-
-        for tree_id in range(n_trees):
-            tree = bart_params.trees[tree_id]
-            if use_fast_residual:
-                residuals = data_y - (bart_params.cache - tree.evals)
-            else:
-                residuals = data_y - bart_params.evaluate(all_except=[tree_id])
-
-            if (not has_tree_cache) or force:
-                tree_log[tree_id] = _single_tree_log_marginal_lkhd_numba(
-                    tree.leaf_ids,
-                    tree.n,
-                    residuals,
-                    bart_params.global_params["eps_sigma2"][0],
-                    self.f_sigma2,
-                )
-
-        bart_params._lkhd_cache_signature = signature
-        bart_params._tree_log_marginal_cache = tree_log
-        return tree_log
-
-    def total_log_marginal_lkhd_cached(self, bart_params: Parameters, data_y, force: bool = False) -> float:
-        tree_log = self.build_single_tree_lkhd_cache(
-            bart_params,
-            data_y,
-            force=force,
-        )
-        return float(np.sum(tree_log))
-
-    def tree_log_marginal_lkhd_cached(self, bart_params: Parameters, data_y, force: bool = False):
-        return self.build_single_tree_lkhd_cache(
-            bart_params,
-            data_y,
-            force=force,
-        )
+        residuals = data_y - fitted
+        n = residuals.shape[0]
+        rss = float(np.sum(residuals ** 2))
+        return float(-0.5 * (n * math.log(eps_sigma2) + rss / eps_sigma2))
 
     def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
         """
