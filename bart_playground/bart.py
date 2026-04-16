@@ -449,6 +449,8 @@ class ParallelTemperingBART(BART):
         init_trees=None,
         init_sigma2=None,
         store_chain_traces: bool = False,
+        store_swap_diagnostics: bool = False,
+        print_swap_diagnostics: bool = False,
     ):
         if max_bins is None:
             max_bins = 100
@@ -504,10 +506,13 @@ class ParallelTemperingBART(BART):
         self.swap_interval = int(swap_interval)
         self.chain_samplers = chain_samplers
         self.store_chain_traces = bool(store_chain_traces)
+        self.store_swap_diagnostics = bool(store_swap_diagnostics)
+        self.print_swap_diagnostics = bool(print_swap_diagnostics)
 
         self.swap_attempt_counts = np.zeros(max(0, self.n_temperatures - 1), dtype=np.int64)
         self.swap_accept_counts = np.zeros(max(0, self.n_temperatures - 1), dtype=np.int64)
         self.chain_traces = [[] for _ in range(self.n_temperatures)] if self.store_chain_traces else None
+        self.swap_diagnostics = []
 
     @staticmethod
     def _build_temperature_ladder(
@@ -538,22 +543,81 @@ class ParallelTemperingBART(BART):
         state_out.clear_cache()
         return state_out
 
-    def _attempt_adjacent_swap(self, states, i: int, j: int) -> bool:
-        sampler = self.chain_samplers[i]
-        log_alpha = sampler.pt_swap_log_accept_ratio(
-            state_a=states[i],
-            temp_a=self.temperatures[i],
-            state_b=states[j],
-            temp_b=self.temperatures[j],
-            data_y=self.data.y,
-            force_recompute=False,
-        )
+    def _state_loglik_rss_eps(self, state):
+        if state.cache is not None:
+            fitted = state.cache
+        else:
+            fitted = state.evaluate()
+        residuals = self.data.y - fitted
+        rss = float(np.sum(residuals ** 2))
+        eps_sigma2 = float(state.global_params["eps_sigma2"][0])
+        if eps_sigma2 <= 0.0:
+            raise ValueError("eps_sigma2 must be strictly positive.")
+        n = residuals.shape[0]
+        loglik = float(-0.5 * (n * np.log(eps_sigma2) + rss / eps_sigma2))
+        return loglik, rss, eps_sigma2
 
-        self.swap_attempt_counts[i] += 1
+    def _attempt_adjacent_swap(
+        self,
+        states,
+        i: int,
+        j: int,
+        iteration: int | None = None,
+        sweep: int | None = None,
+        swap_step: int | None = None,
+        count_for_stats: bool = True,
+    ) -> bool:
+        sampler = self.chain_samplers[i]
+        temp_a = float(self.temperatures[i])
+        temp_b = float(self.temperatures[j])
+
+        loglik_a, rss_a, eps_sigma2_a = self._state_loglik_rss_eps(states[i])
+        loglik_b, rss_b, eps_sigma2_b = self._state_loglik_rss_eps(states[j])
+        delta = float((1.0 / temp_a - 1.0 / temp_b) * (loglik_b - loglik_a))
+
+        if count_for_stats:
+            self.swap_attempt_counts[i] += 1
         u = sampler.generator.uniform(0.0, 1.0)
-        if np.log(u) < log_alpha:
+        accepted = bool(np.log(u) < delta)
+
+        if self.store_swap_diagnostics or self.print_swap_diagnostics:
+            diag = {
+                "pair_index": int(i),
+                "iteration": None if iteration is None else int(iteration),
+                "swap_step": None if swap_step is None else int(swap_step),
+                "sweep": None if sweep is None else int(sweep),
+                "temp_a": temp_a,
+                "temp_b": temp_b,
+                "loglik_a": loglik_a,
+                "loglik_b": loglik_b,
+                "delta": delta,
+                "eps_sigma2_a": eps_sigma2_a,
+                "eps_sigma2_b": eps_sigma2_b,
+                "rss_a": rss_a,
+                "rss_b": rss_b,
+                "accepted": accepted,
+            }
+            if self.store_swap_diagnostics:
+                self.swap_diagnostics.append(diag)
+            if self.print_swap_diagnostics:
+                print(
+                    "[PT swap] "
+                    f"iter={diag['iteration']} "
+                    f"step={diag['swap_step']} "
+                    f"sweep={diag['sweep']} "
+                    f"pair={i}-{j} "
+                    f"temp_a={temp_a:.6g} temp_b={temp_b:.6g} "
+                    f"loglik_a={loglik_a:.6g} loglik_b={loglik_b:.6g} "
+                    f"delta={delta:.6g} "
+                    f"eps_sigma2_a={eps_sigma2_a:.6g} eps_sigma2_b={eps_sigma2_b:.6g} "
+                    f"rss_a={rss_a:.6g} rss_b={rss_b:.6g} "
+                    f"accepted={accepted}"
+                )
+
+        if accepted:
             states[i], states[j] = states[j], states[i]
-            self.swap_accept_counts[i] += 1
+            if count_for_stats:
+                self.swap_accept_counts[i] += 1
             return True
         return False
 
@@ -568,6 +632,8 @@ class ParallelTemperingBART(BART):
             self.chain_traces = [[] for _ in range(self.n_temperatures)]
         self.swap_attempt_counts[:] = 0
         self.swap_accept_counts[:] = 0
+        if self.store_swap_diagnostics:
+            self.swap_diagnostics = []
 
         current_states = []
         for sampler in self.chain_samplers:
@@ -589,11 +655,25 @@ class ParallelTemperingBART(BART):
                     return_trace=False,
                 )
 
-            # Adjacent swap attempts with odd-even staggering.
+            # At each swap point, run a full odd-even swap sweep of length (n_temperatures - 1)
+            # so information can traverse across the ladder within one interval.
             if self.n_temperatures > 1 and ((it + 1) % self.swap_interval == 0):
-                offset = ((it + 1) // self.swap_interval) % 2
-                for left in range(offset, self.n_temperatures - 1, 2):
-                    self._attempt_adjacent_swap(current_states, left, left + 1)
+                swap_step = (it + 1) // self.swap_interval
+                base_offset = ((it + 1) // self.swap_interval) % 2
+                for sweep in range(self.n_temperatures - 1):
+                    offset = (base_offset + sweep) % 2
+                    for left in range(offset, self.n_temperatures - 1, 2):
+                        # Count swap rates on posterior samples only (it >= nskip).
+                        in_posterior = it >= self.nskip
+                        self._attempt_adjacent_swap(
+                            current_states,
+                            left,
+                            left + 1,
+                            iteration=it + 1,
+                            sweep=sweep + 1,
+                            swap_step=swap_step,
+                            count_for_stats=in_posterior,
+                        )
 
             if it >= self.nskip:
                 self.trace.append(self._compress_state_for_trace(current_states[0]))
@@ -625,6 +705,8 @@ class ParallelTemperingBART(BART):
             "temperatures": list(self.temperatures),
             "swap_interval": self.swap_interval,
             "store_chain_traces": self.store_chain_traces,
+            "store_swap_diagnostics": self.store_swap_diagnostics,
+            "print_swap_diagnostics": self.print_swap_diagnostics,
         }
         if self.swap_attempt_counts.size > 0:
             rates = np.divide(
@@ -634,6 +716,8 @@ class ParallelTemperingBART(BART):
             base["swap_attempts"] = self.swap_attempt_counts.tolist()
             base["swap_accepts"] = self.swap_accept_counts.tolist()
             base["swap_accept_rates"] = rates.tolist()
+        if self.store_swap_diagnostics:
+            base["swap_diagnostics"] = self.swap_diagnostics
         return base
 
     def predict_proba(self, X):

@@ -173,7 +173,7 @@ class Sampler(ABC):
         """Calculate total log Metropolis-Hastings ratio with proposal-probability correction."""
         data_y = self.data.y if data_y is None else data_y
         return self.tree_prior.trees_log_prior_ratio(move) + \
-            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize) / temp + \
+            self.likelihood.trees_log_marginal_lkhd_ratio(move, data_y, marginalize, temp=temp) + \
             move.log_tran_ratio + \
             np.log(self.proposals[contrary_moves[move_key]]) - np.log(self.proposals[move_key])
 

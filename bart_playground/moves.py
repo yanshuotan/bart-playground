@@ -85,18 +85,6 @@ class Move(ABC):
         """
         pass
 
-    def _calculate_simulated_likelihood(self, new_leaf_ids, new_n, residuals):
-        """
-        Calculate likelihood using simulated split data without modifying the tree.
-        """
-        from .priors import _single_tree_log_marginal_lkhd_numba
-        return _single_tree_log_marginal_lkhd_numba(
-            new_leaf_ids,
-            new_n, 
-            residuals,
-            eps_sigma2=self.current.global_params["eps_sigma2"][0],
-            f_sigma2=self.tree_prior.f_sigma2
-        )
 
 class Grow(Move):
     """
@@ -258,14 +246,14 @@ class MultiGrow(Grow):
             if new_n[left_child] > 0 and new_n[right_child] > 0:
                 # Calculate likelihood using simulated data
                 log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
                 )
                 
                 # Calculate prior using simulated data
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
                 
-                # Apply temperature when forming log_pi
-                log_pi = log_likelihood / self.temp + log_prior
+                # log_likelihood already uses temper-then-marginalize
+                log_pi = log_likelihood + log_prior
                 candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
             else:
                 # Invalid split - set weight to 0 (log weight to -inf)
@@ -301,10 +289,10 @@ class MultiGrow(Grow):
             else:
                 new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(prune_node_id)
                 log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
                 )
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                log_pi = log_likelihood / self.temp + log_prior
+                log_pi = log_likelihood + log_prior
                 log_pi_cache[prune_node_id] = log_pi
             log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_weights = np.array(log_fwd_weights)
@@ -351,11 +339,11 @@ class MultiPrune(Prune):
                 new_leaf_ids, new_n, new_vars = tree.simulate_prune_split(node_id)
                 # Calculate likelihood using simulated data
                 log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
                 )
                 # Calculate prior using simulated data
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                log_pi = log_likelihood / self.temp + log_prior
+                log_pi = log_likelihood + log_prior
                 log_pi_cache[node_id] = log_pi
             candidates.append((node_id, 0.5*float(log_pi)))
 
@@ -382,10 +370,10 @@ class MultiPrune(Prune):
         left_child = leaf_id * 2 + 1
         right_child = leaf_id * 2 + 2
         log_likelihood = self.likelihood.calculate_simulated_likelihood(
-            new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+            new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
         )
         log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-        log_pi = log_likelihood / self.temp + log_prior
+        log_pi = log_likelihood + log_prior
         log_fwd_weights.append(0.5 * float(log_pi))
 
         for _ in range(n_samples - 1):
@@ -397,10 +385,10 @@ class MultiPrune(Prune):
             right_child = node_id * 2 + 2
             if new_n[left_child] > 0 and new_n[right_child] > 0:
                 log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
                 )
                 log_prior = self.tree_prior.calculate_simulated_prior(new_vars)
-                log_pi = log_likelihood / self.temp + log_prior
+                log_pi = log_likelihood + log_prior
                 log_fwd_weights.append(0.5 * float(log_pi))
             else:
                 log_fwd_weights.append(-np.inf)  # Invalid split
@@ -449,9 +437,9 @@ class MultiChange(Change):
             
             if valid:
                 log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
                 )
-                log_pi = log_likelihood / self.temp
+                log_pi = log_likelihood
                 candidates.append((node_id, var, threshold, 0.5*float(log_pi)))
             else:
                 candidates.append((node_id, var, threshold, -np.inf))
@@ -477,9 +465,9 @@ class MultiChange(Change):
         log_fwd_weights = []
         new_leaf_ids, new_n, new_vars = tree.simulate_change_split(node_id, old_var, old_threshold)
         log_likelihood = self.likelihood.calculate_simulated_likelihood(
-            new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+            new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
         )
-        log_pi = log_likelihood / self.temp
+        log_pi = log_likelihood
         log_fwd_weights.append(0.5*float(log_pi))
 
         for _ in range(n_samples - 1):
@@ -499,10 +487,10 @@ class MultiChange(Change):
             if valid:                
                 # Calculate likelihood using simulated data
                 log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                    new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
                 )
 
-                log_pi = log_likelihood / self.temp
+                log_pi = log_likelihood
                 log_fwd_weights.append(0.5*float(log_pi))
             else:
                 log_fwd_weights.append(-np.inf)  # Invalid change
@@ -559,9 +547,9 @@ class MultiSwap(Swap):
                 if valid:
                     # Calculate likelihood using simulated data
                     log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                        new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                        new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
                     )
-                    log_pi = log_likelihood / self.temp
+                    log_pi = log_likelihood
                 else:
                     log_pi = -np.inf  # Invalid swap
                 log_pi_cache[cache_key] = log_pi
@@ -588,9 +576,9 @@ class MultiSwap(Swap):
         log_fwd_pi_cache = {}
         new_leaf_ids, new_n, new_vars = tree.simulate_swap_split(parent_id, child_id)
         log_likelihood = self.likelihood.calculate_simulated_likelihood(
-            new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+            new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
         )
-        log_pi = log_likelihood / self.temp
+        log_pi = log_likelihood
         log_fwd_weights.append(0.5*float(log_pi))
         log_fwd_pi_cache[(parent_id, child_id)] = log_pi
 
@@ -609,9 +597,9 @@ class MultiSwap(Swap):
                         break
                 if valid:
                     log_likelihood = self.likelihood.calculate_simulated_likelihood(
-                        new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2
+                        new_leaf_ids, new_n, residuals, eps_sigma2=eps_sigma2, temp=self.temp
                     )
-                    log_pi = log_likelihood / self.temp
+                    log_pi = log_likelihood
                 else:
                     log_pi = -np.inf  # Invalid swap
                 log_fwd_pi_cache[cache_key] = log_pi

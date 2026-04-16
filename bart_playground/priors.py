@@ -74,7 +74,7 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     return leaf_params_new
 
 @njit(cache=True)
-def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps_sigma2, f_sigma2):
+def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps_sigma2, f_sigma2, temp=1.0):
     """
     Numba-optimized function to calculate log marginal likelihood when there is only one tree.
     sample_n_in_node is the number of samples in each node, which is not limited to the samples counts in the leaves.
@@ -86,7 +86,8 @@ def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps
     ls_resids = np.sum(resids ** 2)
     ridge_bias = 0.0
     logdet = 0.0
-    noise_ratio = eps_sigma2 / f_sigma2
+    tempered_eps_sigma2 = temp * eps_sigma2
+    noise_ratio = tempered_eps_sigma2 / f_sigma2
     
     for node in range(node_counts):
         if leaves[node]:
@@ -94,10 +95,10 @@ def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps
             ls_resids -= (resid_all[node] ** 2) / sample_n_in_node[node]
             ridge_bias += (resid_all[node] ** 2) / (sample_n_in_node[node] * (sample_n_in_node[node] / noise_ratio + 1.0))
 
-    return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
+    return - (logdet + (ls_resids + ridge_bias) / tempered_eps_sigma2) / 2
 
 @njit(cache=True)
-def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
+def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2, temp=1.0):
     """
     Numba-optimized function to calculate log marginal likelihood when there are multiple trees.
     This function uses SVD for the leaf basis matrix.
@@ -107,13 +108,14 @@ def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2):
     
     # Now use the float32 array with SVD
     U, S, _ = np.linalg.svd(leaf_basis_float, full_matrices=False)
-    noise_ratio = eps_sigma2 / f_sigma2
+    tempered_eps_sigma2 = temp * eps_sigma2
+    noise_ratio = tempered_eps_sigma2 / f_sigma2
     logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
     resid_u_coefs = U.T @ resids
     resids_u = U @ resid_u_coefs
     ls_resids = np.sum((resids - resids_u) ** 2)
     ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / noise_ratio + 1))
-    return - (logdet + (ls_resids + ridge_bias) / eps_sigma2) / 2
+    return - (logdet + (ls_resids + ridge_bias) / tempered_eps_sigma2) / 2
 
 @njit(cache=True)
 def _trees_log_prior_numba(tree_vars, alpha, beta, quick_decay=False):
@@ -436,7 +438,7 @@ class BARTLikelihood:
         rss = float(np.sum(residuals ** 2))
         return float(-0.5 * (n * math.log(eps_sigma2) + rss / eps_sigma2))
 
-    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids, temp: float = 1.0):
         """
         Calculate the log marginal likelihood of the trees in a BART model.
 
@@ -467,6 +469,8 @@ class BARTLikelihood:
         8. Combine the log determinant, least squares residuals, and ridge bias to obtain the log marginal likelihood.
         """
         resids = (data_y - bart_params.evaluate(all_except=tree_ids))
+        if temp <= 0:
+            raise ValueError("temp must be strictly positive.")
         if len(tree_ids) == 1:
             # For single tree, we can use the optimized function with leaf_ids
             tree = bart_params.trees[tree_ids[0]]
@@ -476,7 +480,8 @@ class BARTLikelihood:
                     tree.n,
                     resids, 
                     bart_params.global_params["eps_sigma2"][0], 
-                    self.f_sigma2
+                    self.f_sigma2,
+                    temp=temp,
                 )     
             except Exception as e:
                 logger.error(f"Error calculating likelihood for tree {tree_ids[0]}: {e}")
@@ -489,11 +494,12 @@ class BARTLikelihood:
                 leaf_basis, 
                 resids, 
                 bart_params.global_params["eps_sigma2"], 
-                self.f_sigma2
+                self.f_sigma2,
+                temp=temp,
             )
             
 
-    def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, marginalize: bool=False):
+    def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, marginalize: bool=False, temp: float = 1.0):
         """
         Compute the ratio of marginal likelihoods for a given move.
 
@@ -509,14 +515,14 @@ class BARTLikelihood:
             Marginal likelihood ratio.
         """
         if not marginalize:
-            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, move.trees_changed)
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, move.trees_changed)
+            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, move.trees_changed, temp=temp)
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, move.trees_changed, temp=temp)
         else:
-            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, np.arange(move.current.n_trees))
-            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, np.arange(move.current.n_trees))
+            log_lkhd_current = self.trees_log_marginal_lkhd(move.current, data_y, np.arange(move.current.n_trees), temp=temp)
+            log_lkhd_proposed = self.trees_log_marginal_lkhd(move.proposed, data_y, np.arange(move.current.n_trees), temp=temp)
         return log_lkhd_proposed - log_lkhd_current
 
-    def calculate_simulated_likelihood(self, new_leaf_ids, new_n, residuals, eps_sigma2):
+    def calculate_simulated_likelihood(self, new_leaf_ids, new_n, residuals, eps_sigma2, temp: float = 1.0):
         """
         Calculate likelihood using simulated split data without modifying the tree.
         """
@@ -525,7 +531,8 @@ class BARTLikelihood:
             new_n, 
             residuals,
             eps_sigma2=eps_sigma2,
-            f_sigma2=self.f_sigma2
+            f_sigma2=self.f_sigma2,
+            temp=temp,
         )
 
 class ComprehensivePrior:
@@ -683,7 +690,7 @@ class LogisticLikelihood(BARTLikelihood):
             pi_h[i] = math.exp(log_z1 - log_z1_p_z2)
         return log_likelihood.sum(), pi_h
 
-    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids):
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids, temp: float = 1.0):
         """
         Calculate the log marginal likelihood of the trees in a logistic regression BART model.
 
@@ -700,6 +707,7 @@ class LogisticLikelihood(BARTLikelihood):
         float
             The log marginal likelihood of the specified trees.
         """
+        _ = temp  # Temperature handling is model-specific and currently unchanged for logistic.
         # here, we assume tree_ids contain only one tree
         if len(tree_ids) != 1:
             raise ValueError("Logistic likelihood only supports single tree evaluation.")
