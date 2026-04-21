@@ -557,6 +557,37 @@ class ParallelTemperingBART(BART):
         loglik = float(-0.5 * (n * np.log(eps_sigma2) + rss / eps_sigma2))
         return loglik, rss, eps_sigma2
 
+    def _state_collapsed_loglik(self, state, temp: float) -> float:
+        return float(
+            self.sampler.likelihood.trees_log_marginal_lkhd(
+                state,
+                self.data.y,
+                np.arange(state.n_trees),
+                temp=temp,
+            )
+        )
+
+    def _refresh_state_tempered_params(self, state, chain_id: int) -> None:
+        sampler = self.chain_samplers[chain_id]
+        temp = float(self.temperatures[chain_id])
+        tree_ids = np.arange(state.n_trees, dtype=int)
+
+        # Re-draw all leaf values under the chain's current temperature.
+        new_leaf_vals = sampler.tree_prior.resample_leaf_vals(
+            state,
+            data_y=self.data.y,
+            tree_ids=tree_ids,
+            temp=temp,
+        )
+        state.update_leaf_vals(tree_ids.tolist(), new_leaf_vals)
+
+        # Re-draw global sigma2 under the same tempered conditional.
+        state.global_params = sampler.global_prior.resample_global_params(
+            state,
+            data_y=self.data.y,
+            temp=temp,
+        )
+
     def _attempt_adjacent_swap(
         self,
         states,
@@ -571,9 +602,11 @@ class ParallelTemperingBART(BART):
         temp_a = float(self.temperatures[i])
         temp_b = float(self.temperatures[j])
 
-        loglik_a, rss_a, eps_sigma2_a = self._state_loglik_rss_eps(states[i])
-        loglik_b, rss_b, eps_sigma2_b = self._state_loglik_rss_eps(states[j])
-        delta = float((1.0 / temp_a - 1.0 / temp_b) * (loglik_b - loglik_a))
+        ll_aa = self._state_collapsed_loglik(states[i], temp_a)
+        ll_bb = self._state_collapsed_loglik(states[j], temp_b)
+        ll_ab = self._state_collapsed_loglik(states[j], temp_a)
+        ll_ba = self._state_collapsed_loglik(states[i], temp_b)
+        delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
 
         if count_for_stats:
             self.swap_attempt_counts[i] += 1
@@ -588,34 +621,33 @@ class ParallelTemperingBART(BART):
                 "sweep": None if sweep is None else int(sweep),
                 "temp_a": temp_a,
                 "temp_b": temp_b,
-                "loglik_a": loglik_a,
-                "loglik_b": loglik_b,
+                "ll_aa": ll_aa,
+                "ll_bb": ll_bb,
+                "ll_ab": ll_ab,
+                "ll_ba": ll_ba,
                 "delta": delta,
-                "eps_sigma2_a": eps_sigma2_a,
-                "eps_sigma2_b": eps_sigma2_b,
-                "rss_a": rss_a,
-                "rss_b": rss_b,
                 "accepted": accepted,
             }
             if self.store_swap_diagnostics:
                 self.swap_diagnostics.append(diag)
             if self.print_swap_diagnostics:
                 print(
-                    "[PT swap] "
+                    "[PT swap collapsed] "
                     f"iter={diag['iteration']} "
                     f"step={diag['swap_step']} "
                     f"sweep={diag['sweep']} "
                     f"pair={i}-{j} "
                     f"temp_a={temp_a:.6g} temp_b={temp_b:.6g} "
-                    f"loglik_a={loglik_a:.6g} loglik_b={loglik_b:.6g} "
+                    f"ll_aa={ll_aa:.6g} ll_bb={ll_bb:.6g} "
+                    f"ll_ab={ll_ab:.6g} ll_ba={ll_ba:.6g} "
                     f"delta={delta:.6g} "
-                    f"eps_sigma2_a={eps_sigma2_a:.6g} eps_sigma2_b={eps_sigma2_b:.6g} "
-                    f"rss_a={rss_a:.6g} rss_b={rss_b:.6g} "
                     f"accepted={accepted}"
                 )
 
         if accepted:
             states[i], states[j] = states[j], states[i]
+            self._refresh_state_tempered_params(states[i], i)
+            self._refresh_state_tempered_params(states[j], j)
             if count_for_stats:
                 self.swap_accept_counts[i] += 1
             return True
