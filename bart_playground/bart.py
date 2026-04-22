@@ -441,7 +441,8 @@ class ParallelTemperingBART(BART):
         temperatures: Optional[Sequence[float]] = None,
         n_temperatures: int = 4,
         max_temperature: float = 5.0,
-        swap_interval: int = 5,
+        swap_interval: int = 50,
+        post_swap_repair_steps: int = 3,
         dirichlet_prior=False,
         quick_decay: bool = False,
         s_alpha: float = 1.0,
@@ -456,6 +457,8 @@ class ParallelTemperingBART(BART):
             max_bins = 100
         if swap_interval <= 0:
             raise ValueError("swap_interval must be a positive integer.")
+        if post_swap_repair_steps < 0:
+            raise ValueError("post_swap_repair_steps must be a non-negative integer.")
 
         preprocessor = self.preprocessor_class(max_bins=max_bins)
 
@@ -504,6 +507,7 @@ class ParallelTemperingBART(BART):
         self.temperatures = temps
         self.n_temperatures = len(temps)
         self.swap_interval = int(swap_interval)
+        self.post_swap_repair_steps = int(post_swap_repair_steps)
         self.chain_samplers = chain_samplers
         self.store_chain_traces = bool(store_chain_traces)
         self.store_swap_diagnostics = bool(store_swap_diagnostics)
@@ -572,7 +576,14 @@ class ParallelTemperingBART(BART):
         temp = float(self.temperatures[chain_id])
         tree_ids = np.arange(state.n_trees, dtype=int)
 
-        # Re-draw all leaf values under the chain's current temperature.
+        # First adapt sigma2 to the swapped state at this chain's temperature.
+        state.global_params = sampler.global_prior.resample_global_params(
+            state,
+            data_y=self.data.y,
+            temp=temp,
+        )
+
+        # Then re-draw all leaf values using the updated sigma2.
         new_leaf_vals = sampler.tree_prior.resample_leaf_vals(
             state,
             data_y=self.data.y,
@@ -581,7 +592,7 @@ class ParallelTemperingBART(BART):
         )
         state.update_leaf_vals(tree_ids.tolist(), new_leaf_vals)
 
-        # Re-draw global sigma2 under the same tempered conditional.
+        # Finally re-draw sigma2 conditioned on the refreshed leaf values.
         state.global_params = sampler.global_prior.resample_global_params(
             state,
             data_y=self.data.y,
@@ -687,6 +698,8 @@ class ParallelTemperingBART(BART):
                     return_trace=False,
                 )
 
+            accepted_swap_this_iter = False
+
             # At each swap point, run a full odd-even swap sweep of length (n_temperatures - 1)
             # so information can traverse across the ladder within one interval.
             if self.n_temperatures > 1 and ((it + 1) % self.swap_interval == 0):
@@ -697,7 +710,7 @@ class ParallelTemperingBART(BART):
                     for left in range(offset, self.n_temperatures - 1, 2):
                         # Count swap rates on posterior samples only (it >= nskip).
                         in_posterior = it >= self.nskip
-                        self._attempt_adjacent_swap(
+                        accepted_swap_this_iter = self._attempt_adjacent_swap(
                             current_states,
                             left,
                             left + 1,
@@ -705,6 +718,15 @@ class ParallelTemperingBART(BART):
                             sweep=sweep + 1,
                             swap_step=swap_step,
                             count_for_stats=in_posterior,
+                        ) or accepted_swap_this_iter
+
+            if accepted_swap_this_iter and self.post_swap_repair_steps > 0:
+                for _ in range(self.post_swap_repair_steps):
+                    for chain_id, sampler in enumerate(self.chain_samplers):
+                        current_states[chain_id] = sampler.one_iter(
+                            current_states[chain_id],
+                            temp=self.temperatures[chain_id],
+                            return_trace=False,
                         )
 
             if it >= self.nskip:
@@ -736,6 +758,7 @@ class ParallelTemperingBART(BART):
             "n_temperatures": self.n_temperatures,
             "temperatures": list(self.temperatures),
             "swap_interval": self.swap_interval,
+            "post_swap_repair_steps": self.post_swap_repair_steps,
             "store_chain_traces": self.store_chain_traces,
             "store_swap_diagnostics": self.store_swap_diagnostics,
             "print_swap_diagnostics": self.print_swap_diagnostics,
