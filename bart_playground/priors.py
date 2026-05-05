@@ -62,15 +62,16 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     Numba-optimized function to resample leaf values.
     """
     p = leaf_basis.shape[1]
-    # Explicitly convert boolean array to float32
-    num_lbs = leaf_basis
-    tempered_eps_sigma2 = temp * eps_sigma2
-    post_cov = np.linalg.inv(
-        num_lbs.T @ num_lbs / tempered_eps_sigma2 + np.eye(p) / f_sigma2
-        ).astype(np.float32)
-    post_mean = post_cov @ num_lbs.T @ residuals / tempered_eps_sigma2
-    
-    leaf_params_new = np.sqrt(np.diag(post_cov)) * random_normal_p + post_mean
+    tempered_eps_sigma2 = np.float32(temp * eps_sigma2)
+    precision = leaf_basis.T @ leaf_basis / tempered_eps_sigma2 + np.eye(p, dtype=np.float32) / np.float32(f_sigma2)
+    rhs = (leaf_basis.T @ residuals) / tempered_eps_sigma2
+
+    # Post mean = precision^{-1} @ rhs, and post cov = precision^{-1}
+    chol_precision = np.linalg.cholesky(precision)
+    tmp = np.linalg.solve(chol_precision, rhs)
+    post_mean = np.linalg.solve(chol_precision.T, tmp)
+    noise = np.linalg.solve(chol_precision.T, random_normal_p)
+    leaf_params_new = post_mean + noise
     return leaf_params_new
 
 @njit(cache=True)
@@ -200,9 +201,9 @@ class TreesPrior:
             leaf_params_new = _resample_leaf_vals_numba(
                 leaf_basis,
                 residuals,
-                eps_sigma2=bart_params.global_params["eps_sigma2"],
+                eps_sigma2=bart_params.global_params["eps_sigma2"][0],
                 f_sigma2 = self.f_sigma2,
-                random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1]),
+                random_normal_p = self.generator.standard_normal(size=leaf_basis.shape[1]).astype(np.float32),
                 temp=temp,
             )
         return leaf_params_new

@@ -45,12 +45,6 @@ def _run_sampler_block(
 def _refresh_tempered_state_for_sampler(sampler, state, temp):
     tree_ids = np.arange(state.n_trees, dtype=int)
 
-    state.global_params = sampler.global_prior.resample_global_params(
-        state,
-        data_y=sampler.data.y,
-        temp=temp,
-    )
-
     new_leaf_vals = sampler.tree_prior.resample_leaf_vals(
         state,
         data_y=sampler.data.y,
@@ -58,12 +52,6 @@ def _refresh_tempered_state_for_sampler(sampler, state, temp):
         temp=temp,
     )
     state.update_leaf_vals(tree_ids.tolist(), new_leaf_vals)
-
-    state.global_params = sampler.global_prior.resample_global_params(
-        state,
-        data_y=sampler.data.y,
-        temp=temp,
-    )
     return state
 
 
@@ -613,7 +601,7 @@ class ParallelTemperingBART(BART):
         max_temperature: float = 5.0,
         swap_interval: int = 50,
         swap_sweeps: Optional[int] = None,
-        post_swap_repair_steps: int = 3,
+        post_swap_repair_steps: int = 0,
         dirichlet_prior=False,
         quick_decay: bool = False,
         s_alpha: float = 1.0,
@@ -1014,14 +1002,6 @@ class ParallelTemperingBART(BART):
         temp = float(self.temperatures[chain_id])
         tree_ids = np.arange(state.n_trees, dtype=int)
 
-        # First adapt sigma2 to the swapped state at this chain's temperature.
-        state.global_params = sampler.global_prior.resample_global_params(
-            state,
-            data_y=self.data.y,
-            temp=temp,
-        )
-
-        # Then re-draw all leaf values using the updated sigma2.
         new_leaf_vals = sampler.tree_prior.resample_leaf_vals(
             state,
             data_y=self.data.y,
@@ -1029,13 +1009,6 @@ class ParallelTemperingBART(BART):
             temp=temp,
         )
         state.update_leaf_vals(tree_ids.tolist(), new_leaf_vals)
-
-        # Finally re-draw sigma2 conditioned on the refreshed leaf values.
-        state.global_params = sampler.global_prior.resample_global_params(
-            state,
-            data_y=self.data.y,
-            temp=temp,
-        )
 
     def _attempt_adjacent_swap(
         self,
