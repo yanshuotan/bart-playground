@@ -698,3 +698,8 @@ default_proposal_probs = {"grow" : 0.25,
                           "prune" : 0.25,
                           "change" : 0.4,
                           "swap" : 0.1}
+
+mtmh_proposal_probs = {"multi_grow" : 0.25,
+                       "multi_prune" : 0.25,
+                       "multi_change" : 0.4,
+                       "multi_swap" : 0.1}

@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from joblib import Parallel, delayed, effective_n_jobs
 
-from .samplers import Sampler, DefaultSampler, MultiSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs
+from .samplers import Sampler, DefaultSampler, MultiSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs, mtmh_proposal_probs
 from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
 from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor, Dataset
 
@@ -613,6 +613,8 @@ class ParallelTemperingBART(BART):
         print_swap_diagnostics: bool = False,
         n_jobs: Optional[int] = 1,
         local_move_backend: str = "multiprocessing-pipe",
+        sampler_kind: str = "default",
+        multi_tries: Optional[int] = None,
     ):
         if max_bins is None:
             max_bins = 100
@@ -654,14 +656,26 @@ class ParallelTemperingBART(BART):
             # In PT, each chain has a fixed temperature.
             chain_temp = temps[chain_idx]
             temp_schedule = TemperatureSchedule(_ConstantTemperature(chain_temp))
-            sampler = DefaultSampler(
-                prior=prior,
-                proposal_probs=proposal_probs,
-                generator=rng,
-                tol=tol,
-                temp_schedule=temp_schedule,
-                init_trees=init_trees,
-            )
+            # Allow using MultiSampler inside PT when requested.
+            if str(sampler_kind).lower() == "multi" or str(sampler_kind).lower() == "mtmh":
+                sampler = MultiSampler(
+                    prior=prior,
+                    proposal_probs=mtmh_proposal_probs,
+                    generator=rng,
+                    tol=tol,
+                    temp_schedule=temp_schedule,
+                    multi_tries=multi_tries if multi_tries is not None else 10,
+                    init_trees=init_trees,
+                )
+            else:
+                sampler = DefaultSampler(
+                    prior=prior,
+                    proposal_probs=proposal_probs,
+                    generator=rng,
+                    tol=tol,
+                    temp_schedule=temp_schedule,
+                    init_trees=init_trees,
+                )
             chain_samplers.append(sampler)
 
         # Keep BART base compatibility via the cold-chain sampler.
@@ -691,6 +705,8 @@ class ParallelTemperingBART(BART):
         self.swap_accept_counts = np.zeros(max(0, self.n_temperatures - 1), dtype=np.int64)
         self.chain_traces = [[] for _ in range(self.n_temperatures)] if self.store_chain_traces else None
         self.swap_diagnostics = []
+        self.sampler_kind = str(sampler_kind).lower()
+        self.multi_tries = None if multi_tries is None else int(multi_tries)
 
     def _effective_parallel_workers(self) -> int:
         if self.n_temperatures <= 1:
@@ -1257,6 +1273,8 @@ class ParallelTemperingBART(BART):
             "store_swap_diagnostics": self.store_swap_diagnostics,
             "print_swap_diagnostics": self.print_swap_diagnostics,
         }
+        base["sampler_kind"] = self.sampler_kind
+        base["multi_tries"] = self.multi_tries
         if self.swap_attempt_counts.size > 0:
             rates = np.divide(
                 self.swap_accept_counts,
@@ -1535,7 +1553,7 @@ class MultiBART(BART):
     def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, 
                  eps_nu: float=3, specification="linear", 
-                 proposal_probs=default_proposal_probs, tol=1, max_bins=100,
+                 proposal_probs=mtmh_proposal_probs, tol=1, max_bins=100,
                  random_state=42, temperature=1.0, multi_tries=10, dirichlet_prior=False, 
                  s_alpha: float = 1.0, fixed_eps_sigma2: Optional[float] = None,
                  quick_decay: bool = False, init_trees=None, init_sigma2=None):
@@ -1567,7 +1585,7 @@ class PipelineBART(BART):
     """
     def __init__(self, ndpost=1000, nskip=0, n_trees=200, tree_alpha: float=0.95, 
                  tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9, eps_nu: float=3, 
-                 specification="linear", multi_proposal_probs=default_proposal_probs, 
+                 specification="linear", multi_proposal_probs=mtmh_proposal_probs, 
                  proposal_probs=default_proposal_probs, tol=100, 
                  max_bins=100, random_state=42, temperature=1.0, multi_tries=10, dirichlet_prior=False, 
                  quick_decay: bool = False, init_trees=None):
