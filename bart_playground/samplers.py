@@ -9,6 +9,19 @@ from .moves import all_moves, Move, contrary_moves
 from .util import Dataset
 from .priors import  ComprehensivePrior, ProbitPrior, LogisticPrior
 
+
+def _resample_init_tree_leaf_vals(sampler, init_state: Parameters) -> Parameters:
+    """Jointly resample all seeded-tree leaves under the BART posterior."""
+    tree_ids = list(range(init_state.n_trees))
+    new_leaf_vals = sampler.tree_prior.resample_leaf_vals(
+        init_state,
+        data_y=sampler.data.y,
+        tree_ids=tree_ids,
+    )
+    init_state.update_leaf_vals(tree_ids, new_leaf_vals)
+    return init_state
+
+
 class TemperatureSchedule:
 
     def __init__(self, temp_schedule: Callable[[int], int] = lambda x: 1):
@@ -346,7 +359,10 @@ class DefaultSampler(Sampler):
             trees = [Tree.new(self.data.X) for _ in range(N)]
 
         global_params = self.global_prior.init_global_params(self.data)
-        return Parameters(trees, global_params)
+        init_state = Parameters(trees, global_params)
+        if self.init_trees is not None:
+            init_state = _resample_init_tree_leaf_vals(self, init_state)
+        return init_state
     
     def one_iter(self, current, temp, return_trace=False):
         """
@@ -508,6 +524,8 @@ class MultiSampler(Sampler):
             trees = [Tree.new(self.data.X) for _ in range(N)]
         global_params = self.global_prior.init_global_params(self.data)
         init_state = Parameters(trees, global_params)
+        if self.init_trees is not None:
+            init_state = _resample_init_tree_leaf_vals(self, init_state)
         return init_state
     
     def log_mh_ratio(self, move : Move, temp, data_y = None, marginalize : bool=False):
