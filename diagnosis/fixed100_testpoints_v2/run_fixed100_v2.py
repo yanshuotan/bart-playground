@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from ucimlrepo import fetch_ucirepo
 
-from experiment import run_fixed100_dataset
+from experiment_fixed100_v2 import run_fixed100_dataset
 
 
 DATASET_CONFIGS = {
