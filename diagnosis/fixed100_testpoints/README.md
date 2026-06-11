@@ -24,11 +24,17 @@ store/
   memory_log.csv
   fixed100_Abalone/
     preds/
+    pred_samples/
+    coverage/
     sigmas/
     rmses/
     leaves/
     depths/
+    trace_features/
+    trace_feature_columns/
     accepted_moves_logmh/
+    subsample_rmse/
+    subsample_crps/
     swap_accept_rates/
     subsample_X_test/
     subsample_y_test/

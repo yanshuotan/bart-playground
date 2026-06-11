@@ -266,9 +266,11 @@ def summarize_model_outputs(model, X_test_fixed, y_test_fixed, *, store_preds: b
         "subsample_rmse": root_mean_squared_error(y_test_fixed, np.mean(f_preds, axis=1)),
         "subsample_crps": float(np.mean(crps_from_samples(y_pred_samples, y_test_fixed))),
     }
-    swap_accept_rates = np.asarray(model.get_params().get("swap_accept_rates", []), dtype=float)
+    model_params = model.get_params()
+    swap_accept_rates = np.asarray(model_params.get("swap_accept_rates", []), dtype=float)
     if swap_accept_rates.size > 0:
         result["swap_accept_rates"] = swap_accept_rates
+        result["swap_temperatures"] = np.asarray(model_params.get("temperatures", []), dtype=float)
     if store_preds:
         lower = np.percentile(y_pred_samples, 2.5, axis=1)
         upper = np.percentile(y_pred_samples, 97.5, axis=1)
@@ -276,6 +278,120 @@ def summarize_model_outputs(model, X_test_fixed, y_test_fixed, *, store_preds: b
         result["pred_samples"] = np.asarray(y_pred_samples)
         result["coverage"] = np.asarray((y_test_fixed >= lower) & (y_test_fixed <= upper))
     return result
+
+
+def quick_ladder_search(
+    X,
+    y,
+    *,
+    n_trees,
+    tree_alpha,
+    tree_beta,
+    proposal_probs,
+    target_rate=0.4,
+    max_rounds=10,
+    ndpost=500,
+    nskip=500,
+    n_repeats=3,
+    random_state=123,
+    swap_interval=5,
+    post_swap_repair_steps=0,
+    initial_temperatures=(1.0, 3.0),
+    progress_print: bool = False,
+    progress_prefix: str = "",
+):
+    """Adaptive temperature-ladder search with repeated fits per round."""
+    temps = sorted({float(t) for t in initial_temperatures})
+    if not temps:
+        raise ValueError("initial_temperatures cannot be empty")
+    if temps[0] != 1.0:
+        temps = [1.0] + [t for t in temps if t != 1.0]
+
+    history = []
+    final_mean_rates = np.array([], dtype=float)
+
+    if progress_print:
+        print(
+            f"{progress_prefix}[LADDER] start: n_points={X.shape[0]}, rounds<={max_rounds}, "
+            f"repeats={n_repeats}, target_rate={target_rate}, init_temps={temps}",
+            flush=True,
+        )
+
+    for round_id in range(max_rounds):
+        round_rates = []
+
+        for rep in range(n_repeats):
+            model = ParallelTemperingBART(
+                ndpost=ndpost,
+                nskip=nskip,
+                n_trees=n_trees,
+                tree_alpha=tree_alpha,
+                tree_beta=tree_beta,
+                proposal_probs=proposal_probs,
+                random_state=random_state + 1000 * round_id + rep,
+                temperatures=temps,
+                swap_interval=swap_interval,
+                post_swap_repair_steps=post_swap_repair_steps,
+                store_chain_traces=False,
+                store_swap_diagnostics=False,
+                print_swap_diagnostics=False,
+            )
+            model.fit(X, y, quietly=True)
+            rates = np.asarray(model.get_params().get("swap_accept_rates", []), dtype=float)
+            if rates.size == len(temps) - 1:
+                round_rates.append(rates)
+            del model
+            gc.collect()
+
+        if round_rates:
+            mean_rates = np.mean(np.vstack(round_rates), axis=0)
+        else:
+            mean_rates = np.array([], dtype=float)
+
+        if progress_print:
+            rates_preview = np.round(mean_rates, 4).tolist() if mean_rates.size > 0 else []
+            print(
+                f"{progress_prefix}[LADDER] round {round_id + 1}/{max_rounds}: "
+                f"n_temps={len(temps)}, mean_rates={rates_preview}",
+                flush=True,
+            )
+
+        history.append(
+            {
+                "round": round_id,
+                "temperatures": [float(t) for t in temps],
+                "mean_swap_rates": mean_rates.tolist(),
+                "all_swap_rates": [r.tolist() for r in round_rates],
+            }
+        )
+
+        final_mean_rates = mean_rates
+        if mean_rates.size == 0 or np.all(mean_rates >= target_rate):
+            if progress_print:
+                print(
+                    f"{progress_prefix}[LADDER] stop: target reached or no valid rates. final_temps={temps}",
+                    flush=True,
+                )
+            break
+
+        new_temps = set(temps)
+        for i, rate in enumerate(mean_rates):
+            if rate < target_rate:
+                t_low = temps[i]
+                t_high = temps[i + 1]
+                new_temps.add(2.0 * t_low * t_high / (t_low + t_high))
+
+        updated_temps = sorted(new_temps)
+        if len(updated_temps) == len(temps):
+            if progress_print:
+                print(f"{progress_prefix}[LADDER] stop: no new temperature inserted.", flush=True)
+            break
+        temps = updated_temps
+
+    if progress_print:
+        print(f"{progress_prefix}[LADDER] done: final n_temps={len(temps)}", flush=True)
+
+    return [float(t) for t in temps], final_mean_rates.tolist(), history
 
 
 # ---------------------------------------------------------------------
@@ -301,7 +417,6 @@ def run_short_chain(
     swap_interval,
     post_swap_repair_steps,
     multi_tries,
-    swap_sigma: bool = True,
     store_preds=True,
 ):
     """Run the original four methods sequentially inside one chain worker.
@@ -339,7 +454,6 @@ def run_short_chain(
         store_chain_traces=False,
         store_swap_diagnostics=False,
         print_swap_diagnostics=False,
-        swap_sigma=swap_sigma,
     )
     model.fit(X_train, y_train)
     out["default_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
@@ -379,7 +493,6 @@ def run_short_chain(
         print_swap_diagnostics=False,
         sampler_kind="multi",
         multi_tries=multi_tries,
-        swap_sigma=swap_sigma,
     )
     model.fit(X_train, y_train)
     out["mtmh_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
@@ -398,7 +511,7 @@ def save_short_run(
     chain_results: list[dict[str, Any]],
     metadata: dict[str, Any],
 ):
-    for sub in ["preds", "pred_samples", "coverage", "sigmas", "rmses", "leaves", "depths", "trace_features", "trace_feature_columns", "accepted_moves_logmh", "subsample_rmse", "subsample_crps", "swap_accept_rates", "subsample_X_test", "subsample_y_test", "indices", "metadata"]:
+    for sub in ["preds", "pred_samples", "coverage", "sigmas", "rmses", "leaves", "depths", "trace_features", "trace_feature_columns", "accepted_moves_logmh", "subsample_rmse", "subsample_crps", "swap_accept_rates", "swap_temperatures", "subsample_X_test", "subsample_y_test", "indices", "metadata"]:
         (store_root / dataset_tag / sub).mkdir(parents=True, exist_ok=True)
 
     for method in METHODS_SHORT:
@@ -428,6 +541,10 @@ def save_short_run(
             _save_numeric_csv(
                 store_root / dataset_tag / "swap_accept_rates" / f"{dataset_tag}__run{run_id:03d}__{method}__swap_accept_rates.csv",
                 np.array([r[method].get("swap_accept_rates", []) for r in chain_results], dtype=float),
+            )
+            _save_numeric_csv(
+                store_root / dataset_tag / "swap_temperatures" / f"{dataset_tag}__run{run_id:03d}__{method}__swap_temperatures.csv",
+                np.array([r[method].get("swap_temperatures", []) for r in chain_results], dtype=float),
             )
         if "preds" in chain_results[0][method]:
             _save_numeric_csv(
@@ -634,6 +751,13 @@ def run_fixed100_dataset(
     tree_alpha: float = 0.95,
     tree_beta: float = 2.0,
     temperatures=(1.0, 2.0, 3.0, 5.0),
+    ladder_target_rate: float = 0.4,
+    ladder_max_rounds: int = 10,
+    ladder_ndpost: int = 500,
+    ladder_nskip: int = 500,
+    ladder_repeats: int = 3,
+    ladder_search_points: int | None = 1000,
+    ladder_random_state: int = 123,
     swap_interval: int = 50,
     post_swap_repair_steps: int = 0,
     multi_tries: int = 10,
@@ -641,7 +765,6 @@ def run_fixed100_dataset(
     proposal_probs_mtmh=None,
     store_preds: bool = True,
     progress_print: bool = True,
-    swap_sigma: bool = True,
     run_long: bool = True,
 ):
     if proposal_probs_default is None:
@@ -681,9 +804,14 @@ def run_fixed100_dataset(
             "long_ndpost": long_ndpost,
             "long_store_every": long_store_every,
             "temperatures": list(temperatures),
+            "ladder_target_rate": ladder_target_rate,
+            "ladder_max_rounds": ladder_max_rounds,
+            "ladder_ndpost": ladder_ndpost,
+            "ladder_nskip": ladder_nskip,
+            "ladder_repeats": ladder_repeats,
+            "ladder_search_points": ladder_search_points,
             "swap_interval": swap_interval,
             "multi_tries": multi_tries,
-            "swap_sigma": swap_sigma,
             "run_long": run_long,
         },
     )
@@ -696,6 +824,38 @@ def run_fixed100_dataset(
         y_test_fixed = split_info["y_test_fixed"]
         if progress_print:
             print(f"[{dataset_tag} RUN {run_id:03d}] fixed test n={X_test_fixed.shape[0]}, train n={X_train.shape[0]}", flush=True)
+
+        if ladder_search_points is not None and ladder_search_points < X_train.shape[0]:
+            rng = np.random.default_rng(split_info["train_seed"])
+            idx_search = rng.choice(X_train.shape[0], ladder_search_points, replace=False)
+            X_search = X_train[idx_search]
+            y_search = y_train[idx_search]
+        else:
+            X_search = X_train
+            y_search = y_train
+
+        run_temperatures, ladder_mean_rates, ladder_history = quick_ladder_search(
+            X_search,
+            y_search,
+            n_trees=n_trees,
+            tree_alpha=tree_alpha,
+            tree_beta=tree_beta,
+            proposal_probs=proposal_probs_default,
+            target_rate=ladder_target_rate,
+            max_rounds=ladder_max_rounds,
+            ndpost=ladder_ndpost,
+            nskip=ladder_nskip,
+            n_repeats=ladder_repeats,
+            random_state=ladder_random_state + 10000 * run_id,
+            swap_interval=swap_interval,
+            post_swap_repair_steps=post_swap_repair_steps,
+            initial_temperatures=temperatures,
+            progress_print=progress_print,
+            progress_prefix=f"[{dataset_tag} RUN {run_id:03d}] ",
+        )
+
+        if progress_print:
+            print(f"[{dataset_tag} RUN {run_id:03d}] ladder selected temps={np.round(run_temperatures, 4).tolist()}", flush=True)
             print(f"[{dataset_tag} RUN {run_id:03d}] short methods start: n_chains={n_chains}, n_jobs={n_jobs}", flush=True)
 
         short_results = Parallel(n_jobs=n_jobs, verbose=10)(
@@ -713,11 +873,10 @@ def run_fixed100_dataset(
                 tree_beta=tree_beta,
                 proposal_probs_default=proposal_probs_default,
                 proposal_probs_mtmh=proposal_probs_mtmh,
-                temperatures=temperatures,
+                temperatures=run_temperatures,
                 swap_interval=swap_interval,
                 post_swap_repair_steps=post_swap_repair_steps,
                 multi_tries=multi_tries,
-                swap_sigma=swap_sigma,
                 store_preds=store_preds,
             )
             for chain_id in range(n_chains)
@@ -737,6 +896,10 @@ def run_fixed100_dataset(
                 "n_chains": n_chains,
                 "n_jobs": n_jobs,
                 "methods": METHODS_SHORT,
+                "temperatures": run_temperatures,
+                "ladder_mean_rates": ladder_mean_rates,
+                "ladder_history": ladder_history,
+                "ladder_search_points": int(X_search.shape[0]),
             },
         )
         del short_results

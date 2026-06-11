@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 from ucimlrepo import fetch_ucirepo
 
-from experiment import run_fixed100_dataset
+from diagnosis.fixed100_testpoints.experiment_fixed100 import run_fixed100_dataset
 
 
 DATASET_CONFIGS = {
@@ -30,11 +30,38 @@ DATASET_CONFIGS = {
         "drop_columns": [],
         "target_kind": "targets",
     },
+    "friedman": {
+        "dataset_tag": "fixed100_Friedman",
+        "long_ndpost": 1_000_000,
+        "long_store_every": 100,
+        "n_samples": 2000,
+        "n_features": 10,
+        "noise_std": 1.0,
+        "seed": 42,
+    },
 }
 
 
-def load_uci_dataset(name: str):
+def load_dataset(name: str):
     cfg = DATASET_CONFIGS[name]
+
+    if name == "friedman":
+        rng = np.random.default_rng(int(cfg.get("seed", 42)))
+        n_samples = int(cfg.get("n_samples", 2000))
+        n_features = int(cfg.get("n_features", 10))
+        noise_std = float(cfg.get("noise_std", 1.0))
+
+        X = rng.uniform(0.0, 1.0, size=(n_samples, n_features))
+        eps = rng.normal(0.0, noise_std, size=n_samples)
+        y = (
+            10.0 * np.sin(np.pi * X[:, 0] * X[:, 1])
+            + 20.0 * (X[:, 2] - 0.5) ** 2
+            + 10.0 * X[:, 3]
+            + 5.0 * X[:, 4]
+            + eps
+        )
+        return X.astype(float), np.asarray(y).reshape(-1).astype(float)
+
     ds = fetch_ucirepo(id=cfg["uci_id"])
     features = ds.data.features.copy()
     for col in cfg.get("drop_columns", []):
@@ -82,7 +109,7 @@ def memory_logger(out_csv: Path, stop_event: threading.Event, interval_sec: int 
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fixed-100 test point benchmark for Abalone/Concrete.")
+    parser = argparse.ArgumentParser(description="Fixed-100 test point benchmark for Abalone/Concrete/Friedman.")
     parser.add_argument("--datasets", nargs="+", choices=sorted(DATASET_CONFIGS), default=["abalone", "concrete"])
     parser.add_argument("--n-runs", type=int, default=2)
     parser.add_argument("--n-chains", type=int, default=4)
@@ -97,10 +124,11 @@ def main():
     parser.add_argument("--short-nskip", type=int, default=0)
     parser.add_argument("--n-trees", type=int, default=100)
     parser.add_argument("--long-chunk-size", type=int, default=10000)
-    parser.add_argument("--temperatures", type=float, nargs="+", default=[1.0, 2.0, 3.0, 5.0, 7.0, 10.0])
+    parser.add_argument("--temperatures", type=float, nargs="+", default=[1.0, 1000000.0])
     parser.add_argument("--swap-interval", type=int, default=50)
     parser.add_argument("--multi-tries", type=int, default=10)
     parser.add_argument("--memory-log-interval", type=int, default=60)
+    parser.add_argument("--skip-long", action="store_true", help="Run only the four short-chain methods.")
     args = parser.parse_args()
 
     here = Path(__file__).resolve().parent
@@ -109,6 +137,7 @@ def main():
     print(f"Datasets: {args.datasets}", flush=True)
     print(f"n_runs={args.n_runs}, n_chains={args.n_chains}, n_jobs={args.n_jobs}", flush=True)
     print(f"fixed_test_points={args.n_fixed_test_points}, train_fraction={args.train_fraction}", flush=True)
+    print(f"skip_long={args.skip_long}", flush=True)
 
     stop_event = threading.Event()
     mem_thread = threading.Thread(
@@ -122,7 +151,7 @@ def main():
     try:
         for name in args.datasets:
             cfg = DATASET_CONFIGS[name]
-            X, y = load_uci_dataset(name)
+            X, y = load_dataset(name)
             print(f"\n=== DATASET {name} ===", flush=True)
             print(f"X={X.shape}, y={y.shape}", flush=True)
             print(
@@ -153,6 +182,7 @@ def main():
                 multi_tries=args.multi_tries,
                 store_preds=True,
                 progress_print=True,
+                run_long=not args.skip_long,
             )
     finally:
         stop_event.set()

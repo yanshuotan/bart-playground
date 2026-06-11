@@ -10,7 +10,6 @@ from joblib import Parallel, delayed, effective_n_jobs
 
 from .samplers import Sampler, DefaultSampler, MultiSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs, mtmh_proposal_probs
 from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
-from .params import Parameters
 from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor, Dataset
 
 
@@ -71,30 +70,6 @@ def _collapsed_loglik_for_sampler_state(sampler, state, temp: float) -> float:
         raise ValueError("tempered eps_sigma2 must be strictly positive.")
     n = int(sampler.data.y.shape[0])
     return collapsed - 0.5 * n * np.log(2.0 * np.pi * tempered_eps_sigma2)
-
-
-def _hybrid_collapsed_loglik_for_sampler_state(sampler, tree_state, sigma_state, temp: float) -> float:
-    hybrid_state = Parameters(
-        trees=tree_state.trees,
-        global_params=sigma_state.global_params.copy(),
-        cache=tree_state.cache.copy() if tree_state.cache is not None else None,
-    )
-    return _collapsed_loglik_for_sampler_state(sampler, hybrid_state, temp)
-
-
-def _replace_state_trees(state, trees) -> None:
-    state.trees = trees
-    state.n_trees = len(trees)
-    state.float_dtype = trees[0].float_dtype if trees else np.float32
-    state._forest_eval_cache = None
-    state.init_cache(None)
-
-
-def _swap_state_trees(states, i: int, j: int) -> None:
-    trees_i = states[i].trees
-    trees_j = states[j].trees
-    _replace_state_trees(states[i], trees_j)
-    _replace_state_trees(states[j], trees_i)
 
 
 def _pt_chain_worker(conn, sampler, state, temp):
@@ -646,7 +621,6 @@ class ParallelTemperingBART(BART):
         local_move_backend: str = "multiprocessing-pipe",
         sampler_kind: str = "default",
         multi_tries: Optional[int] = None,
-        swap_sigma: bool = True,
     ):
         if max_bins is None:
             max_bins = 100
@@ -722,7 +696,6 @@ class ParallelTemperingBART(BART):
         self.store_chain_traces = bool(store_chain_traces)
         self.store_swap_diagnostics = bool(store_swap_diagnostics)
         self.print_swap_diagnostics = bool(print_swap_diagnostics)
-        self.swap_sigma = bool(swap_sigma)
         if n_jobs is not None and int(n_jobs) == 0:
             raise ValueError("n_jobs cannot be 0.")
         self.n_jobs = None if n_jobs is None else int(n_jobs)
@@ -889,10 +862,7 @@ class ParallelTemperingBART(BART):
                 )
 
         if accepted:
-            if self.swap_sigma:
-                states[i], states[j] = states[j], states[i]
-            else:
-                _swap_state_trees(states, i, j)
+            states[i], states[j] = states[j], states[i]
             workers[i].set_state(states[i])
             workers[j].set_state(states[j])
             states[i] = workers[i].refresh()
@@ -970,10 +940,7 @@ class ParallelTemperingBART(BART):
             if accepted:
                 accepted_swap = True
                 accepted_pairs.append((i, j))
-                if self.swap_sigma:
-                    states[i], states[j] = states[j], states[i]
-                else:
-                    _swap_state_trees(states, i, j)
+                states[i], states[j] = states[j], states[i]
                 if count_for_stats:
                     self.swap_accept_counts[i] += 1
 
@@ -1036,16 +1003,7 @@ class ParallelTemperingBART(BART):
         loglik = float(-0.5 * (n * np.log(eps_sigma2) + rss / eps_sigma2))
         return loglik, rss, eps_sigma2
 
-    def _state_collapsed_loglik(self, state, temp: float, sigma_state=None) -> float:
-        if sigma_state is not None:
-            return float(
-                _hybrid_collapsed_loglik_for_sampler_state(
-                    self.sampler,
-                    tree_state=state,
-                    sigma_state=sigma_state,
-                    temp=temp,
-                )
-            )
+    def _state_collapsed_loglik(self, state, temp: float) -> float:
         collapsed = float(
             self.sampler.likelihood.trees_log_marginal_lkhd(
                 state,
@@ -1064,12 +1022,8 @@ class ParallelTemperingBART(BART):
     def _swap_collapsed_logliks(self, states, i: int, j: int, temp_a: float, temp_b: float):
         ll_aa = self._state_collapsed_loglik(states[i], temp_a)
         ll_bb = self._state_collapsed_loglik(states[j], temp_b)
-        if self.swap_sigma:
-            ll_ab = self._state_collapsed_loglik(states[j], temp_a)
-            ll_ba = self._state_collapsed_loglik(states[i], temp_b)
-        else:
-            ll_ab = self._state_collapsed_loglik(states[j], temp_a, sigma_state=states[i])
-            ll_ba = self._state_collapsed_loglik(states[i], temp_b, sigma_state=states[j])
+        ll_ab = self._state_collapsed_loglik(states[j], temp_a)
+        ll_ba = self._state_collapsed_loglik(states[i], temp_b)
         return ll_aa, ll_bb, ll_ab, ll_ba
 
     def _refresh_state_tempered_params(self, state, chain_id: int) -> None:
@@ -1139,10 +1093,7 @@ class ParallelTemperingBART(BART):
                 )
 
         if accepted:
-            if self.swap_sigma:
-                states[i], states[j] = states[j], states[i]
-            else:
-                _swap_state_trees(states, i, j)
+            states[i], states[j] = states[j], states[i]
             self._refresh_state_tempered_params(states[i], i)
             self._refresh_state_tempered_params(states[j], j)
             if count_for_stats:
@@ -1325,7 +1276,6 @@ class ParallelTemperingBART(BART):
             "swap_sweeps": self.swap_sweeps,
             "effective_swap_sweeps": self._swap_sweeps_per_interval(),
             "post_swap_repair_steps": self.post_swap_repair_steps,
-            "swap_sigma": self.swap_sigma,
             "n_jobs": self.n_jobs,
             "effective_parallel_workers": self._effective_parallel_workers(),
             "local_move_backend": self.local_move_backend,
