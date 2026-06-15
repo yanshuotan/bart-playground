@@ -417,6 +417,8 @@ def run_short_chain(
     swap_interval,
     post_swap_repair_steps,
     multi_tries,
+    dirichlet_prior: bool = False,
+    s_alpha: float = 1.0,
     store_preds=True,
 ):
     """Run the original four methods sequentially inside one chain worker.
@@ -433,6 +435,8 @@ def run_short_chain(
         tol=1,
         proposal_probs=proposal_probs_default,
         random_state=chain_seed,
+        dirichlet_prior=dirichlet_prior,
+        s_alpha=s_alpha,
     )
     model.fit(X_train, y_train)
     out["default"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
@@ -454,6 +458,8 @@ def run_short_chain(
         store_chain_traces=False,
         store_swap_diagnostics=False,
         print_swap_diagnostics=False,
+        dirichlet_prior=dirichlet_prior,
+        s_alpha=s_alpha,
     )
     model.fit(X_train, y_train)
     out["default_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
@@ -470,6 +476,8 @@ def run_short_chain(
         proposal_probs=proposal_probs_mtmh,
         random_state=chain_seed,
         multi_tries=multi_tries,
+        dirichlet_prior=dirichlet_prior,
+        s_alpha=s_alpha,
     )
     model.fit(X_train, y_train)
     out["mtmh"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
@@ -493,6 +501,8 @@ def run_short_chain(
         print_swap_diagnostics=False,
         sampler_kind="multi",
         multi_tries=multi_tries,
+        dirichlet_prior=dirichlet_prior,
+        s_alpha=s_alpha,
     )
     model.fit(X_train, y_train)
     out["mtmh_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
@@ -612,6 +622,8 @@ def run_long_default_chain_streaming(
     chunk_size,
     tmp_dir: str | Path,
     store_preds=True,
+    dirichlet_prior: bool = False,
+    s_alpha: float = 1.0,
 ):
     if ndpost % store_every != 0:
         raise ValueError("ndpost must be divisible by store_every")
@@ -634,6 +646,8 @@ def run_long_default_chain_streaming(
         tol=1,
         proposal_probs=proposal_probs_default,
         random_state=chain_seed,
+        dirichlet_prior=dirichlet_prior,
+        s_alpha=s_alpha,
     )
     model.fit(X_train, y_train)
 
@@ -766,6 +780,8 @@ def run_fixed100_dataset(
     store_preds: bool = True,
     progress_print: bool = True,
     run_long: bool = True,
+    dirichlet_prior: bool = False,
+    s_alpha: float = 1.0,
 ):
     if proposal_probs_default is None:
         proposal_probs_default = default_proposal_probs
@@ -813,6 +829,8 @@ def run_fixed100_dataset(
             "swap_interval": swap_interval,
             "multi_tries": multi_tries,
             "run_long": run_long,
+            "dirichlet_prior": dirichlet_prior,
+            "s_alpha": s_alpha,
         },
     )
 
@@ -877,6 +895,8 @@ def run_fixed100_dataset(
                 swap_interval=swap_interval,
                 post_swap_repair_steps=post_swap_repair_steps,
                 multi_tries=multi_tries,
+                dirichlet_prior=dirichlet_prior,
+                s_alpha=s_alpha,
                 store_preds=store_preds,
             )
             for chain_id in range(n_chains)
@@ -900,6 +920,8 @@ def run_fixed100_dataset(
                 "ladder_mean_rates": ladder_mean_rates,
                 "ladder_history": ladder_history,
                 "ladder_search_points": int(X_search.shape[0]),
+                "dirichlet_prior": dirichlet_prior,
+                "s_alpha": s_alpha,
             },
         )
         del short_results
@@ -934,6 +956,8 @@ def run_fixed100_dataset(
                 chunk_size=long_chunk_size,
                 tmp_dir=tmp_root,
                 store_preds=store_preds,
+                dirichlet_prior=dirichlet_prior,
+                s_alpha=s_alpha,
             )
             for chain_id in range(n_chains)
         )
@@ -953,6 +977,8 @@ def run_fixed100_dataset(
                 "long_chunk_size": long_chunk_size,
                 "n_chains": n_chains,
                 "n_jobs": n_jobs,
+                "dirichlet_prior": dirichlet_prior,
+                "s_alpha": s_alpha,
             },
             store_preds=store_preds,
         )
