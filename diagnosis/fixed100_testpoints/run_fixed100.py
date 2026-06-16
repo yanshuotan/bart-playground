@@ -34,8 +34,8 @@ DATASET_CONFIGS = {
     },
     "friedman": {
         "dataset_tag": "fixed100_Friedman",
-        "long_ndpost": 1_000_000,
-        "long_store_every": 100,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
         "n_samples": 2000,
         "n_features": 10,
         "noise": 1.0,
@@ -63,8 +63,8 @@ DATASET_CONFIGS = {
     },
     "friedman2": {
         "dataset_tag": "fixed100_Friedman2",
-        "long_ndpost": 1_000_000,
-        "long_store_every": 100,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
         "n_samples": 2000,
         "n_features": 10,
         "noise": 1.0,
@@ -181,7 +181,11 @@ def main():
     parser.add_argument("--multi-tries", type=int, default=10)
     parser.add_argument("--memory-log-interval", type=int, default=60)
     parser.add_argument("--skip-long", action="store_true", help="Run only the four short-chain methods.")
+    parser.add_argument("--skip-short", action="store_true", help="Run only default_long.")
     args = parser.parse_args()
+
+    if args.skip_long and args.skip_short:
+        parser.error("--skip-long and --skip-short cannot be used together.")
 
     here = Path(__file__).resolve().parent
     store_root = here / args.store_dir
@@ -189,7 +193,7 @@ def main():
     print(f"Datasets: {args.datasets}", flush=True)
     print(f"n_runs={args.n_runs}, n_chains={args.n_chains}, n_jobs={args.n_jobs}", flush=True)
     print(f"fixed_test_points={args.n_fixed_test_points}, train_fraction={args.train_fraction}", flush=True)
-    print(f"skip_long={args.skip_long}", flush=True)
+    print(f"skip_short={args.skip_short}, skip_long={args.skip_long}", flush=True)
 
     stop_event = threading.Event()
     mem_thread = threading.Thread(
@@ -234,6 +238,7 @@ def main():
                 multi_tries=args.multi_tries,
                 store_preds=True,
                 progress_print=True,
+                run_short=not args.skip_short,
                 run_long=not args.skip_long,
                 dirichlet_prior=cfg.get("dirichlet_prior", False),
                 s_alpha=float(cfg.get("s_alpha", 1.0)),

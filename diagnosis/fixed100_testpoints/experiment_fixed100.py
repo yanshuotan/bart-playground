@@ -779,10 +779,13 @@ def run_fixed100_dataset(
     proposal_probs_mtmh=None,
     store_preds: bool = True,
     progress_print: bool = True,
+    run_short: bool = True,
     run_long: bool = True,
     dirichlet_prior: bool = False,
     s_alpha: float = 1.0,
 ):
+    if not run_short and not run_long:
+        raise ValueError("At least one of run_short or run_long must be True.")
     if proposal_probs_default is None:
         proposal_probs_default = default_proposal_probs
     if proposal_probs_mtmh is None:
@@ -828,6 +831,7 @@ def run_fixed100_dataset(
             "ladder_search_points": ladder_search_points,
             "swap_interval": swap_interval,
             "multi_tries": multi_tries,
+            "run_short": run_short,
             "run_long": run_long,
             "dirichlet_prior": dirichlet_prior,
             "s_alpha": s_alpha,
@@ -843,89 +847,92 @@ def run_fixed100_dataset(
         if progress_print:
             print(f"[{dataset_tag} RUN {run_id:03d}] fixed test n={X_test_fixed.shape[0]}, train n={X_train.shape[0]}", flush=True)
 
-        if ladder_search_points is not None and ladder_search_points < X_train.shape[0]:
-            rng = np.random.default_rng(split_info["train_seed"])
-            idx_search = rng.choice(X_train.shape[0], ladder_search_points, replace=False)
-            X_search = X_train[idx_search]
-            y_search = y_train[idx_search]
-        else:
-            X_search = X_train
-            y_search = y_train
+        if run_short:
+            if ladder_search_points is not None and ladder_search_points < X_train.shape[0]:
+                rng = np.random.default_rng(split_info["train_seed"])
+                idx_search = rng.choice(X_train.shape[0], ladder_search_points, replace=False)
+                X_search = X_train[idx_search]
+                y_search = y_train[idx_search]
+            else:
+                X_search = X_train
+                y_search = y_train
 
-        run_temperatures, ladder_mean_rates, ladder_history = quick_ladder_search(
-            X_search,
-            y_search,
-            n_trees=n_trees,
-            tree_alpha=tree_alpha,
-            tree_beta=tree_beta,
-            proposal_probs=proposal_probs_default,
-            target_rate=ladder_target_rate,
-            max_rounds=ladder_max_rounds,
-            ndpost=ladder_ndpost,
-            nskip=ladder_nskip,
-            n_repeats=ladder_repeats,
-            random_state=ladder_random_state + 10000 * run_id,
-            swap_interval=swap_interval,
-            post_swap_repair_steps=post_swap_repair_steps,
-            initial_temperatures=temperatures,
-            progress_print=progress_print,
-            progress_prefix=f"[{dataset_tag} RUN {run_id:03d}] ",
-        )
-
-        if progress_print:
-            print(f"[{dataset_tag} RUN {run_id:03d}] ladder selected temps={np.round(run_temperatures, 4).tolist()}", flush=True)
-            print(f"[{dataset_tag} RUN {run_id:03d}] short methods start: n_chains={n_chains}, n_jobs={n_jobs}", flush=True)
-
-        short_results = Parallel(n_jobs=n_jobs, verbose=10)(
-            delayed(run_short_chain)(
-                chain_id=chain_id,
-                chain_seed=base_chain_seed + run_id * n_chains + chain_id,
-                X_train=X_train,
-                y_train=y_train,
-                X_test_fixed=X_test_fixed,
-                y_test_fixed=y_test_fixed,
-                ndpost=short_ndpost,
-                nskip=short_nskip,
+            run_temperatures, ladder_mean_rates, ladder_history = quick_ladder_search(
+                X_search,
+                y_search,
                 n_trees=n_trees,
                 tree_alpha=tree_alpha,
                 tree_beta=tree_beta,
-                proposal_probs_default=proposal_probs_default,
-                proposal_probs_mtmh=proposal_probs_mtmh,
-                temperatures=run_temperatures,
+                proposal_probs=proposal_probs_default,
+                target_rate=ladder_target_rate,
+                max_rounds=ladder_max_rounds,
+                ndpost=ladder_ndpost,
+                nskip=ladder_nskip,
+                n_repeats=ladder_repeats,
+                random_state=ladder_random_state + 10000 * run_id,
                 swap_interval=swap_interval,
                 post_swap_repair_steps=post_swap_repair_steps,
-                multi_tries=multi_tries,
-                dirichlet_prior=dirichlet_prior,
-                s_alpha=s_alpha,
-                store_preds=store_preds,
+                initial_temperatures=temperatures,
+                progress_print=progress_print,
+                progress_prefix=f"[{dataset_tag} RUN {run_id:03d}] ",
             )
-            for chain_id in range(n_chains)
-        )
-        save_short_run(
-            store_root=store_root,
-            dataset_tag=dataset_tag,
-            run_id=run_id,
-            split_info=split_info,
-            chain_results=short_results,
-            metadata={
-                "phase": "short_methods",
-                "run_id": run_id,
-                "train_seed": split_info["train_seed"],
-                "short_ndpost": short_ndpost,
-                "short_nskip": short_nskip,
-                "n_chains": n_chains,
-                "n_jobs": n_jobs,
-                "methods": METHODS_SHORT,
-                "temperatures": run_temperatures,
-                "ladder_mean_rates": ladder_mean_rates,
-                "ladder_history": ladder_history,
-                "ladder_search_points": int(X_search.shape[0]),
-                "dirichlet_prior": dirichlet_prior,
-                "s_alpha": s_alpha,
-            },
-        )
-        del short_results
-        gc.collect()
+
+            if progress_print:
+                print(f"[{dataset_tag} RUN {run_id:03d}] ladder selected temps={np.round(run_temperatures, 4).tolist()}", flush=True)
+                print(f"[{dataset_tag} RUN {run_id:03d}] short methods start: n_chains={n_chains}, n_jobs={n_jobs}", flush=True)
+
+            short_results = Parallel(n_jobs=n_jobs, verbose=10)(
+                delayed(run_short_chain)(
+                    chain_id=chain_id,
+                    chain_seed=base_chain_seed + run_id * n_chains + chain_id,
+                    X_train=X_train,
+                    y_train=y_train,
+                    X_test_fixed=X_test_fixed,
+                    y_test_fixed=y_test_fixed,
+                    ndpost=short_ndpost,
+                    nskip=short_nskip,
+                    n_trees=n_trees,
+                    tree_alpha=tree_alpha,
+                    tree_beta=tree_beta,
+                    proposal_probs_default=proposal_probs_default,
+                    proposal_probs_mtmh=proposal_probs_mtmh,
+                    temperatures=run_temperatures,
+                    swap_interval=swap_interval,
+                    post_swap_repair_steps=post_swap_repair_steps,
+                    multi_tries=multi_tries,
+                    dirichlet_prior=dirichlet_prior,
+                    s_alpha=s_alpha,
+                    store_preds=store_preds,
+                )
+                for chain_id in range(n_chains)
+            )
+            save_short_run(
+                store_root=store_root,
+                dataset_tag=dataset_tag,
+                run_id=run_id,
+                split_info=split_info,
+                chain_results=short_results,
+                metadata={
+                    "phase": "short_methods",
+                    "run_id": run_id,
+                    "train_seed": split_info["train_seed"],
+                    "short_ndpost": short_ndpost,
+                    "short_nskip": short_nskip,
+                    "n_chains": n_chains,
+                    "n_jobs": n_jobs,
+                    "methods": METHODS_SHORT,
+                    "temperatures": run_temperatures,
+                    "ladder_mean_rates": ladder_mean_rates,
+                    "ladder_history": ladder_history,
+                    "ladder_search_points": int(X_search.shape[0]),
+                    "dirichlet_prior": dirichlet_prior,
+                    "s_alpha": s_alpha,
+                },
+            )
+            del short_results
+            gc.collect()
+        elif progress_print:
+            print(f"[{dataset_tag} RUN {run_id:03d}] skip short methods", flush=True)
 
         if not run_long:
             if progress_print:
