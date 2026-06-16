@@ -65,11 +65,8 @@ def _collapsed_loglik_for_sampler_state(sampler, state, temp: float) -> float:
         )
     )
     eps_sigma2 = float(state.global_params["eps_sigma2"][0])
-    tempered_eps_sigma2 = float(temp) * eps_sigma2
-    if tempered_eps_sigma2 <= 0.0:
-        raise ValueError("tempered eps_sigma2 must be strictly positive.")
     n = int(sampler.data.y.shape[0])
-    return collapsed - 0.5 * n * np.log(2.0 * np.pi * tempered_eps_sigma2)
+    return collapsed - 0.5 * n * np.log(2.0 * np.pi * eps_sigma2) / float(temp)
 
 
 def _pt_chain_worker(conn, sampler, state, temp):
@@ -1013,11 +1010,8 @@ class ParallelTemperingBART(BART):
             )
         )
         eps_sigma2 = float(state.global_params["eps_sigma2"][0])
-        tempered_eps_sigma2 = float(temp) * eps_sigma2
-        if tempered_eps_sigma2 <= 0.0:
-            raise ValueError("tempered eps_sigma2 must be strictly positive.")
         n = int(self.data.y.shape[0])
-        return collapsed - 0.5 * n * np.log(2.0 * np.pi * tempered_eps_sigma2)
+        return collapsed - 0.5 * n * np.log(2.0 * np.pi * eps_sigma2) / float(temp)
 
     def _swap_collapsed_logliks(self, states, i: int, j: int, temp_a: float, temp_b: float):
         ll_aa = self._state_collapsed_loglik(states[i], temp_a)

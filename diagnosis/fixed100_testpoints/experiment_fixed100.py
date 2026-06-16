@@ -605,6 +605,23 @@ def summarize_thinned_default(model, X_test_fixed, y_test_fixed, *, store_preds:
     return out
 
 
+def _cleanup_sampler_after_long_chunk(model, *, thinned, last_state):
+    """Drop per-chunk sampler artifacts; keep last_state MCMC-ready."""
+    for state in thinned:
+        if state is last_state:
+            continue
+        state._forest_eval_cache = None
+        state.clear_cache()
+
+    last_state._forest_eval_cache = None
+
+    sampler = model.sampler
+    sampler.trace = []
+    sampler.accepted_moves_logmh.clear()
+    sampler.moves_str_cache = None
+    sampler.moves_cache_iterator = None
+
+
 def run_long_default_chain_streaming(
     *,
     chain_id,
@@ -678,6 +695,7 @@ def run_long_default_chain_streaming(
             _append_numeric_rows(preds_file, np.asarray(chunk_result["preds"]).T)
 
         last_state = chunk_trace[-1]
+        _cleanup_sampler_after_long_chunk(model, thinned=thinned, last_state=last_state)
         model.trace = [last_state]
         del chunk_trace, thinned, chunk_result
         gc.collect()
