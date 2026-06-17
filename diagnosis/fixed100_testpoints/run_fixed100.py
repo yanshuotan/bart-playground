@@ -14,6 +14,10 @@ from bart_playground.DataGenerator import DataGenerator
 
 from experiment_fixed100 import run_fixed100_dataset
 
+GLOBAL_FIXED_TEST_SEED = 42
+GLOBAL_BASE_TRAIN_SEED = 2026
+GLOBAL_BASE_CHAIN_SEED = 2024
+
 
 DATASET_CONFIGS = {
     "abalone": {
@@ -22,7 +26,7 @@ DATASET_CONFIGS = {
         "long_ndpost": 1_000_000,
         "long_store_every": 100,
         "drop_columns": ["Sex"],
-        "target_kind": "targets",
+        "target_column": None,
     },
     "concrete": {
         "dataset_tag": "fixed100_Concrete",
@@ -30,7 +34,7 @@ DATASET_CONFIGS = {
         "long_ndpost": 10_000_000,
         "long_store_every": 1000,
         "drop_columns": [],
-        "target_kind": "targets",
+        "target_column": None,
     },
     "friedman": {
         "dataset_tag": "fixed100_Friedman",
@@ -79,6 +83,41 @@ DATASET_CONFIGS = {
         "noise": 1.0,
         "seed": 42,
     },
+
+    "ccpp": {
+        "dataset_tag": "fixed100_CCPP",
+        "uci_id": 294,
+        "long_ndpost": 1_000_000,
+        "long_store_every": 100,
+        "drop_columns": [],
+        "target_column": None,
+    },
+
+    "parkinsons": {
+        "dataset_tag": "fixed100_ParkinsonsTelemonitoring",
+        "uci_id": 189,
+        "long_ndpost": 1_000_000,
+        "long_store_every": 100,
+        "drop_columns": ["subject#"],
+        "target_column": None,
+    },
+
+    "seoul_bike": {
+        "dataset_tag": "fixed100_SeoulBike",
+        "uci_id": 560,
+        "long_ndpost": 1_000_000,
+        "long_store_every": 100,
+        "drop_columns": ["Date"],
+        "target_column": None,
+    },
+
+    "calhousing": {
+        "dataset_tag": "fixed100_CalHousing_subsample5000",
+        "subsample_n": 5000,
+        "subsample_seed": 42,
+        "long_ndpost": 1_000_000,
+        "long_store_every": 100,
+    },
 }
 
 
@@ -112,13 +151,38 @@ def load_dataset(name: str):
     if name in GENERATOR_SCENARIOS:
         return _load_generator_dataset(cfg, GENERATOR_SCENARIOS[name])
 
+    if name == "calhousing":
+        from sklearn.datasets import fetch_california_housing
+
+        X, y = fetch_california_housing(return_X_y=True)
+        rng = np.random.default_rng(cfg["subsample_seed"])
+        idx = rng.choice(len(X), size=cfg["subsample_n"], replace=False)
+        X = X[idx].astype(float)
+        y = np.asarray(y[idx]).reshape(-1).astype(float)
+        return X, y
+
     ds = fetch_ucirepo(id=cfg["uci_id"])
     features = ds.data.features.copy()
     for col in cfg.get("drop_columns", []):
         if col in features.columns:
             features = features.drop(columns=[col])
     X = features.values.astype(float)
-    y = np.asarray(ds.data.targets).reshape(-1).astype(float)
+
+    if cfg.get("target_column") is not None and cfg["target_column"] in features.columns:
+        y = np.asarray(features[cfg["target_column"]]).reshape(-1)
+        X = np.asarray(features.drop(columns=[cfg["target_column"]])).astype(float)
+    else:
+        y = np.asarray(ds.data.targets).reshape(-1)
+
+    if y.dtype == object:
+        unique_values = set(str(v).strip().lower() for v in np.unique(y))
+        if unique_values <= {"yes", "no"}:
+            y = np.asarray([1.0 if str(v).strip().lower() == "yes" else 0.0 for v in y])
+        else:
+            y = y.astype(float)
+    else:
+        y = y.astype(float)
+
     return X, y
 
 
@@ -169,9 +233,9 @@ def main():
     parser.add_argument("--store-dir", type=str, default="store")
     parser.add_argument("--n-fixed-test-points", type=int, default=100)
     parser.add_argument("--train-fraction", type=float, default=0.75)
-    parser.add_argument("--fixed-test-seed", type=int, default=42)
-    parser.add_argument("--base-train-seed", type=int, default=2026)
-    parser.add_argument("--base-chain-seed", type=int, default=2024)
+    parser.add_argument("--fixed-test-seed", type=int, default=GLOBAL_FIXED_TEST_SEED)
+    parser.add_argument("--base-train-seed", type=int, default=GLOBAL_BASE_TRAIN_SEED)
+    parser.add_argument("--base-chain-seed", type=int, default=GLOBAL_BASE_CHAIN_SEED)
     parser.add_argument("--short-ndpost", type=int, default=2000)
     parser.add_argument("--short-nskip", type=int, default=0)
     parser.add_argument("--n-trees", type=int, default=100)

@@ -14,6 +14,10 @@ from sklearn.metrics import root_mean_squared_error
 from bart_playground import DefaultBART, MultiBART, ParallelTemperingBART
 from bart_playground.samplers import default_proposal_probs, mtmh_proposal_probs
 
+GLOBAL_FIXED_TEST_SEED = 42
+GLOBAL_BASE_TRAIN_SEED = 2026
+GLOBAL_BASE_CHAIN_SEED = 2024
+
 
 METHODS_SHORT = ["default", "default_pt", "mtmh", "mtmh_pt"]
 METHODS_ALL = ["default", "default_pt", "mtmh", "mtmh_pt", "default_long"]
@@ -777,9 +781,9 @@ def run_fixed100_dataset(
     long_chunk_size: int = 10_000,
     n_fixed_test_points: int = 100,
     train_fraction: float = 0.75,
-    fixed_test_seed: int = 42,
-    base_train_seed: int = 2026,
-    base_chain_seed: int = 2024,
+    fixed_test_seed: int = GLOBAL_FIXED_TEST_SEED,
+    base_train_seed: int = GLOBAL_BASE_TRAIN_SEED,
+    base_chain_seed: int = GLOBAL_BASE_CHAIN_SEED,
     tree_alpha: float = 0.95,
     tree_beta: float = 2.0,
     temperatures=(1.0, 2.0, 3.0, 5.0),
@@ -820,8 +824,8 @@ def run_fixed100_dataset(
         n_runs=n_runs,
         n_fixed_test_points=n_fixed_test_points,
         train_fraction=train_fraction,
-        fixed_test_seed=fixed_test_seed,
-        base_train_seed=base_train_seed,
+        fixed_test_seed=GLOBAL_FIXED_TEST_SEED,
+        base_train_seed=GLOBAL_BASE_TRAIN_SEED,
     )
 
     _write_key_value_csv(
@@ -835,8 +839,8 @@ def run_fixed100_dataset(
             "n_jobs": n_jobs,
             "n_fixed_test_points": n_fixed_test_points,
             "train_fraction": train_fraction,
-            "fixed_test_seed": fixed_test_seed,
-            "base_train_seed": base_train_seed,
+            "fixed_test_seed": GLOBAL_FIXED_TEST_SEED,
+            "base_train_seed": GLOBAL_BASE_TRAIN_SEED,
             "short_ndpost": short_ndpost,
             "long_ndpost": long_ndpost,
             "long_store_every": long_store_every,
@@ -902,7 +906,7 @@ def run_fixed100_dataset(
             short_results = Parallel(n_jobs=n_jobs, verbose=10)(
                 delayed(run_short_chain)(
                     chain_id=chain_id,
-                    chain_seed=base_chain_seed + run_id * n_chains + chain_id,
+                    chain_seed=base_chain_seed + run_id * 1000 + chain_id,
                     X_train=X_train,
                     y_train=y_train,
                     X_test_fixed=X_test_fixed,
@@ -967,7 +971,7 @@ def run_fixed100_dataset(
         long_results = Parallel(n_jobs=n_jobs, verbose=10)(
             delayed(run_long_default_chain_streaming)(
                 chain_id=chain_id,
-                chain_seed=base_chain_seed + 100000 + run_id * n_chains + chain_id,
+                chain_seed=base_chain_seed + 100000 + run_id * 1000 + chain_id,
                 run_id=run_id,
                 X_train=X_train,
                 y_train=y_train,
