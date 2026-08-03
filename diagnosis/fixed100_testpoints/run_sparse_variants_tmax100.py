@@ -2,7 +2,7 @@
 """Run the controlled sparse variants through the existing short-only pipeline.
 
 This file deliberately has no long-chain option.  It imports the already-tested
-Tmax100 harmonic ladder factory from ``run_fixed100_tmax100_search_v3.py`` and
+Tmax100 harmonic ladder factory from ``run_fixed100_tmax100_search_v4_short10k.py`` and
 the live output pipeline from ``experiment_fixed100.py``.
 """
 
@@ -25,7 +25,7 @@ from run_fixed100 import (
     _load_generator_dataset,
     load_dataset,
 )
-from run_fixed100_tmax100_search_v3 import make_capped_harmonic_ladder_search
+from run_fixed100_tmax100_search_v4_short10k import make_capped_harmonic_ladder_search
 from sparse_variants import SPECS, generate_sparse_variant, smoke_check
 
 
