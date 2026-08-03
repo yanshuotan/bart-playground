@@ -191,6 +191,26 @@ def crps_from_samples(samples, y_true):
     return term1 - term2
 
 
+def standard_r2(y_true, y_pred) -> tuple[float, float, float]:
+    """Return standard held-out R2 together with its SSE and SST.
+
+    R2 = 1 - sum((y - y_hat)^2) / sum((y - mean(y))^2).
+    The explicit implementation makes the saved metric auditable and matches
+    sklearn's finite-value convention for a constant target.
+    """
+    y_true = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
+    if y_true.shape != y_pred.shape:
+        raise ValueError(f"R2 shape mismatch: y_true={y_true.shape}, y_pred={y_pred.shape}")
+    sse = float(np.sum((y_true - y_pred) ** 2))
+    sst = float(np.sum((y_true - np.mean(y_true)) ** 2))
+    if sst == 0.0:
+        r2 = 1.0 if sse == 0.0 else 0.0
+    else:
+        r2 = 1.0 - sse / sst
+    return float(r2), sse, sst
+
+
 def _posterior_predict_aligned(model, X, *, backtransform=True):
     """Posterior predictive samples aligned with model.range_post.
 
@@ -259,6 +279,10 @@ def summarize_model_outputs(model, X_test_fixed, y_test_fixed, *, store_preds: b
 
     trace_features, trace_feature_columns = _trace_feature_matrix(traces, rmses, leaves, depths, X_test_fixed)
 
+    posterior_mean = np.mean(f_preds, axis=1)
+    subsample_r2, subsample_r2_sse, subsample_r2_sst = standard_r2(
+        y_test_fixed, posterior_mean
+    )
     result = {
         "sigmas": sigmas,
         "rmses": rmses,
@@ -267,9 +291,32 @@ def summarize_model_outputs(model, X_test_fixed, y_test_fixed, *, store_preds: b
         "trace_features": trace_features,
         "trace_feature_columns": trace_feature_columns,
         "accepted_moves_logmh": accepted_moves,
-        "subsample_rmse": root_mean_squared_error(y_test_fixed, np.mean(f_preds, axis=1)),
+        "subsample_rmse": root_mean_squared_error(y_test_fixed, posterior_mean),
+        "subsample_r2": subsample_r2,
+        "subsample_r2_sse": subsample_r2_sse,
+        "subsample_r2_sst": subsample_r2_sst,
         "subsample_crps": float(np.mean(crps_from_samples(y_pred_samples, y_test_fixed))),
     }
+    # Preserve posterior Dirichlet splitting weights for short-chain ACF and
+    # entropy-ACF diagnostics.  One row corresponds to the same posterior draw
+    # as the matching column in f_preds.
+    if traces and "s" in traces[0].global_params:
+        splitting_weights = np.stack(
+            [
+                np.asarray(trace.global_params["s"], dtype=float).reshape(-1)
+                for trace in traces
+            ],
+            axis=0,
+        )
+        if not np.all(np.isfinite(splitting_weights)):
+            raise ValueError("Non-finite Dirichlet splitting weights encountered")
+        if np.any(splitting_weights < 0):
+            raise ValueError("Negative Dirichlet splitting weights encountered")
+        if not np.allclose(
+            splitting_weights.sum(axis=1), 1.0, rtol=1e-6, atol=1e-8
+        ):
+            raise ValueError("Dirichlet splitting weights do not sum to one")
+        result["splitting_weights"] = splitting_weights
     model_params = model.get_params()
     swap_accept_rates = np.asarray(model_params.get("swap_accept_rates", []), dtype=float)
     if swap_accept_rates.size > 0:
@@ -301,6 +348,8 @@ def quick_ladder_search(
     swap_interval=5,
     post_swap_repair_steps=0,
     initial_temperatures=(1.0, 3.0),
+    dirichlet_prior: bool = False,
+    s_alpha: float = 1.0,
     progress_print: bool = False,
     progress_prefix: str = "",
 ):
@@ -339,6 +388,8 @@ def quick_ladder_search(
                 store_chain_traces=False,
                 store_swap_diagnostics=False,
                 print_swap_diagnostics=False,
+                dirichlet_prior=dirichlet_prior,
+                s_alpha=s_alpha,
             )
             model.fit(X, y, quietly=True)
             rates = np.asarray(model.get_params().get("swap_accept_rates", []), dtype=float)
@@ -525,7 +576,7 @@ def save_short_run(
     chain_results: list[dict[str, Any]],
     metadata: dict[str, Any],
 ):
-    for sub in ["preds", "pred_samples", "coverage", "sigmas", "rmses", "leaves", "depths", "trace_features", "trace_feature_columns", "accepted_moves_logmh", "subsample_rmse", "subsample_crps", "swap_accept_rates", "swap_temperatures", "subsample_X_test", "subsample_y_test", "indices", "metadata"]:
+    for sub in ["preds", "pred_samples", "coverage", "sigmas", "rmses", "leaves", "depths", "splitting_weights", "trace_features", "trace_feature_columns", "accepted_moves_logmh", "subsample_rmse", "subsample_r2", "subsample_r2_sse", "subsample_r2_sst", "subsample_r2_pooled", "subsample_crps", "swap_accept_rates", "swap_temperatures", "subsample_X_test", "subsample_y_test", "indices", "metadata"]:
         (store_root / dataset_tag / sub).mkdir(parents=True, exist_ok=True)
 
     for method in METHODS_SHORT:
@@ -535,10 +586,20 @@ def save_short_run(
             "leaves": np.array([r[method]["leaves"] for r in chain_results]),
             "depths": np.array([r[method]["depths"] for r in chain_results]),
             "subsample_rmse": np.array([r[method]["subsample_rmse"] for r in chain_results]),
+            "subsample_r2": np.array([r[method]["subsample_r2"] for r in chain_results]),
+            "subsample_r2_sse": np.array([r[method]["subsample_r2_sse"] for r in chain_results]),
+            "subsample_r2_sst": np.array([r[method]["subsample_r2_sst"] for r in chain_results]),
             "subsample_crps": np.array([r[method]["subsample_crps"] for r in chain_results]),
         }
         for name, arr in arrays.items():
             _save_numeric_csv(store_root / dataset_tag / name / f"{dataset_tag}__run{run_id:03d}__{method}__{name}.csv", arr)
+        if "splitting_weights" in chain_results[0][method]:
+            _save_numeric_csv(
+                store_root / dataset_tag / "splitting_weights" / f"{dataset_tag}__run{run_id:03d}__{method}__splitting_weights.csv",
+                np.array(
+                    [r[method]["splitting_weights"] for r in chain_results]
+                ),
+            )
         _save_numeric_csv(
             store_root / dataset_tag / "trace_features" / f"{dataset_tag}__run{run_id:03d}__{method}__trace_features.csv",
             np.array([r[method]["trace_features"] for r in chain_results]),
@@ -561,9 +622,24 @@ def save_short_run(
                 np.array([r[method].get("swap_temperatures", []) for r in chain_results], dtype=float),
             )
         if "preds" in chain_results[0][method]:
+            preds_all_chains = np.array([r[method]["preds"] for r in chain_results])
             _save_numeric_csv(
                 store_root / dataset_tag / "preds" / f"{dataset_tag}__run{run_id:03d}__{method}__preds.csv",
-                np.array([r[method]["preds"] for r in chain_results]),
+                preds_all_chains,
+            )
+            pooled_mean = np.mean(preds_all_chains, axis=(0, 2))
+            pooled_r2, pooled_sse, pooled_sst = standard_r2(
+                split_info["y_test_fixed"], pooled_mean
+            )
+            _write_key_value_csv(
+                store_root / dataset_tag / "subsample_r2_pooled" / f"{dataset_tag}__run{run_id:03d}__{method}__subsample_r2_pooled.csv",
+                {
+                    "r2": pooled_r2,
+                    "sse": pooled_sse,
+                    "sst": pooled_sst,
+                    "n_test": int(np.asarray(split_info["y_test_fixed"]).size),
+                    "prediction": "mean posterior f across all chains and retained draws",
+                },
             )
             if "pred_samples" in chain_results[0][method]:
                 _save_numeric_csv(
@@ -604,6 +680,27 @@ def summarize_thinned_default(model, X_test_fixed, y_test_fixed, *, store_preds:
     sigmas = np.array([trace.global_params["eps_sigma2"] for trace in model.trace])
     rmses = np.array([root_mean_squared_error(y_test_fixed, preds[:, k]) for k in range(preds.shape[1])])
     out = {"sigmas": sigmas, "rmses": rmses}
+
+    # Save the Dirichlet posterior splitting weights for every retained draw.
+    # Shape within one streamed chunk: (n_retained_draws, n_features).
+    if model.trace and "s" in model.trace[0].global_params:
+        splitting_weights = np.stack(
+            [
+                np.asarray(trace.global_params["s"], dtype=float).reshape(-1)
+                for trace in model.trace
+            ],
+            axis=0,
+        )
+        if not np.all(np.isfinite(splitting_weights)):
+            raise ValueError("Non-finite Dirichlet splitting weights encountered")
+        if np.any(splitting_weights < 0):
+            raise ValueError("Negative Dirichlet splitting weights encountered")
+        if not np.allclose(
+            splitting_weights.sum(axis=1), 1.0, rtol=1e-6, atol=1e-8
+        ):
+            raise ValueError("Dirichlet splitting weights do not sum to one")
+        out["splitting_weights"] = splitting_weights
+
     if store_preds:
         out["preds"] = np.asarray(preds)
     return out
@@ -658,6 +755,7 @@ def run_long_default_chain_streaming(
     sigmas_file = chain_dir / "sigmas_rows.csv"
     rmses_file = chain_dir / "rmses_rows.csv"
     preds_file = chain_dir / "preds_rows.csv"
+    splitting_weights_file = chain_dir / "splitting_weights_rows.csv"
 
     first_chunk = min(chunk_size, ndpost)
     model = DefaultBART(
@@ -695,6 +793,11 @@ def run_long_default_chain_streaming(
         chunk_result = summarize_thinned_default(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
         _append_numeric_rows(sigmas_file, np.asarray(chunk_result["sigmas"]).reshape(-1, 1))
         _append_numeric_rows(rmses_file, np.asarray(chunk_result["rmses"]).reshape(-1, 1))
+        if "splitting_weights" in chunk_result:
+            _append_numeric_rows(
+                splitting_weights_file,
+                np.asarray(chunk_result["splitting_weights"]),
+            )
         if store_preds:
             _append_numeric_rows(preds_file, np.asarray(chunk_result["preds"]).T)
 
@@ -726,17 +829,27 @@ def assemble_long_default(
     metadata: dict[str, Any],
     store_preds=True,
 ):
-    for sub in ["preds", "sigmas", "rmses", "metadata"]:
+    for sub in ["preds", "sigmas", "rmses", "splitting_weights", "metadata"]:
         (store_root / dataset_tag / sub).mkdir(parents=True, exist_ok=True)
     sigmas_by_chain = []
     rmses_by_chain = []
     preds_by_chain = []
+    splitting_weights_by_chain = []
     for cr in chain_results:
         chain_dir = Path(cr["tmp_dir"])
         sigmas_rows = _load_2d_or_empty(chain_dir / "sigmas_rows.csv", 1)
         rmses_rows = _load_2d_or_empty(chain_dir / "rmses_rows.csv", 1)
         sigmas_by_chain.append(sigmas_rows.reshape(-1, 1))
         rmses_by_chain.append(rmses_rows.reshape(-1))
+
+        splitting_weights_file = chain_dir / "splitting_weights_rows.csv"
+        if splitting_weights_file.exists():
+            n_features = int(split_info["X_train"].shape[1])
+            splitting_weights_rows = _load_2d_or_empty(
+                splitting_weights_file, n_features
+            )
+            splitting_weights_by_chain.append(splitting_weights_rows)
+
         if store_preds:
             preds_rows = _load_2d_or_empty(chain_dir / "preds_rows.csv", split_info["X_test_fixed"].shape[0])
             preds_by_chain.append(preds_rows.T)
@@ -751,6 +864,27 @@ def assemble_long_default(
         metadata = dict(metadata)
         metadata["default_long_preds_shape"] = str(preds.shape)
     metadata = dict(metadata)
+
+    if splitting_weights_by_chain:
+        if len(splitting_weights_by_chain) != len(chain_results):
+            raise RuntimeError(
+                "Splitting weights were saved for only some long chains"
+            )
+        splitting_weights = np.asarray(splitting_weights_by_chain)
+        _save_numeric_csv(
+            store_root
+            / dataset_tag
+            / "splitting_weights"
+            / f"{dataset_tag}__run{run_id:03d}__default_long__splitting_weights.csv",
+            splitting_weights,
+        )
+        metadata["default_long_splitting_weights_shape"] = str(
+            splitting_weights.shape
+        )
+        metadata["splitting_weights_axes"] = (
+            "chain,retained_draw,feature"
+        )
+
     metadata["default_long_sigmas_shape"] = str(sigmas.shape)
     metadata["default_long_rmses_shape"] = str(rmses.shape)
     _write_key_value_csv(store_root / dataset_tag / "metadata" / f"{dataset_tag}__run{run_id:03d}__default_long_metadata.csv", metadata)
@@ -824,8 +958,8 @@ def run_fixed100_dataset(
         n_runs=n_runs,
         n_fixed_test_points=n_fixed_test_points,
         train_fraction=train_fraction,
-        fixed_test_seed=GLOBAL_FIXED_TEST_SEED,
-        base_train_seed=GLOBAL_BASE_TRAIN_SEED,
+        fixed_test_seed=fixed_test_seed,
+        base_train_seed=base_train_seed,
     )
 
     _write_key_value_csv(
@@ -839,8 +973,9 @@ def run_fixed100_dataset(
             "n_jobs": n_jobs,
             "n_fixed_test_points": n_fixed_test_points,
             "train_fraction": train_fraction,
-            "fixed_test_seed": GLOBAL_FIXED_TEST_SEED,
-            "base_train_seed": GLOBAL_BASE_TRAIN_SEED,
+            "fixed_test_seed": fixed_test_seed,
+            "base_train_seed": base_train_seed,
+            "base_chain_seed": base_chain_seed,
             "short_ndpost": short_ndpost,
             "long_ndpost": long_ndpost,
             "long_store_every": long_store_every,
@@ -895,6 +1030,8 @@ def run_fixed100_dataset(
                 swap_interval=swap_interval,
                 post_swap_repair_steps=post_swap_repair_steps,
                 initial_temperatures=temperatures,
+                dirichlet_prior=dirichlet_prior,
+                s_alpha=s_alpha,
                 progress_print=progress_print,
                 progress_prefix=f"[{dataset_tag} RUN {run_id:03d}] ",
             )

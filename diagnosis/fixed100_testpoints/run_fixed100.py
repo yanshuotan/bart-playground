@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from ucimlrepo import fetch_ucirepo
 
 from bart_playground.DataGenerator import DataGenerator
@@ -90,6 +91,7 @@ DATASET_CONFIGS = {
         "long_ndpost": 1_000_000,
         "long_store_every": 100,
         "drop_columns": [],
+        "categorical_columns": [],
         "target_column": None,
     },
 
@@ -108,7 +110,8 @@ DATASET_CONFIGS = {
         "long_ndpost": 1_000_000,
         "long_store_every": 100,
         "drop_columns": ["Date"],
-        "target_column": None,
+        "categorical_columns": "auto",
+        "target_column": "Rented Bike Count",
     },
 
     "calhousing": {
@@ -145,6 +148,77 @@ def _load_generator_dataset(cfg: dict, scenario: str):
     return X.astype(float), np.asarray(y).reshape(-1).astype(float)
 
 
+def _safe_column_names(df) -> list[str]:
+    return [str(c) for c in getattr(df, "columns", [])]
+
+
+def _select_target_and_features(features, targets, *, target_column=None):
+    """Select a numeric target whether UCI stores it in targets or features."""
+    X_df = features.copy()
+    targets_df = (
+        targets.copy() if hasattr(targets, "copy") else pd.DataFrame(targets)
+    )
+
+    if isinstance(target_column, str):
+        if targets_df is not None and target_column in _safe_column_names(targets_df):
+            y = targets_df[target_column].to_numpy()
+        elif target_column in _safe_column_names(X_df):
+            y = X_df[target_column].to_numpy()
+            X_df = X_df.drop(columns=[target_column])
+        else:
+            raise ValueError(
+                f"target_column={target_column!r} not found. "
+                f"target columns={_safe_column_names(targets_df)}, "
+                f"feature columns={_safe_column_names(X_df)}"
+            )
+    elif target_column is not None:
+        if targets_df is None or targets_df.shape[1] == 0:
+            raise ValueError("Integer target_column requested, but targets are empty")
+        y = targets_df.iloc[:, int(target_column)].to_numpy()
+    else:
+        if targets_df is None or targets_df.shape[1] == 0:
+            raise ValueError("Dataset has no target")
+        if targets_df.shape[1] != 1:
+            raise ValueError(
+                f"Multiple target columns found {list(targets_df.columns)}; "
+                "set target_column in DATASET_CONFIGS"
+            )
+        y = targets_df.iloc[:, 0].to_numpy()
+
+    return X_df, np.asarray(y).reshape(-1).astype(float)
+
+
+def _preprocess_features(features, *, drop_columns=None, categorical_columns=None):
+    """Match the prior long-only preprocessing: drop, full one-hot, numeric."""
+    X_df = features.copy()
+    for col in list(drop_columns or []):
+        if col in X_df.columns:
+            X_df = X_df.drop(columns=[col])
+
+    if categorical_columns == "auto":
+        cat_cols = list(
+            X_df.select_dtypes(include=["object", "category", "bool"]).columns
+        )
+    else:
+        cat_cols = [
+            c for c in list(categorical_columns or []) if c in X_df.columns
+        ]
+
+    if cat_cols:
+        # Keep every category, matching the previous long-only runner exactly.
+        X_df = pd.get_dummies(X_df, columns=cat_cols, drop_first=False)
+
+    for col in X_df.columns:
+        X_df[col] = pd.to_numeric(X_df[col], errors="coerce")
+
+    return X_df.to_numpy(dtype=float), list(X_df.columns), cat_cols
+
+
+def _clean_finite_rows(X, y):
+    mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
+    return X[mask], y[mask], int((~mask).sum())
+
+
 def load_dataset(name: str):
     cfg = DATASET_CONFIGS[name]
 
@@ -156,32 +230,40 @@ def load_dataset(name: str):
 
         X, y = fetch_california_housing(return_X_y=True)
         rng = np.random.default_rng(cfg["subsample_seed"])
-        idx = rng.choice(len(X), size=cfg["subsample_n"], replace=False)
+        # Sorting is required to reproduce the earlier California long-run
+        # loader and therefore its fixed-test indices exactly.
+        idx = np.sort(
+            rng.choice(len(X), size=cfg["subsample_n"], replace=False)
+        )
         X = X[idx].astype(float)
         y = np.asarray(y[idx]).reshape(-1).astype(float)
+        X, y, n_removed = _clean_finite_rows(X, y)
+        print(
+            f"[LOAD] {name}: X={X.shape}, y={y.shape}, "
+            f"removed_nonfinite_rows={n_removed}",
+            flush=True,
+        )
         return X, y
 
     ds = fetch_ucirepo(id=cfg["uci_id"])
-    features = ds.data.features.copy()
-    for col in cfg.get("drop_columns", []):
-        if col in features.columns:
-            features = features.drop(columns=[col])
-    X = features.values.astype(float)
-
-    if cfg.get("target_column") is not None and cfg["target_column"] in features.columns:
-        y = np.asarray(features[cfg["target_column"]]).reshape(-1)
-        X = np.asarray(features.drop(columns=[cfg["target_column"]])).astype(float)
-    else:
-        y = np.asarray(ds.data.targets).reshape(-1)
-
-    if y.dtype == object:
-        unique_values = set(str(v).strip().lower() for v in np.unique(y))
-        if unique_values <= {"yes", "no"}:
-            y = np.asarray([1.0 if str(v).strip().lower() == "yes" else 0.0 for v in y])
-        else:
-            y = y.astype(float)
-    else:
-        y = y.astype(float)
+    features, y = _select_target_and_features(
+        ds.data.features,
+        ds.data.targets,
+        target_column=cfg.get("target_column"),
+    )
+    X, feature_names, cat_cols = _preprocess_features(
+        features,
+        drop_columns=cfg.get("drop_columns", []),
+        categorical_columns=cfg.get("categorical_columns", "auto"),
+    )
+    X, y, n_removed = _clean_finite_rows(X, y)
+    print(
+        f"[LOAD] {name}: X={X.shape}, y={y.shape}, "
+        f"removed_nonfinite_rows={n_removed}, "
+        f"categorical_columns_encoded={cat_cols}, "
+        f"features={feature_names}",
+        flush=True,
+    )
 
     return X, y
 
