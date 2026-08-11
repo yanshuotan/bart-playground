@@ -10,6 +10,39 @@ from .util import Dataset
 from .priors import  ComprehensivePrior, ProbitPrior, LogisticPrior
 
 
+DEFAULT_INFORMED_V1_CONFIG = {
+    "grow_informed_weight": 0.8,
+    "leaf_score_strength": 4.0,
+    "threshold_score_strength": 4.0,
+    "min_leaf": 1,
+    "change_local_weight": 0.8,
+    "change_local_radius": 5,
+}
+
+
+def _validate_proposal_kernel(proposal_kernel, proposal_config):
+    kernel = str(proposal_kernel).lower()
+    if kernel not in {"legacy", "informed_v1"}:
+        raise ValueError("proposal_kernel must be 'legacy' or 'informed_v1'.")
+    config = dict(DEFAULT_INFORMED_V1_CONFIG)
+    if proposal_config is not None:
+        unknown = set(proposal_config) - set(config)
+        if unknown:
+            raise ValueError(f"Unknown proposal_config keys: {sorted(unknown)}")
+        config.update(proposal_config)
+    for key in ("grow_informed_weight", "change_local_weight"):
+        if not 0.0 <= float(config[key]) <= 1.0:
+            raise ValueError(f"{key} must lie in [0, 1].")
+    for key in ("leaf_score_strength", "threshold_score_strength"):
+        if float(config[key]) < 0:
+            raise ValueError(f"{key} must be nonnegative.")
+    if int(config["min_leaf"]) < 1:
+        raise ValueError("min_leaf must be at least 1.")
+    if int(config["change_local_radius"]) < 1:
+        raise ValueError("change_local_radius must be at least 1.")
+    return kernel, config
+
+
 def _resample_init_tree_leaf_vals(sampler, init_state: Parameters) -> Parameters:
     """Jointly resample all seeded-tree leaves under the BART posterior."""
     tree_ids = list(range(init_state.n_trees))
@@ -36,7 +69,7 @@ class Sampler(ABC):
     """
     def __init__(self, prior, proposal_probs: dict,  
                  generator : np.random.Generator, temp_schedule: TemperatureSchedule = TemperatureSchedule(),
-                 tol: int = 100):
+                 tol: int = 100, proposal_kernel: str = "legacy", proposal_config=None):
         """
         Initialize the sampler with the given parameters.
 
@@ -67,6 +100,9 @@ class Sampler(ABC):
         self.temp_schedule = temp_schedule
         self.trace = []
         self.generator = generator
+        self.proposal_kernel, self.proposal_config = _validate_proposal_kernel(
+            proposal_kernel, proposal_config
+        )
         # create cache for moves
         self.moves_str_cache = None
         # current move cache iterator
@@ -78,6 +114,48 @@ class Sampler(ABC):
         self.move_accepted_counts = {k: 0 for k in self.proposals}
 
         self.accepted_moves_logmh = [] # log MH ratios of accepted moves
+        self.proposal_event_counts = {}
+        self.proposal_log_transition_summary = {
+            key: {"count": 0, "sum": 0.0, "min": None, "max": None}
+            for key in self.proposals
+        }
+
+    def record_proposal(self, move_key, move, success):
+        """Aggregate proposal diagnostics without storing one record per tree update."""
+        status = "success" if success else "failure"
+        event = f"{move_key}:{status}"
+        self.proposal_event_counts[event] = self.proposal_event_counts.get(event, 0) + 1
+        for field in ("component", "failure"):
+            value = move.diagnostics.get(field)
+            if value is not None:
+                event = f"{move_key}:{field}:{value}"
+                self.proposal_event_counts[event] = self.proposal_event_counts.get(event, 0) + 1
+        if success:
+            value = float(move.log_tran_ratio)
+            summary = self.proposal_log_transition_summary[move_key]
+            summary["count"] += 1
+            summary["sum"] += value
+            summary["min"] = value if summary["min"] is None else min(summary["min"], value)
+            summary["max"] = value if summary["max"] is None else max(summary["max"], value)
+
+    def get_proposal_diagnostics(self):
+        summaries = {}
+        for move_key, values in self.proposal_log_transition_summary.items():
+            item = dict(values)
+            item["mean"] = (
+                item["sum"] / item["count"] if item["count"] else None
+            )
+            summaries[move_key] = item
+        return {
+            "proposal_kernel": self.proposal_kernel,
+            "proposal_config": dict(self.proposal_config),
+            "move_probabilities": dict(self.proposals),
+            "move_selected_counts": dict(self.move_selected_counts),
+            "move_success_counts": dict(self.move_success_counts),
+            "move_accepted_counts": dict(self.move_accepted_counts),
+            "event_counts": dict(self.proposal_event_counts),
+            "log_transition_ratio": summaries,
+        }
         
     @property
     def data(self) -> Dataset:
@@ -319,7 +397,9 @@ class DefaultSampler(Sampler):
         generator: np.random.Generator,
         temp_schedule=TemperatureSchedule(),
         tol: int = 100,
-        init_trees: Optional[list[Tree]] = None  # NEW
+        init_trees: Optional[list[Tree]] = None,  # NEW
+        proposal_kernel: str = "legacy",
+        proposal_config=None,
     ):
         """
         Default implementation of the BART sampler.
@@ -333,7 +413,15 @@ class DefaultSampler(Sampler):
         self.global_prior = prior.global_prior
 
         # initialize base sampler
-        super().__init__(prior, proposal_probs, generator, temp_schedule, tol)
+        super().__init__(
+            prior,
+            proposal_probs,
+            generator,
+            temp_schedule,
+            tol,
+            proposal_kernel=proposal_kernel,
+            proposal_config=proposal_config,
+        )
 
         # store seed forest for XGBoost init
         self.init_trees = init_trees
@@ -375,9 +463,17 @@ class DefaultSampler(Sampler):
             move_key, move_cls = self.sample_move()
             self.move_selected_counts[move_key] += 1
             move = move_cls(
-                iter_current, [k], possible_thresholds=self.possible_thresholds, tol=self.tol
+                iter_current,
+                [k],
+                possible_thresholds=self.possible_thresholds,
+                tol=self.tol,
+                data_y=self.data.y,
+                proposal_kernel=self.proposal_kernel,
+                proposal_config=self.proposal_config,
               )
-            if move.propose(self.generator): # Check if a valid move was proposed
+            proposal_succeeded = move.propose(self.generator)
+            self.record_proposal(move_key, move, proposal_succeeded)
+            if proposal_succeeded: # Check if a valid move was proposed
                 self.move_success_counts[move_key] += 1
                 Z = self.generator.uniform(0, 1)
                 marginalize = getattr(self, 'marginalize', False)

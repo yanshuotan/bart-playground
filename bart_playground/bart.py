@@ -443,7 +443,8 @@ class DefaultBART(BART):
                  proposal_probs=default_proposal_probs, tol=100, max_bins=100,
                  random_state=42, temperature=1.0, dirichlet_prior=False, quick_decay: bool = False,
                  s_alpha: float = 1.0, fixed_eps_sigma2: Optional[float] = None,
-                 init_trees=None, init_sigma2=None):
+                 init_trees=None, init_sigma2=None, proposal_kernel: str = "legacy",
+                 proposal_config=None):
         if max_bins is None:
             max_bins = 100
         preprocessor = self.preprocessor_class(max_bins=max_bins)
@@ -452,7 +453,9 @@ class DefaultBART(BART):
                              eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay, s_alpha=s_alpha, fixed_eps_sigma2=fixed_eps_sigma2)
         temp_schedule = self._check_temperature(temperature)
         sampler = DefaultSampler(prior=prior, proposal_probs=proposal_probs, generator=rng, 
-                                 tol=tol, temp_schedule=temp_schedule, init_trees=init_trees)
+                                 tol=tol, temp_schedule=temp_schedule, init_trees=init_trees,
+                                 proposal_kernel=proposal_kernel,
+                                 proposal_config=proposal_config)
         super().__init__(preprocessor, sampler, ndpost, nskip)
         
     def get_params(self) -> Dict[str, Any]:
@@ -471,6 +474,9 @@ class DefaultBART(BART):
             "dirichlet_prior": self.sampler.prior.global_prior.dirichlet_prior,
             "quick_decay": self.sampler.tree_prior.quick_decay,
             "proposal_probs": self.sampler.proposals,
+            "proposal_kernel": self.sampler.proposal_kernel,
+            "proposal_config": self.sampler.proposal_config,
+            "proposal_diagnostics": self.sampler.get_proposal_diagnostics(),
             "fixed_eps_sigma2": self.sampler.prior.global_prior.fixed_eps_sigma2
         }
         
@@ -618,6 +624,8 @@ class ParallelTemperingBART(BART):
         local_move_backend: str = "multiprocessing-pipe",
         sampler_kind: str = "default",
         multi_tries: Optional[int] = None,
+        proposal_kernel: str = "legacy",
+        proposal_config=None,
     ):
         if max_bins is None:
             max_bins = 100
@@ -678,6 +686,8 @@ class ParallelTemperingBART(BART):
                     tol=tol,
                     temp_schedule=temp_schedule,
                     init_trees=init_trees,
+                    proposal_kernel=proposal_kernel,
+                    proposal_config=proposal_config,
                 )
             chain_samplers.append(sampler)
 
@@ -706,10 +716,14 @@ class ParallelTemperingBART(BART):
 
         self.swap_attempt_counts = np.zeros(max(0, self.n_temperatures - 1), dtype=np.int64)
         self.swap_accept_counts = np.zeros(max(0, self.n_temperatures - 1), dtype=np.int64)
+        self.swap_numerical_failure_counts = np.zeros(
+            max(0, self.n_temperatures - 1), dtype=np.int64
+        )
         self.chain_traces = [[] for _ in range(self.n_temperatures)] if self.store_chain_traces else None
         self.swap_diagnostics = []
         self.sampler_kind = str(sampler_kind).lower()
         self.multi_tries = None if multi_tries is None else int(multi_tries)
+        self.proposal_kernel = str(proposal_kernel).lower()
 
     def _effective_parallel_workers(self) -> int:
         if self.n_temperatures <= 1:
@@ -819,11 +833,15 @@ class ParallelTemperingBART(BART):
         temp_a = float(self.temperatures[i])
         temp_b = float(self.temperatures[j])
 
-        ll_aa, ll_bb, ll_ab, ll_ba = self._swap_collapsed_logliks(states, i, j, temp_a, temp_b)
-        delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
-
         if count_for_stats:
             self.swap_attempt_counts[i] += 1
+        logliks = self._try_swap_collapsed_logliks(
+            states, i, j, temp_a, temp_b
+        )
+        if logliks is None:
+            return False
+        ll_aa, ll_bb, ll_ab, ll_ba = logliks
+        delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
         u = workers[i].draw_uniform()
         accepted = bool(np.log(u) < delta)
 
@@ -890,10 +908,15 @@ class ParallelTemperingBART(BART):
 
         swap_results = []
         for i, j, temp_a, temp_b in pair_info:
-            ll_aa, ll_bb, ll_ab, ll_ba = self._swap_collapsed_logliks(states, i, j, temp_a, temp_b)
-            delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
             if count_for_stats:
                 self.swap_attempt_counts[i] += 1
+            logliks = self._try_swap_collapsed_logliks(
+                states, i, j, temp_a, temp_b
+            )
+            if logliks is None:
+                continue
+            ll_aa, ll_bb, ll_ab, ll_ba = logliks
+            delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
             workers[i].request_uniform()
             swap_results.append((i, j, temp_a, temp_b, ll_aa, ll_bb, ll_ab, ll_ba, delta))
 
@@ -1020,6 +1043,51 @@ class ParallelTemperingBART(BART):
         ll_ba = self._state_collapsed_loglik(states[i], temp_b)
         return ll_aa, ll_bb, ll_ab, ll_ba
 
+    def _try_swap_collapsed_logliks(
+        self, states, i: int, j: int, temp_a: float, temp_b: float
+    ):
+        """Reject only recognized numerical failures in a PT swap calculation.
+
+        A failed cross-temperature marginal-likelihood evaluation is treated as
+        a rejected swap.  Local chain updates remain untouched, and unrelated
+        exceptions are deliberately re-raised.
+        """
+        try:
+            return self._swap_collapsed_logliks(
+                states, i, j, temp_a, temp_b
+            )
+        except (np.linalg.LinAlgError, ValueError) as exc:
+            message = str(exc).lower()
+            recognized = isinstance(exc, np.linalg.LinAlgError) or any(
+                token in message
+                for token in (
+                    "svd did not converge",
+                    "internal algorithm failed to converge",
+                    "eigenvalues did not converge",
+                )
+            )
+            if not recognized:
+                raise
+            self.swap_numerical_failure_counts[int(i)] += 1
+            print(
+                "[PT swap numerical rejection] "
+                f"pair={i}-{j} temp_a={temp_a:.6g} temp_b={temp_b:.6g} "
+                f"reason={exc}",
+                flush=True,
+            )
+            if self.store_swap_diagnostics:
+                self.swap_diagnostics.append(
+                    {
+                        "pair_index": int(i),
+                        "temp_a": float(temp_a),
+                        "temp_b": float(temp_b),
+                        "accepted": False,
+                        "numerical_failure": True,
+                        "reason": str(exc),
+                    }
+                )
+            return None
+
     def _refresh_state_tempered_params(self, state, chain_id: int) -> None:
         sampler = self.chain_samplers[chain_id]
         temp = float(self.temperatures[chain_id])
@@ -1047,11 +1115,15 @@ class ParallelTemperingBART(BART):
         temp_a = float(self.temperatures[i])
         temp_b = float(self.temperatures[j])
 
-        ll_aa, ll_bb, ll_ab, ll_ba = self._swap_collapsed_logliks(states, i, j, temp_a, temp_b)
-        delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
-
         if count_for_stats:
             self.swap_attempt_counts[i] += 1
+        logliks = self._try_swap_collapsed_logliks(
+            states, i, j, temp_a, temp_b
+        )
+        if logliks is None:
+            return False
+        ll_aa, ll_bb, ll_ab, ll_ba = logliks
+        delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
         u = sampler.generator.uniform(0.0, 1.0)
         accepted = bool(np.log(u) < delta)
 
@@ -1106,6 +1178,7 @@ class ParallelTemperingBART(BART):
             self.chain_traces = [[] for _ in range(self.n_temperatures)]
         self.swap_attempt_counts[:] = 0
         self.swap_accept_counts[:] = 0
+        self.swap_numerical_failure_counts[:] = 0
         if self.store_swap_diagnostics:
             self.swap_diagnostics = []
 
@@ -1279,6 +1352,10 @@ class ParallelTemperingBART(BART):
         }
         base["sampler_kind"] = self.sampler_kind
         base["multi_tries"] = self.multi_tries
+        base["proposal_kernel"] = self.proposal_kernel
+        base["proposal_diagnostics_by_temperature"] = [
+            sampler.get_proposal_diagnostics() for sampler in self.chain_samplers
+        ]
         if self.swap_attempt_counts.size > 0:
             rates = np.divide(
                 self.swap_accept_counts,
@@ -1287,6 +1364,9 @@ class ParallelTemperingBART(BART):
             base["swap_attempts"] = self.swap_attempt_counts.tolist()
             base["swap_accepts"] = self.swap_accept_counts.tolist()
             base["swap_accept_rates"] = rates.tolist()
+            base["swap_numerical_failures"] = (
+                self.swap_numerical_failure_counts.tolist()
+            )
         if self.store_swap_diagnostics:
             base["swap_diagnostics"] = self.swap_diagnostics
         return base

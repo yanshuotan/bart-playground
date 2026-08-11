@@ -318,10 +318,19 @@ def summarize_model_outputs(model, X_test_fixed, y_test_fixed, *, store_preds: b
             raise ValueError("Dirichlet splitting weights do not sum to one")
         result["splitting_weights"] = splitting_weights
     model_params = model.get_params()
+    if "proposal_diagnostics" in model_params:
+        result["proposal_diagnostics"] = model_params["proposal_diagnostics"]
+    elif "proposal_diagnostics_by_temperature" in model_params:
+        result["proposal_diagnostics"] = model_params[
+            "proposal_diagnostics_by_temperature"
+        ]
     swap_accept_rates = np.asarray(model_params.get("swap_accept_rates", []), dtype=float)
     if swap_accept_rates.size > 0:
         result["swap_accept_rates"] = swap_accept_rates
         result["swap_temperatures"] = np.asarray(model_params.get("temperatures", []), dtype=float)
+        result["swap_numerical_failures"] = np.asarray(
+            model_params.get("swap_numerical_failures", []), dtype=int
+        )
     if store_preds:
         lower = np.percentile(y_pred_samples, 2.5, axis=1)
         upper = np.percentile(y_pred_samples, 97.5, axis=1)
@@ -350,6 +359,8 @@ def quick_ladder_search(
     initial_temperatures=(1.0, 3.0),
     dirichlet_prior: bool = False,
     s_alpha: float = 1.0,
+    proposal_kernel_default: str = "legacy",
+    proposal_config_default=None,
     progress_print: bool = False,
     progress_prefix: str = "",
 ):
@@ -390,6 +401,8 @@ def quick_ladder_search(
                 print_swap_diagnostics=False,
                 dirichlet_prior=dirichlet_prior,
                 s_alpha=s_alpha,
+                proposal_kernel=proposal_kernel_default,
+                proposal_config=proposal_config_default,
             )
             model.fit(X, y, quietly=True)
             rates = np.asarray(model.get_params().get("swap_accept_rates", []), dtype=float)
@@ -474,6 +487,9 @@ def run_short_chain(
     multi_tries,
     dirichlet_prior: bool = False,
     s_alpha: float = 1.0,
+    short_methods=None,
+    proposal_kernel_default: str = "legacy",
+    proposal_config_default=None,
     store_preds=True,
 ):
     """Run the original four methods sequentially inside one chain worker.
@@ -481,88 +497,102 @@ def run_short_chain(
     This preserves pt+mtmh_2000's method definitions but uses the fixed 100 test
     points and does not do train_test_split internally.
     """
+    if short_methods is None:
+        short_methods = METHODS_SHORT
+    short_methods = tuple(short_methods)
+    unknown = set(short_methods) - set(METHODS_SHORT)
+    if unknown:
+        raise ValueError(f"Unknown short methods: {sorted(unknown)}")
     out = {"chain_id": chain_id, "chain_seed": chain_seed}
 
-    model = DefaultBART(
-        ndpost=ndpost,
-        nskip=nskip,
-        n_trees=n_trees,
-        tol=1,
-        proposal_probs=proposal_probs_default,
-        random_state=chain_seed,
-        dirichlet_prior=dirichlet_prior,
-        s_alpha=s_alpha,
-    )
-    model.fit(X_train, y_train)
-    out["default"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
-    del model
-    gc.collect()
+    if "default" in short_methods:
+        model = DefaultBART(
+            ndpost=ndpost,
+            nskip=nskip,
+            n_trees=n_trees,
+            tol=1,
+            proposal_probs=proposal_probs_default,
+            random_state=chain_seed,
+            dirichlet_prior=dirichlet_prior,
+            s_alpha=s_alpha,
+            proposal_kernel=proposal_kernel_default,
+            proposal_config=proposal_config_default,
+        )
+        model.fit(X_train, y_train)
+        out["default"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
+        del model
+        gc.collect()
 
-    model = ParallelTemperingBART(
-        ndpost=ndpost,
-        nskip=nskip,
-        n_trees=n_trees,
-        tree_alpha=tree_alpha,
-        tree_beta=tree_beta,
-        tol=1,
-        proposal_probs=proposal_probs_default,
-        random_state=chain_seed,
-        temperatures=temperatures,
-        swap_interval=swap_interval,
-        post_swap_repair_steps=post_swap_repair_steps,
-        store_chain_traces=False,
-        store_swap_diagnostics=False,
-        print_swap_diagnostics=False,
-        dirichlet_prior=dirichlet_prior,
-        s_alpha=s_alpha,
-    )
-    model.fit(X_train, y_train)
-    out["default_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
-    del model
-    gc.collect()
+    if "default_pt" in short_methods:
+        model = ParallelTemperingBART(
+            ndpost=ndpost,
+            nskip=nskip,
+            n_trees=n_trees,
+            tree_alpha=tree_alpha,
+            tree_beta=tree_beta,
+            tol=1,
+            proposal_probs=proposal_probs_default,
+            random_state=chain_seed,
+            temperatures=temperatures,
+            swap_interval=swap_interval,
+            post_swap_repair_steps=post_swap_repair_steps,
+            store_chain_traces=False,
+            store_swap_diagnostics=False,
+            print_swap_diagnostics=False,
+            dirichlet_prior=dirichlet_prior,
+            s_alpha=s_alpha,
+            proposal_kernel=proposal_kernel_default,
+            proposal_config=proposal_config_default,
+        )
+        model.fit(X_train, y_train)
+        out["default_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
+        del model
+        gc.collect()
 
-    model = MultiBART(
-        ndpost=ndpost,
-        nskip=nskip,
-        n_trees=n_trees,
-        tree_alpha=tree_alpha,
-        tree_beta=tree_beta,
-        tol=1,
-        proposal_probs=proposal_probs_mtmh,
-        random_state=chain_seed,
-        multi_tries=multi_tries,
-        dirichlet_prior=dirichlet_prior,
-        s_alpha=s_alpha,
-    )
-    model.fit(X_train, y_train)
-    out["mtmh"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
-    del model
-    gc.collect()
+    if "mtmh" in short_methods:
+        model = MultiBART(
+            ndpost=ndpost,
+            nskip=nskip,
+            n_trees=n_trees,
+            tree_alpha=tree_alpha,
+            tree_beta=tree_beta,
+            tol=1,
+            proposal_probs=proposal_probs_mtmh,
+            random_state=chain_seed,
+            multi_tries=multi_tries,
+            dirichlet_prior=dirichlet_prior,
+            s_alpha=s_alpha,
+        )
+        model.fit(X_train, y_train)
+        out["mtmh"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
+        del model
+        gc.collect()
 
-    model = ParallelTemperingBART(
-        ndpost=ndpost,
-        nskip=nskip,
-        n_trees=n_trees,
-        tree_alpha=tree_alpha,
-        tree_beta=tree_beta,
-        tol=1,
-        proposal_probs=proposal_probs_mtmh,
-        random_state=chain_seed,
-        temperatures=temperatures,
-        swap_interval=swap_interval,
-        post_swap_repair_steps=post_swap_repair_steps,
-        store_chain_traces=False,
-        store_swap_diagnostics=False,
-        print_swap_diagnostics=False,
-        sampler_kind="multi",
-        multi_tries=multi_tries,
-        dirichlet_prior=dirichlet_prior,
-        s_alpha=s_alpha,
-    )
-    model.fit(X_train, y_train)
-    out["mtmh_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
-    del model
-    gc.collect()
+    if "mtmh_pt" in short_methods:
+        model = ParallelTemperingBART(
+            ndpost=ndpost,
+            nskip=nskip,
+            n_trees=n_trees,
+            tree_alpha=tree_alpha,
+            tree_beta=tree_beta,
+            tol=1,
+            proposal_probs=proposal_probs_mtmh,
+            random_state=chain_seed,
+            temperatures=temperatures,
+            swap_interval=swap_interval,
+            post_swap_repair_steps=post_swap_repair_steps,
+            store_chain_traces=False,
+            store_swap_diagnostics=False,
+            print_swap_diagnostics=False,
+            sampler_kind="multi",
+            multi_tries=multi_tries,
+            dirichlet_prior=dirichlet_prior,
+            s_alpha=s_alpha,
+        )
+        model.fit(X_train, y_train)
+        out["mtmh_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
+        del model
+        gc.collect()
 
     return out
 
@@ -575,11 +605,14 @@ def save_short_run(
     split_info: dict[str, Any],
     chain_results: list[dict[str, Any]],
     metadata: dict[str, Any],
+    short_methods=None,
 ):
-    for sub in ["preds", "pred_samples", "coverage", "sigmas", "rmses", "leaves", "depths", "splitting_weights", "trace_features", "trace_feature_columns", "accepted_moves_logmh", "subsample_rmse", "subsample_r2", "subsample_r2_sse", "subsample_r2_sst", "subsample_r2_pooled", "subsample_crps", "swap_accept_rates", "swap_temperatures", "subsample_X_test", "subsample_y_test", "indices", "metadata"]:
+    if short_methods is None:
+        short_methods = METHODS_SHORT
+    for sub in ["preds", "pred_samples", "coverage", "sigmas", "rmses", "leaves", "depths", "splitting_weights", "trace_features", "trace_feature_columns", "accepted_moves_logmh", "proposal_diagnostics", "subsample_rmse", "subsample_r2", "subsample_r2_sse", "subsample_r2_sst", "subsample_r2_pooled", "subsample_crps", "swap_accept_rates", "swap_temperatures", "swap_numerical_failures", "subsample_X_test", "subsample_y_test", "indices", "metadata"]:
         (store_root / dataset_tag / sub).mkdir(parents=True, exist_ok=True)
 
-    for method in METHODS_SHORT:
+    for method in short_methods:
         arrays = {
             "sigmas": np.array([r[method]["sigmas"] for r in chain_results]),
             "rmses": np.array([r[method]["rmses"] for r in chain_results]),
@@ -612,6 +645,11 @@ def save_short_run(
             store_root / dataset_tag / "accepted_moves_logmh" / f"{dataset_tag}__run{run_id:03d}__{method}__accepted_moves_logmh.csv",
             np.array([r[method]["accepted_moves_logmh"] for r in chain_results], dtype=object),
         )
+        if "proposal_diagnostics" in chain_results[0][method]:
+            _save_object_csv(
+                store_root / dataset_tag / "proposal_diagnostics" / f"{dataset_tag}__run{run_id:03d}__{method}__proposal_diagnostics.csv",
+                [r[method]["proposal_diagnostics"] for r in chain_results],
+            )
         if "swap_accept_rates" in chain_results[0][method]:
             _save_numeric_csv(
                 store_root / dataset_tag / "swap_accept_rates" / f"{dataset_tag}__run{run_id:03d}__{method}__swap_accept_rates.csv",
@@ -620,6 +658,10 @@ def save_short_run(
             _save_numeric_csv(
                 store_root / dataset_tag / "swap_temperatures" / f"{dataset_tag}__run{run_id:03d}__{method}__swap_temperatures.csv",
                 np.array([r[method].get("swap_temperatures", []) for r in chain_results], dtype=float),
+            )
+            _save_numeric_csv(
+                store_root / dataset_tag / "swap_numerical_failures" / f"{dataset_tag}__run{run_id:03d}__{method}__swap_numerical_failures.csv",
+                np.array([r[method].get("swap_numerical_failures", []) for r in chain_results], dtype=int),
             )
         if "preds" in chain_results[0][method]:
             preds_all_chains = np.array([r[method]["preds"] for r in chain_results])
@@ -939,6 +981,9 @@ def run_fixed100_dataset(
     run_long: bool = True,
     dirichlet_prior: bool = False,
     s_alpha: float = 1.0,
+    short_methods=None,
+    proposal_kernel_default: str = "legacy",
+    proposal_config_default=None,
 ):
     if not run_short and not run_long:
         raise ValueError("At least one of run_short or run_long must be True.")
@@ -946,6 +991,16 @@ def run_fixed100_dataset(
         proposal_probs_default = default_proposal_probs
     if proposal_probs_mtmh is None:
         proposal_probs_mtmh = mtmh_proposal_probs
+    if short_methods is None:
+        short_methods = METHODS_SHORT
+    short_methods = tuple(short_methods)
+    unknown_short_methods = set(short_methods) - set(METHODS_SHORT)
+    if unknown_short_methods:
+        raise ValueError(
+            f"Unknown short methods: {sorted(unknown_short_methods)}"
+        )
+    if run_short and not short_methods:
+        raise ValueError("short_methods cannot be empty when run_short=True.")
 
     store_root = Path(store_dir)
     store_root.mkdir(parents=True, exist_ok=True)
@@ -992,6 +1047,9 @@ def run_fixed100_dataset(
             "run_long": run_long,
             "dirichlet_prior": dirichlet_prior,
             "s_alpha": s_alpha,
+            "short_methods": list(short_methods),
+            "proposal_kernel_default": proposal_kernel_default,
+            "proposal_config_default": proposal_config_default,
         },
     )
 
@@ -1032,13 +1090,21 @@ def run_fixed100_dataset(
                 initial_temperatures=temperatures,
                 dirichlet_prior=dirichlet_prior,
                 s_alpha=s_alpha,
+                proposal_kernel_default=proposal_kernel_default,
+                proposal_config_default=proposal_config_default,
                 progress_print=progress_print,
                 progress_prefix=f"[{dataset_tag} RUN {run_id:03d}] ",
             )
 
             if progress_print:
                 print(f"[{dataset_tag} RUN {run_id:03d}] ladder selected temps={np.round(run_temperatures, 4).tolist()}", flush=True)
-                print(f"[{dataset_tag} RUN {run_id:03d}] short methods start: n_chains={n_chains}, n_jobs={n_jobs}", flush=True)
+                print(
+                    f"[{dataset_tag} RUN {run_id:03d}] short methods "
+                    f"{list(short_methods)} start: n_chains={n_chains}, "
+                    f"n_jobs={n_jobs}, proposal_kernel_default="
+                    f"{proposal_kernel_default}",
+                    flush=True,
+                )
 
             short_results = Parallel(n_jobs=n_jobs, verbose=10)(
                 delayed(run_short_chain)(
@@ -1061,6 +1127,9 @@ def run_fixed100_dataset(
                     multi_tries=multi_tries,
                     dirichlet_prior=dirichlet_prior,
                     s_alpha=s_alpha,
+                    short_methods=short_methods,
+                    proposal_kernel_default=proposal_kernel_default,
+                    proposal_config_default=proposal_config_default,
                     store_preds=store_preds,
                 )
                 for chain_id in range(n_chains)
@@ -1079,14 +1148,17 @@ def run_fixed100_dataset(
                     "short_nskip": short_nskip,
                     "n_chains": n_chains,
                     "n_jobs": n_jobs,
-                    "methods": METHODS_SHORT,
+                    "methods": list(short_methods),
                     "temperatures": run_temperatures,
                     "ladder_mean_rates": ladder_mean_rates,
                     "ladder_history": ladder_history,
                     "ladder_search_points": int(X_search.shape[0]),
                     "dirichlet_prior": dirichlet_prior,
                     "s_alpha": s_alpha,
+                    "proposal_kernel_default": proposal_kernel_default,
+                    "proposal_config_default": proposal_config_default,
                 },
+                short_methods=short_methods,
             )
             del short_results
             gc.collect()

@@ -58,6 +58,8 @@ def make_capped_harmonic_ladder_search(max_temperatures: int | None):
         initial_temperatures=(1.0, 3.0),
         dirichlet_prior: bool = False,
         s_alpha: float = 1.0,
+        proposal_kernel_default: str = "legacy",
+        proposal_config_default=None,
         progress_print: bool = False,
         progress_prefix: str = "",
     ):
@@ -106,6 +108,8 @@ def make_capped_harmonic_ladder_search(max_temperatures: int | None):
                     print_swap_diagnostics=False,
                     dirichlet_prior=dirichlet_prior,
                     s_alpha=s_alpha,
+                    proposal_kernel=proposal_kernel_default,
+                    proposal_config=proposal_config_default,
                 )
                 model.fit(X, y, quietly=True)
                 rates = np.asarray(model.get_params().get("swap_accept_rates", []), dtype=float)
@@ -220,9 +224,33 @@ def main():
     parser.add_argument("--short-ndpost", type=int, default=10000)
     parser.add_argument("--short-nskip", type=int, default=0)
     parser.add_argument("--n-trees", type=int, default=100)
+    parser.add_argument("--tree-alpha", type=float, default=0.95)
+    parser.add_argument("--tree-beta", type=float, default=2.0)
     parser.add_argument("--long-chunk-size", type=int, default=10000)
     parser.add_argument("--swap-interval", type=int, default=50)
+    parser.add_argument("--post-swap-repair-steps", type=int, default=0)
     parser.add_argument("--multi-tries", type=int, default=10)
+    parser.add_argument(
+        "--short-methods",
+        nargs="+",
+        choices=list(exp.METHODS_SHORT),
+        default=list(exp.METHODS_SHORT),
+    )
+    parser.add_argument(
+        "--proposal-kernel-default",
+        choices=["legacy", "informed_v1"],
+        default="legacy",
+    )
+    parser.add_argument("--grow-informed-weight", type=float, default=0.8)
+    parser.add_argument("--leaf-score-strength", type=float, default=4.0)
+    parser.add_argument("--threshold-score-strength", type=float, default=4.0)
+    parser.add_argument("--proposal-min-leaf", type=int, default=1)
+    parser.add_argument("--change-local-weight", type=float, default=0.8)
+    parser.add_argument("--change-local-radius", type=int, default=5)
+    parser.add_argument("--proposal-grow-prob", type=float, default=0.25)
+    parser.add_argument("--proposal-prune-prob", type=float, default=0.25)
+    parser.add_argument("--proposal-change-prob", type=float, default=0.40)
+    parser.add_argument("--proposal-swap-prob", type=float, default=0.10)
     parser.add_argument("--memory-log-interval", type=int, default=60)
     parser.add_argument("--enable-memory-log", action="store_true", help="Enable original memory logger. Disabled by default to avoid macOS ps warnings.")
     parser.add_argument(
@@ -230,7 +258,11 @@ def main():
         action="store_true",
         help="Load and validate datasets/settings in order, then exit without fitting.",
     )
-    parser.add_argument("--skip-long", action="store_true", help="Run only the four short-chain methods.")
+    parser.add_argument(
+        "--skip-long",
+        action="store_true",
+        help="Run only the methods selected by --short-methods.",
+    )
     parser.add_argument("--skip-short", action="store_true", help="Run only default_long.")
 
     # Ladder-search controls.
@@ -243,6 +275,7 @@ def main():
     parser.add_argument("--ladder-nskip", type=int, default=500)
     parser.add_argument("--ladder-repeats", type=int, default=3)
     parser.add_argument("--ladder-search-points", type=int, default=1000)
+    parser.add_argument("--ladder-random-state", type=int, default=123)
     args = parser.parse_args()
 
     if args.skip_long and args.skip_short:
@@ -259,6 +292,34 @@ def main():
         parser.error(
             "Formal reruns require 4 chains with 10,000 post-burn-in draws per chain."
         )
+    if args.skip_short and args.short_methods != list(exp.METHODS_SHORT):
+        parser.error("--short-methods has no effect together with --skip-short.")
+    proposal_probs_default = {
+        "grow": args.proposal_grow_prob,
+        "prune": args.proposal_prune_prob,
+        "change": args.proposal_change_prob,
+        "swap": args.proposal_swap_prob,
+    }
+    if any(value < 0 for value in proposal_probs_default.values()):
+        parser.error("Proposal probabilities must be nonnegative.")
+    if not np.isclose(sum(proposal_probs_default.values()), 1.0):
+        parser.error("The four proposal probabilities must sum to 1.")
+    proposal_config_default = {
+        "grow_informed_weight": args.grow_informed_weight,
+        "leaf_score_strength": args.leaf_score_strength,
+        "threshold_score_strength": args.threshold_score_strength,
+        "min_leaf": args.proposal_min_leaf,
+        "change_local_weight": args.change_local_weight,
+        "change_local_radius": args.change_local_radius,
+    }
+    if not 0.0 <= args.grow_informed_weight <= 1.0:
+        parser.error("--grow-informed-weight must lie in [0, 1].")
+    if not 0.0 <= args.change_local_weight <= 1.0:
+        parser.error("--change-local-weight must lie in [0, 1].")
+    if args.leaf_score_strength < 0 or args.threshold_score_strength < 0:
+        parser.error("Proposal score strengths must be nonnegative.")
+    if args.proposal_min_leaf < 1 or args.change_local_radius < 1:
+        parser.error("Proposal min leaf and local radius must be at least 1.")
 
     max_temps = None if args.ladder_max_temperatures <= 0 else int(args.ladder_max_temperatures)
     exp.quick_ladder_search = make_capped_harmonic_ladder_search(max_temps)
@@ -271,6 +332,13 @@ def main():
     print(f"Datasets: {args.datasets}", flush=True)
     print(f"n_runs={args.n_runs}, n_chains={args.n_chains}, n_jobs={args.n_jobs}", flush=True)
     print(f"skip_short={args.skip_short}, skip_long={args.skip_long}", flush=True)
+    print(
+        f"short_methods={args.short_methods}, "
+        f"proposal_kernel_default={args.proposal_kernel_default}, "
+        f"proposal_probs_default={proposal_probs_default}, "
+        f"proposal_config_default={proposal_config_default}",
+        flush=True,
+    )
     print(
         "Tmax100 ladder controls: "
         f"initial_temperatures={np.round(initial_temperatures, 6).tolist()}, "
@@ -285,7 +353,8 @@ def main():
         f"max_rounds={args.ladder_max_rounds}, "
         f"repeats={args.ladder_repeats}, "
         f"ndpost={args.ladder_ndpost}, "
-        f"nskip={args.ladder_nskip}",
+        f"nskip={args.ladder_nskip}, "
+        f"random_state={args.ladder_random_state}",
         flush=True,
     )
 
@@ -350,6 +419,8 @@ def main():
                 n_chains=args.n_chains,
                 n_jobs=args.n_jobs,
                 n_trees=args.n_trees,
+                tree_alpha=args.tree_alpha,
+                tree_beta=args.tree_beta,
                 short_ndpost=args.short_ndpost,
                 short_nskip=args.short_nskip,
                 long_ndpost=cfg["long_ndpost"],
@@ -367,14 +438,20 @@ def main():
                 ladder_nskip=args.ladder_nskip,
                 ladder_repeats=args.ladder_repeats,
                 ladder_search_points=args.ladder_search_points,
+                ladder_random_state=args.ladder_random_state,
                 swap_interval=args.swap_interval,
+                post_swap_repair_steps=args.post_swap_repair_steps,
                 multi_tries=args.multi_tries,
+                proposal_probs_default=proposal_probs_default,
                 store_preds=True,
                 progress_print=True,
                 run_short=not args.skip_short,
                 run_long=not args.skip_long,
                 dirichlet_prior=cfg.get("dirichlet_prior", False),
                 s_alpha=float(cfg.get("s_alpha", 1.0)),
+                short_methods=args.short_methods,
+                proposal_kernel_default=args.proposal_kernel_default,
+                proposal_config_default=proposal_config_default,
             )
     finally:
         if stop_event is not None:
