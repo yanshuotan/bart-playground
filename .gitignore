@@ -27,6 +27,7 @@ tmp/
 CLAUDE.md
 
 *.csv
+*.png
 tests/unit/plan/*
 tests/output/*
 tests/*.md
@@ -38,3 +39,6 @@ tests/*.md
 /legacy/
 
 diagnosis/**/store/
+
+# Local archives created while reorganizing experiment results.
+/backup/
