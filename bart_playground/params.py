@@ -738,11 +738,24 @@ class Tree:
 
     @property
     def leaf_basis(self) -> NDArray[Float32Or64]:
-        leaves = self.leaves
-        basis = np.zeros((len(self.leaf_ids), len(leaves)), dtype=self.float_dtype)
-        for i, leaf in enumerate(leaves):
-            basis[:, i] = (self.leaf_ids == leaf).astype(self.float_dtype)
+        """One-hot indicator of the leaf each sample falls in, one column per leaf."""
+        basis = np.zeros((len(self.leaf_ids), len(self.leaves)), dtype=self.float_dtype)
+        self.fill_leaf_basis(basis)
         return basis
+
+    def fill_leaf_basis(self, out: NDArray[Float32Or64], leaves=None) -> None:
+        """Write this tree's leaf basis into `out`, which must have one column per leaf.
+
+        Lets `Parameters.leaf_basis` fill one preallocated ensemble array
+        instead of allocating a block per tree and stacking them. Pass
+        `leaves` when the caller already has it, since it is a recomputed
+        property.
+        """
+        if leaves is None:
+            leaves = self.leaves
+        for i, leaf in enumerate(leaves):
+            # Assigning the boolean gives the same 1.0/0.0 as casting it first.
+            out[:, i] = self.leaf_ids == leaf
 
     def __str__(self):
         return self._print_tree()
@@ -980,7 +993,19 @@ class Parameters:
         """
         if len(tree_ids) == 1:
             return self.trees[tree_ids[0]].leaf_basis
-        return np.hstack([self.trees[tree_id].leaf_basis for tree_id in tree_ids])
+        trees = [self.trees[tree_id] for tree_id in tree_ids]
+        # `leaves` is recomputed on every access, so take it once per tree here.
+        leaves_per_tree = [tree.leaves for tree in trees]
+        n_rows = len(trees[0].leaf_ids)
+        n_cols = sum(len(leaves) for leaves in leaves_per_tree)
+        # One allocation filled in place, rather than a block per tree plus an
+        # hstack copy; hstack dominated this function with many shallow trees.
+        basis = np.zeros((n_rows, n_cols), dtype=self.float_dtype)
+        first = 0
+        for tree, leaves in zip(trees, leaves_per_tree):
+            tree.fill_leaf_basis(basis[:, first:first + len(leaves)], leaves=leaves)
+            first += len(leaves)
+        return basis
 
     def update_leaf_vals(self, tree_ids : list[int], leaf_vals : NDArray[Float32Or64]):
         """

@@ -99,6 +99,35 @@ def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps
     return - (logdet + (ls_resids + ridge_bias) / tempered_eps_sigma2) / 2
 
 @njit(cache=True)
+def _leaf_basis_svd_numba(leaf_basis):
+    """
+    Thin SVD of the leaf basis, exactly as computed inside _trees_log_marginal_lkhd_numba.
+    It depends only on the tree structures (not on leaf values, eps_sigma2 or temperature),
+    so it can be reused while the structures are unchanged (e.g. during PT swap sweeps).
+    """
+    # Explicitly convert boolean array to float32
+    leaf_basis_float = leaf_basis.astype(np.float32)
+    
+    # Now use the float32 array with SVD
+    U, S, _ = np.linalg.svd(leaf_basis_float, full_matrices=False)
+    return U, S
+
+@njit(cache=True)
+def _trees_log_marginal_lkhd_from_svd_numba(U, S, resids, eps_sigma2, f_sigma2, temp=1.0):
+    """
+    Same as _trees_log_marginal_lkhd_numba, but with the SVD precomputed.
+    Keep the floating-point operations below identical to that function.
+    """
+    tempered_eps_sigma2 = temp * eps_sigma2
+    noise_ratio = tempered_eps_sigma2 / f_sigma2
+    logdet = np.sum(np.log(S ** 2 / noise_ratio + 1))
+    resid_u_coefs = U.T @ resids
+    resids_u = U @ resid_u_coefs
+    ls_resids = np.sum((resids - resids_u) ** 2)
+    ridge_bias = np.sum(resid_u_coefs ** 2 / (S ** 2 / noise_ratio + 1))
+    return - (logdet + (ls_resids + ridge_bias) / tempered_eps_sigma2) / 2
+
+@njit(cache=True)
 def _trees_log_marginal_lkhd_numba(leaf_basis, resids, eps_sigma2, f_sigma2, temp=1.0):
     """
     Numba-optimized function to calculate log marginal likelihood when there are multiple trees.
@@ -161,10 +190,11 @@ class TreesPrior:
             if tree_alpha <= 0.0 or tree_alpha >= 0.5:
                 raise ValueError("tree_alpha must be between 0.0 and 0.5 for quick decay parameterization. See Rockova and Saha (2018) for more details.")
                 
-    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids, temp: float = 1.0):
+    def resample_leaf_vals(self, bart_params : Parameters, data_y, tree_ids, temp: float = 1.0,
+                           leaf_basis=None):
         """
         Resample the values of the leaf nodes for the specified trees.
-        
+
         This function updates the leaf parameters by resampling from the posterior
         distribution given the current residuals and leaf basis.
 
@@ -175,6 +205,11 @@ class TreesPrior:
         data_y (numpy.ndarray): The target values array.
         tree_ids : list or array-like
             A list or array of tree indices for which the leaf values are to be resampled.
+        leaf_basis : numpy.ndarray, optional
+            `bart_params.leaf_basis(tree_ids)`, when the caller already has it.
+            It depends only on the tree structures, so a caller that holds the
+            structures fixed (a PT swap step) can build it once and pass it in;
+            the resampling is then identical, only cheaper.
 
         Returns:
         --------
@@ -196,7 +231,8 @@ class TreesPrior:
                 temp=temp,
             )
         else:
-            leaf_basis = bart_params.leaf_basis(tree_ids)
+            if leaf_basis is None:
+                leaf_basis = bart_params.leaf_basis(tree_ids)
 
             leaf_params_new = _resample_leaf_vals_numba(
                 leaf_basis,
@@ -439,7 +475,22 @@ class BARTLikelihood:
         rss = float(np.sum(residuals ** 2))
         return float(-0.5 * (n * math.log(eps_sigma2) + rss / eps_sigma2))
 
-    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids, temp: float = 1.0):
+    def trees_leaf_basis_svd(self, bart_params : Parameters, tree_ids):
+        """
+        Precompute the leaf-basis SVD used by the multi-tree marginal likelihood.
+        Valid for `trees_log_marginal_lkhd(..., leaf_basis_svd=...)` while the tree
+        structures of `bart_params` are unchanged (leaf values may change).
+        """
+        return self.leaf_basis_svd(bart_params.leaf_basis(tree_ids))
+
+    def leaf_basis_svd(self, leaf_basis):
+        """
+        `trees_leaf_basis_svd` for a leaf basis the caller has already built, so
+        that it can keep the basis instead of discarding it.
+        """
+        return _leaf_basis_svd_numba(leaf_basis)
+
+    def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids, temp: float = 1.0, leaf_basis_svd=None):
         """
         Calculate the log marginal likelihood of the trees in a BART model.
 
@@ -489,6 +540,16 @@ class BARTLikelihood:
                 logger.error(f"Data: {data_y}")
                 logger.error(f"Related information: leaf_ids: {tree.leaf_ids}; sample_n_in_node: {tree.n}; residuals: {resids}; eps_sigma2: {bart_params.global_params['eps_sigma2'][0]}; f_sigma2: {self.f_sigma2}", exc_info=True)
                 raise ValueError("Error calculating likelihood for single tree. Check the tree structure and residuals.")
+        elif leaf_basis_svd is not None:
+            U, S = leaf_basis_svd
+            return _trees_log_marginal_lkhd_from_svd_numba(
+                U,
+                S,
+                resids,
+                bart_params.global_params["eps_sigma2"],
+                self.f_sigma2,
+                temp=temp,
+            )
         else:
             leaf_basis = bart_params.leaf_basis(tree_ids)
             return _trees_log_marginal_lkhd_numba(

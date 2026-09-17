@@ -6,11 +6,55 @@ from typing import Optional, Callable, Dict, Any, Sequence
 from scipy.stats import norm
 from tqdm import tqdm
 
-from joblib import Parallel, delayed, effective_n_jobs
+from joblib import effective_n_jobs
 
 from .samplers import Sampler, DefaultSampler, MultiSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs, mtmh_proposal_probs
 from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
 from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor, Dataset
+from .params import Parameters
+
+
+def _physical_core_count() -> int:
+    """Physical cores this process may use.
+
+    PT workers are compute-bound, and on an SMT machine one worker per logical
+    core is measurably slower than one per physical core, so negative `n_jobs`
+    resolves against this rather than against the logical count.
+
+    Never exceeds what joblib reports as available, so a cgroup quota, a CPU
+    affinity mask or a scheduler allocation still caps the worker count on a
+    shared machine. Falls back to that count when psutil is not installed.
+    """
+    available = int(effective_n_jobs(-1))
+    try:
+        import psutil
+
+        physical = psutil.cpu_count(logical=False)
+    except Exception:
+        physical = None
+    if not physical:
+        return max(1, available)
+    return max(1, min(int(physical), available))
+
+
+def resolve_pt_workers(n_jobs: Optional[int], n_temperatures: int) -> int:
+    """How many worker processes `n_jobs` asks for with this many temperatures.
+
+    1 means serial, None one process per temperature, a negative value follows
+    joblib's convention counted in physical cores (-1 all of them, -2 all but
+    one), and the result never exceeds the number of temperatures. Exposed so
+    that callers can report or log the worker count without constructing a
+    model; see `ParallelTemperingBART`.
+    """
+    if n_temperatures <= 1:
+        return 1
+    if n_jobs is None:
+        return int(n_temperatures)
+    if n_jobs < 0:
+        requested = _physical_core_count() + 1 + int(n_jobs)
+    else:
+        requested = int(n_jobs)
+    return int(max(1, min(n_temperatures, requested)))
 
 
 class _ConstantTemperature:
@@ -21,9 +65,76 @@ class _ConstantTemperature:
         return self.temperature
 
 
-def _run_sampler_one_iter(sampler, current_state, temp):
-    state = sampler.one_iter(current_state, temp=temp, return_trace=False)
-    return sampler, state
+class _Missing:
+    pass
+
+
+_MISSING = _Missing()
+
+
+def _compress_state_for_trace(state):
+    """Cache-free copy of a state for storing in a trace.
+
+    Idempotent: an already-compressed state (cache is None) is copied without
+    re-evaluating the trees.
+    """
+    if state.cache is None:
+        state_out = Parameters(
+            trees=[tree.copy(copy_cache=False) for tree in state.trees],
+            global_params=state.global_params.copy(),
+            cache=np.empty(0),
+        )
+    else:
+        state_out = state.copy(copy_cache=False)
+    state_out.clear_cache()
+    return state_out
+
+
+def _leaf_basis_and_svd_for_sampler_state(sampler, state):
+    """Leaf basis and its SVD for all trees (both None for a single tree).
+
+    Both depend only on the tree structures, so they stay valid for a whole PT
+    swap step: a swap only permutes states and the post-swap refresh only
+    changes leaf values. The basis has to be built anyway to compute the SVD,
+    so keeping it costs nothing and saves the refresh from rebuilding it.
+    """
+    if state.n_trees <= 1:
+        return None, None
+    leaf_basis = state.leaf_basis(np.arange(state.n_trees))
+    return leaf_basis, sampler.likelihood.leaf_basis_svd(leaf_basis)
+
+
+def _leaf_basis_svd_for_sampler_state(sampler, state):
+    """Just the SVD; see `_leaf_basis_and_svd_for_sampler_state`."""
+    return _leaf_basis_and_svd_for_sampler_state(sampler, state)[1]
+
+
+class _PTSwapLoglikCache:
+    """Per-swap-step cache for PT swap likelihoods, indexed by chain position.
+
+    Swap sweeps never change tree structures (a swap permutes states and the
+    post-swap refresh only resamples leaf values), so each state's leaf-basis
+    SVD is computed once and moves with the state. Collapsed log-likelihood
+    values are memoized per temperature and dropped whenever the state at a
+    position changes. The same floating-point operations are performed as
+    without the cache, so results are bitwise identical.
+    """
+
+    def __init__(self, n_chains: int):
+        # Each entry is _MISSING or a (leaf_basis, svd) pair for the state at
+        # that position; the basis is reused by the post-swap leaf refresh.
+        self.entries = [_MISSING] * n_chains
+        self.values = [dict() for _ in range(n_chains)]
+
+    def swap(self, i: int, j: int):
+        self.entries[i], self.entries[j] = self.entries[j], self.entries[i]
+        self.values[i] = {}
+        self.values[j] = {}
+
+    def leaf_basis(self, chain_id: int):
+        """Cached basis for the state now at `chain_id`, or None if not built yet."""
+        entry = self.entries[chain_id]
+        return None if entry is _MISSING else entry[0]
 
 
 def _run_sampler_block(
@@ -38,11 +149,15 @@ def _run_sampler_block(
     for step in range(int(n_steps)):
         state = sampler.one_iter(state, temp=temp, return_trace=False)
         if keep_states_from is not None and step >= keep_states_from:
-            states.append(state)
+            # DefaultSampler.one_iter updates `state` in place when no tree move is
+            # accepted, so a later step could overwrite an earlier kept state's
+            # global params. Keep a cache-free snapshot: intermediate states are
+            # only used for traces, and this keeps inter-process transfers small.
+            states.append(_compress_state_for_trace(state))
     return sampler, state, states, keep_states_from
 
 
-def _refresh_tempered_state_for_sampler(sampler, state, temp):
+def _refresh_tempered_state_for_sampler(sampler, state, temp, leaf_basis=None):
     tree_ids = np.arange(state.n_trees, dtype=int)
 
     new_leaf_vals = sampler.tree_prior.resample_leaf_vals(
@@ -50,18 +165,31 @@ def _refresh_tempered_state_for_sampler(sampler, state, temp):
         data_y=sampler.data.y,
         tree_ids=tree_ids,
         temp=temp,
+        leaf_basis=leaf_basis,
     )
     state.update_leaf_vals(tree_ids.tolist(), new_leaf_vals)
     return state
 
 
-def _collapsed_loglik_for_sampler_state(sampler, state, temp: float) -> float:
-    collapsed = float(
+def _loglik_as_float(value) -> float:
+    """Scalar log-likelihood.
+
+    `trees_log_marginal_lkhd` returns a plain float for a single tree but a
+    one-element array for an ensemble, because it is handed the one-element
+    `eps_sigma2` array. Picking the element out keeps the value bitwise
+    identical and avoids numpy's deprecated array-to-scalar conversion.
+    """
+    return float(np.asarray(value).reshape(-1)[0])
+
+
+def _collapsed_loglik_for_sampler_state(sampler, state, temp: float, leaf_basis_svd=None) -> float:
+    collapsed = _loglik_as_float(
         sampler.likelihood.trees_log_marginal_lkhd(
             state,
             sampler.data.y,
             np.arange(state.n_trees),
             temp=float(temp),
+            leaf_basis_svd=leaf_basis_svd,
         )
     )
     eps_sigma2 = float(state.global_params["eps_sigma2"][0])
@@ -69,105 +197,232 @@ def _collapsed_loglik_for_sampler_state(sampler, state, temp: float) -> float:
     return collapsed - 0.5 * n * np.log(2.0 * np.pi * eps_sigma2) / float(temp)
 
 
-def _pt_chain_worker(conn, sampler, state, temp):
+def _pt_chain_worker(conn):
+    """Persistent PT worker process, hosting one or more chains.
+
+    Every message is ``(slot, command, *args)``; ``slot`` selects one of the
+    chains this process was given. Replies are sent in the order the requests
+    arrived, so the main process can pipeline requests across all slots and
+    then collect the answers in the same order.
+
+    A slot owns one chain's sampler (its RNG, move statistics and temperature)
+    and holds exactly one state. During a swap step states are not moved: the
+    main process tracks which slot holds the state of each temperature
+    position, and the chain RNGs travel instead (their exact bit-generator
+    states), so every random draw happens in the same order and from the same
+    stream as in the serial implementation. Displaced states are moved to
+    their positions once, at the end of the swap step.
+
+    The chain payloads arrive over the pipe rather than as process arguments;
+    see `_PTWorkerProcess` for why.
+    """
+    payloads = conn.recv()
+    samplers = [payload[0] for payload in payloads]
+    states = [payload[1] for payload in payloads]
+    temps = [payload[2] for payload in payloads]
+    # _MISSING or a (leaf_basis, svd) pair for the state this slot holds; both
+    # depend only on the tree structures, so they survive a post-swap refresh.
+    leaf_caches = [_MISSING] * len(payloads)
+    loglik_memos = [{} for _ in payloads]
     try:
         while True:
             msg = conn.recv()
-            cmd = msg[0]
-            if cmd == "advance":
-                n_steps, keep_states_from = msg[1], msg[2]
-                sampler, state, states, keep_from = _run_sampler_block(
-                    sampler,
-                    state,
-                    temp,
+            slot, cmd = msg[0], msg[1]
+            if cmd == "close":
+                conn.send(None)
+                break
+            elif cmd == "advance":
+                n_steps, keep_states_from = msg[2], msg[3]
+                samplers[slot], states[slot], kept_states, _ = _run_sampler_block(
+                    samplers[slot],
+                    states[slot],
+                    temps[slot],
                     n_steps,
                     keep_states_from=keep_states_from,
                 )
-                conn.send((state, states, keep_from))
-            elif cmd == "set_state":
-                state = msg[1]
-                conn.send(None)
-            elif cmd == "draw_uniform":
-                conn.send(float(sampler.generator.uniform(0.0, 1.0)))
-            elif cmd == "refresh":
-                state = _refresh_tempered_state_for_sampler(sampler, state, temp)
-                conn.send(state)
+                leaf_caches[slot] = _MISSING
+                loglik_memos[slot] = {}
+                conn.send(kept_states)
             elif cmd == "collapsed_logliks":
-                temps = msg[1]
-                conn.send(tuple(_collapsed_loglik_for_sampler_state(sampler, state, t) for t in temps))
-            elif cmd == "get_sampler":
-                conn.send(sampler)
-            elif cmd == "close":
+                # Tree structures are fixed during a swap step, so the leaf-basis
+                # SVD is computed once; values are memoized until leaf values change.
+                if leaf_caches[slot] is _MISSING:
+                    leaf_caches[slot] = _leaf_basis_and_svd_for_sampler_state(
+                        samplers[slot], states[slot]
+                    )
+                memo = loglik_memos[slot]
+                values = []
+                for t in msg[2]:
+                    if t not in memo:
+                        memo[t] = _collapsed_loglik_for_sampler_state(
+                            samplers[slot],
+                            states[slot],
+                            t,
+                            leaf_basis_svd=leaf_caches[slot][1],
+                        )
+                    values.append(memo[t])
+                conn.send(tuple(values))
+            elif cmd == "refresh_with_rng":
+                # Refresh the held state at another position's temperature, using
+                # that position's chain RNG; return the advanced RNG state.
+                chain_temp, rng_state = msg[2], msg[3]
+                bit_generator = samplers[slot].generator.bit_generator
+                own_rng_state = bit_generator.state
+                bit_generator.state = rng_state
+                try:
+                    cached = leaf_caches[slot]
+                    states[slot] = _refresh_tempered_state_for_sampler(
+                        samplers[slot],
+                        states[slot],
+                        chain_temp,
+                        leaf_basis=None if cached is _MISSING else cached[0],
+                    )
+                    new_rng_state = bit_generator.state
+                finally:
+                    bit_generator.state = own_rng_state
+                loglik_memos[slot] = {}
+                conn.send(new_rng_state)
+            elif cmd == "export_state":
+                conn.send(states[slot])
+            elif cmd == "import_state":
+                states[slot] = conn.recv()
+                leaf_caches[slot] = _MISSING
+                loglik_memos[slot] = {}
                 conn.send(None)
-                break
+            elif cmd == "get_rng_state":
+                conn.send(samplers[slot].generator.bit_generator.state)
+            elif cmd == "set_rng_state":
+                samplers[slot].generator.bit_generator.state = msg[2]
+                conn.send(None)
+            elif cmd == "compressed_state":
+                conn.send(_compress_state_for_trace(states[slot]))
+            elif cmd == "get_sampler":
+                conn.send(samplers[slot])
             else:
                 raise ValueError(f"Unknown PT worker command: {cmd}")
     finally:
         conn.close()
 
 
-class _PTChainWorker:
-    def __init__(self, sampler, state, temp):
+class _PTWorkerProcess:
+    """One OS process hosting the chains of a single worker.
+
+    The chain payloads are deliberately not passed as process arguments. Under
+    the spawn start method the parent blocks in `start()` until the child
+    drains the pickled arguments from the pipe, and the child only gets there
+    after importing this package (seconds). Starting workers one at a time
+    would therefore serialize one package import per worker. Instead each
+    process is started with nothing but its pipe, and payloads are sent once
+    every process is running, so the child imports overlap.
+    """
+
+    def __init__(self, payloads):
         ctx = mp.get_context("spawn")
         self.conn, child_conn = ctx.Pipe()
         self.process = ctx.Process(
             target=_pt_chain_worker,
-            args=(child_conn, sampler, state, temp),
+            args=(child_conn,),
             daemon=True,
         )
         self.process.start()
         child_conn.close()
+        self._payloads = list(payloads)
 
-    def advance(self, n_steps: int, keep_states_from: Optional[int]):
-        self.conn.send(("advance", int(n_steps), keep_states_from))
-        return self.conn.recv()
-
-    def set_state(self, state):
-        self.conn.send(("set_state", state))
-        return self.conn.recv()
-
-    def request_set_state(self, state):
-        self.conn.send(("set_state", state))
-
-    def recv_set_state(self):
-        return self.conn.recv()
-
-    def draw_uniform(self) -> float:
-        self.conn.send(("draw_uniform",))
-        return self.conn.recv()
-
-    def request_uniform(self):
-        self.conn.send(("draw_uniform",))
-
-    def recv_uniform(self) -> float:
-        return self.conn.recv()
-
-    def refresh(self):
-        self.conn.send(("refresh",))
-        return self.conn.recv()
-
-    def request_refresh(self):
-        self.conn.send(("refresh",))
-
-    def recv_refresh(self):
-        return self.conn.recv()
-
-    def request_collapsed_logliks(self, temps):
-        self.conn.send(("collapsed_logliks", tuple(float(t) for t in temps)))
-
-    def recv_collapsed_logliks(self):
-        return self.conn.recv()
-
-    def get_sampler(self):
-        self.conn.send(("get_sampler",))
-        return self.conn.recv()
+    def send_payloads(self):
+        """Hand the chains over to the process; blocks until the child is up."""
+        if self._payloads is not None:
+            payloads, self._payloads = self._payloads, None
+            self.conn.send(payloads)
 
     def close(self):
         if self.process.is_alive():
-            self.conn.send(("close",))
-            self.conn.recv()
+            if self._payloads is not None:
+                # Still waiting for its payloads, so it cannot answer commands.
+                self.process.terminate()
+            else:
+                self.conn.send((0, "close"))
+                self.conn.recv()
         self.conn.close()
         self.process.join()
+
+
+class _PTChainWorker:
+    """Handle for one chain inside a `_PTWorkerProcess`.
+
+    Several handles can share a process. The process answers in request order,
+    so callers must receive replies in the order they issued the requests,
+    which is what the fit loop already does.
+    """
+
+    def __init__(self, worker_process: "_PTWorkerProcess", slot: int):
+        self._worker_process = worker_process
+        self.slot = int(slot)
+
+    @property
+    def conn(self):
+        return self._worker_process.conn
+
+    def request(self, *msg):
+        self.conn.send((self.slot,) + msg)
+
+    def recv(self):
+        return self.conn.recv()
+
+    def request_export_state(self):
+        self.request("export_state")
+
+    def recv_state_bytes(self) -> bytes:
+        # Relay the pickled state without unpickling it in the main process.
+        return self.conn.recv_bytes()
+
+    def request_import_state_bytes(self, payload: bytes):
+        self.request("import_state")
+        self.conn.send_bytes(payload)
+
+    def get_sampler(self):
+        self.request("get_sampler")
+        return self.conn.recv()
+
+
+def _split_chains_across_workers(n_chains: int, n_workers: int) -> list[list[int]]:
+    """Contiguous, balanced chain groups; the first groups take the remainder."""
+    if not 1 <= n_workers <= n_chains:
+        raise ValueError("n_workers must be between 1 and n_chains.")
+    base, extra = divmod(n_chains, n_workers)
+    groups = []
+    first = 0
+    for worker_id in range(n_workers):
+        size = base + (1 if worker_id < extra else 0)
+        groups.append(list(range(first, first + size)))
+        first += size
+    return groups
+
+
+def _start_pt_chain_workers(samplers, states, temps, n_workers: int):
+    """Start every worker process, then send the payloads.
+
+    Returns one chain handle per chain plus the processes hosting them; the
+    deferred payloads and the chain-to-process packing are explained in
+    `_PTWorkerProcess` and `_PTChainWorker`.
+    """
+    groups = _split_chains_across_workers(len(samplers), n_workers)
+    processes = []
+    workers = [None] * len(samplers)
+    try:
+        for group in groups:
+            worker_process = _PTWorkerProcess(
+                [(samplers[chain_id], states[chain_id], temps[chain_id]) for chain_id in group]
+            )
+            processes.append(worker_process)
+            for slot, chain_id in enumerate(group):
+                workers[chain_id] = _PTChainWorker(worker_process, slot)
+        for worker_process in processes:
+            worker_process.send_payloads()
+    except BaseException:
+        for worker_process in processes:
+            worker_process.close()
+        raise
+    return workers, processes
 
 
 class BART:
@@ -581,6 +836,17 @@ class ParallelTemperingBART(BART):
     Regression BART with parallel tempering (PT).
 
     Temperature affects likelihood only; tree/global priors are untouched.
+
+    `n_jobs` sets how many worker processes run the chains: 1 keeps everything
+    in this process, -1 uses one process per physical core (-2 all but one),
+    None gives every temperature its own process, and any other value is
+    capped at the number of temperatures. The chains are split into that many
+    contiguous groups. It is a performance knob only — results are bitwise
+    identical for every value.
+
+    -1 is usually the fastest choice. One process per temperature oversubscribes
+    as soon as there are more temperatures than cores, and one process per
+    *logical* core is slower than one per physical core on an SMT machine.
     """
     preprocessor_class = DefaultPreprocessor
 
@@ -697,11 +963,9 @@ class ParallelTemperingBART(BART):
             raise ValueError("n_jobs cannot be 0.")
         self.n_jobs = None if n_jobs is None else int(n_jobs)
         backend = str(local_move_backend).strip().lower()
-        valid_backends = {"joblib-threading", "joblib-loky", "multiprocessing-pipe"}
+        valid_backends = {"multiprocessing-pipe"}
         if backend not in valid_backends:
             raise ValueError(f"local_move_backend must be one of {sorted(valid_backends)}.")
-        if backend.startswith("joblib") and Parallel is None:
-            raise ImportError("joblib is required when local_move_backend uses joblib.")
         self.local_move_backend = backend
 
         self.swap_attempt_counts = np.zeros(max(0, self.n_temperatures - 1), dtype=np.int64)
@@ -712,11 +976,8 @@ class ParallelTemperingBART(BART):
         self.multi_tries = None if multi_tries is None else int(multi_tries)
 
     def _effective_parallel_workers(self) -> int:
-        if self.n_temperatures <= 1:
-            return 1
-        if self.n_jobs is None:
-            return int(self.n_temperatures)
-        return int(min(self.n_temperatures, effective_n_jobs(self.n_jobs)))
+        """Number of worker processes; each hosts one or more temperature chains."""
+        return resolve_pt_workers(self.n_jobs, self.n_temperatures)
 
     def _swap_sweeps_per_interval(self) -> int:
         if self.n_temperatures <= 1:
@@ -725,237 +986,175 @@ class ParallelTemperingBART(BART):
             return self.n_temperatures - 1
         return int(self.swap_sweeps)
 
-    def _advance_all_chains(
-        self,
-        current_states,
-        joblib_pool: Optional[Any] = None,
-    ):
-        if joblib_pool is None:
-            for chain_id, sampler in enumerate(self.chain_samplers):
-                self.chain_samplers[chain_id], current_states[chain_id] = _run_sampler_one_iter(
-                    sampler,
-                    current_states[chain_id],
-                    self.temperatures[chain_id],
-                )
-            return current_states
-
-        results = joblib_pool(
-            delayed(_run_sampler_one_iter)(
-                self.chain_samplers[chain_id],
+    def _advance_all_chains(self, current_states):
+        for chain_id, sampler in enumerate(self.chain_samplers):
+            current_states[chain_id] = sampler.one_iter(
                 current_states[chain_id],
-                self.temperatures[chain_id],
+                temp=self.temperatures[chain_id],
+                return_trace=False,
             )
-            for chain_id in range(self.n_temperatures)
-        )
-        for chain_id, (sampler, next_state) in enumerate(results):
-            self.chain_samplers[chain_id] = sampler
-            current_states[chain_id] = next_state
         return current_states
 
     def _advance_all_chains_block(
         self,
         current_states,
         n_steps: int,
-        joblib_pool: Optional[Any] = None,
         keep_states_from: Optional[int] = None,
     ):
-        if n_steps <= 0:
-            return [
-                (self.chain_samplers[chain_id], current_states[chain_id], [], keep_states_from)
-                for chain_id in range(self.n_temperatures)
-            ]
-
-        if joblib_pool is None:
-            per_chain_results = []
-            for chain_id, sampler in enumerate(self.chain_samplers):
-                chain_keep_states_from = keep_states_from if (self.store_chain_traces or chain_id == 0) else None
-                result = (
-                    _run_sampler_block(
-                        sampler,
-                        current_states[chain_id],
-                        self.temperatures[chain_id],
-                        n_steps,
-                        keep_states_from=chain_keep_states_from,
-                    )
-                )
-                self.chain_samplers[chain_id] = result[0]
-                per_chain_results.append(result)
-            return per_chain_results
-
-        return joblib_pool(
-            delayed(_run_sampler_block)(
-                self.chain_samplers[chain_id],
+        per_chain_results = []
+        for chain_id, sampler in enumerate(self.chain_samplers):
+            chain_keep_states_from = keep_states_from if (self.store_chain_traces or chain_id == 0) else None
+            result = _run_sampler_block(
+                sampler,
                 current_states[chain_id],
                 self.temperatures[chain_id],
                 n_steps,
-                keep_states_from=keep_states_from if (self.store_chain_traces or chain_id == 0) else None,
+                keep_states_from=chain_keep_states_from,
             )
-            for chain_id in range(self.n_temperatures)
-        )
+            self.chain_samplers[chain_id] = result[0]
+            current_states[chain_id] = result[1]
+            per_chain_results.append(result)
+        return per_chain_results
 
-    def _advance_all_chains_workers(self, workers, current_states, n_steps: int, keep_states_from: Optional[int] = None):
+    def _advance_all_chains_workers(self, workers, n_steps: int, keep_states_from: Optional[int] = None):
+        """Advance every chain; returns each chain's kept (compressed) states.
+
+        All requests are issued before any reply is read, so chains hosted by
+        different processes run concurrently and chains sharing a process run
+        back to back.
+        """
         for chain_id, worker in enumerate(workers):
             chain_keep_states_from = keep_states_from if (self.store_chain_traces or chain_id == 0) else None
-            worker.conn.send(("advance", int(n_steps), chain_keep_states_from))
+            worker.request("advance", int(n_steps), chain_keep_states_from)
+        return [worker.recv() for worker in workers]
 
-        results = []
-        for chain_id, worker in enumerate(workers):
-            final_state, states, keep_from = worker.conn.recv()
-            current_states[chain_id] = final_state
-            results.append((None, final_state, states, keep_from))
-        return results
+    def _record_swap_diagnostic(
+        self, i, j, temp_a, temp_b, ll_aa, ll_bb, ll_ab, ll_ba, delta, accepted,
+        iteration=None, sweep=None, swap_step=None,
+    ) -> None:
+        if not (self.store_swap_diagnostics or self.print_swap_diagnostics):
+            return
+        diag = {
+            "pair_index": int(i),
+            "iteration": None if iteration is None else int(iteration),
+            "swap_step": None if swap_step is None else int(swap_step),
+            "sweep": None if sweep is None else int(sweep),
+            "temp_a": temp_a,
+            "temp_b": temp_b,
+            "ll_aa": ll_aa,
+            "ll_bb": ll_bb,
+            "ll_ab": ll_ab,
+            "ll_ba": ll_ba,
+            "delta": delta,
+            "accepted": accepted,
+        }
+        if self.store_swap_diagnostics:
+            self.swap_diagnostics.append(diag)
+        if self.print_swap_diagnostics:
+            print(
+                "[PT swap collapsed] "
+                f"iter={diag['iteration']} "
+                f"step={diag['swap_step']} "
+                f"sweep={diag['sweep']} "
+                f"pair={i}-{j} "
+                f"temp_a={temp_a:.6g} temp_b={temp_b:.6g} "
+                f"ll_aa={ll_aa:.6g} ll_bb={ll_bb:.6g} "
+                f"ll_ab={ll_ab:.6g} ll_ba={ll_ba:.6g} "
+                f"delta={delta:.6g} "
+                f"accepted={accepted}"
+            )
 
-    def _attempt_adjacent_swap_with_workers(
-        self,
-        states,
-        workers,
-        i: int,
-        j: int,
-        iteration: int | None = None,
-        sweep: int | None = None,
-        swap_step: int | None = None,
-        count_for_stats: bool = True,
-    ) -> bool:
-        temp_a = float(self.temperatures[i])
-        temp_b = float(self.temperatures[j])
+    def _swap_step_with_workers(self, workers, iter_idx: int) -> bool:
+        """All swap sweeps of one swap step, bitwise identical to the serial path.
 
-        ll_aa, ll_bb, ll_ab, ll_ba = self._swap_collapsed_logliks(states, i, j, temp_a, temp_b)
-        delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
+        `holder[p]` is the chain handle currently holding the state of
+        temperature position p. Instead of moving states back and forth, the
+        chain RNGs (exact bit-generator states) are kept here: uniforms are
+        drawn here and each refresh runs in the holding worker with the
+        position's RNG state. Per-chain draw order is the same as serial
+        (pairs in a sweep are disjoint). States are moved to their positions
+        once at the end.
 
-        if count_for_stats:
-            self.swap_attempt_counts[i] += 1
-        u = workers[i].draw_uniform()
-        accepted = bool(np.log(u) < delta)
+        Several handles may share one worker process, which answers in request
+        order, so every request loop below is followed by a receive loop over
+        the same handles in the same order. `holder` is only ever reassigned
+        for the pair being resolved, and pairs within a sweep are disjoint, so
+        that order is stable while a batch is in flight.
+        """
+        n_chains = self.n_temperatures
+        for worker in workers:
+            worker.request("get_rng_state")
+        rngs = []
+        for worker in workers:
+            rng_state = worker.recv()
+            bit_generator = getattr(np.random, rng_state["bit_generator"])()
+            bit_generator.state = rng_state
+            rngs.append(np.random.Generator(bit_generator))
 
-        if self.store_swap_diagnostics or self.print_swap_diagnostics:
-            diag = {
-                "pair_index": int(i),
-                "iteration": None if iteration is None else int(iteration),
-                "swap_step": None if swap_step is None else int(swap_step),
-                "sweep": None if sweep is None else int(sweep),
-                "temp_a": temp_a,
-                "temp_b": temp_b,
-                "ll_aa": ll_aa,
-                "ll_bb": ll_bb,
-                "ll_ab": ll_ab,
-                "ll_ba": ll_ba,
-                "delta": delta,
-                "accepted": accepted,
-            }
-            if self.store_swap_diagnostics:
-                self.swap_diagnostics.append(diag)
-            if self.print_swap_diagnostics:
-                print(
-                    "[PT swap collapsed] "
-                    f"iter={diag['iteration']} "
-                    f"step={diag['swap_step']} "
-                    f"sweep={diag['sweep']} "
-                    f"pair={i}-{j} "
-                    f"temp_a={temp_a:.6g} temp_b={temp_b:.6g} "
-                    f"ll_aa={ll_aa:.6g} ll_bb={ll_bb:.6g} "
-                    f"ll_ab={ll_ab:.6g} ll_ba={ll_ba:.6g} "
-                    f"delta={delta:.6g} "
-                    f"accepted={accepted}"
+        holder = list(range(n_chains))
+        swap_step = (iter_idx + 1) // self.swap_interval
+        base_offset = ((iter_idx + 1) // self.swap_interval) % 2
+        in_posterior = iter_idx >= self.nskip
+        accepted_any = False
+
+        for sweep in range(self._swap_sweeps_per_interval()):
+            offset = (base_offset + sweep) % 2
+            pairs = [(left, left + 1) for left in range(offset, n_chains - 1, 2)]
+            if not pairs:
+                continue
+
+            for i, j in pairs:
+                temp_a = float(self.temperatures[i])
+                temp_b = float(self.temperatures[j])
+                workers[holder[i]].request("collapsed_logliks", (temp_a, temp_b))
+                workers[holder[j]].request("collapsed_logliks", (temp_b, temp_a))
+
+            refresh_positions = []
+            for i, j in pairs:
+                temp_a = float(self.temperatures[i])
+                temp_b = float(self.temperatures[j])
+                ll_aa, ll_ba = workers[holder[i]].recv()
+                ll_bb, ll_ab = workers[holder[j]].recv()
+                delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
+                if in_posterior:
+                    self.swap_attempt_counts[i] += 1
+                u = rngs[i].uniform(0.0, 1.0)
+                accepted = bool(np.log(u) < delta)
+                self._record_swap_diagnostic(
+                    i, j, temp_a, temp_b, ll_aa, ll_bb, ll_ab, ll_ba, delta, accepted,
+                    iteration=iter_idx + 1, sweep=sweep + 1, swap_step=swap_step,
                 )
+                if accepted:
+                    accepted_any = True
+                    holder[i], holder[j] = holder[j], holder[i]
+                    if in_posterior:
+                        self.swap_accept_counts[i] += 1
+                    refresh_positions.extend((i, j))
 
-        if accepted:
-            states[i], states[j] = states[j], states[i]
-            workers[i].set_state(states[i])
-            workers[j].set_state(states[j])
-            states[i] = workers[i].refresh()
-            states[j] = workers[j].refresh()
-            if count_for_stats:
-                self.swap_accept_counts[i] += 1
-            return True
-        return False
+            for position in refresh_positions:
+                workers[holder[position]].request(
+                    "refresh_with_rng",
+                    float(self.temperatures[position]),
+                    rngs[position].bit_generator.state,
+                )
+            for position in refresh_positions:
+                rngs[position].bit_generator.state = workers[holder[position]].recv()
 
-    def _attempt_swap_sweep_with_workers(
-        self,
-        states,
-        workers,
-        pairs,
-        iteration: int | None = None,
-        sweep: int | None = None,
-        swap_step: int | None = None,
-        count_for_stats: bool = True,
-    ) -> bool:
-        if len(pairs) == 0:
-            return False
+        # Move displaced states to the worker of their temperature position.
+        moves = [(position, holder[position]) for position in range(n_chains) if holder[position] != position]
+        for _position, source in moves:
+            workers[source].request_export_state()
+        payloads = [workers[source].recv_state_bytes() for _position, source in moves]
+        for (position, _source), payload in zip(moves, payloads):
+            workers[position].request_import_state_bytes(payload)
+        for position, _source in moves:
+            workers[position].recv()
 
-        pair_info = []
-        for i, j in pairs:
-            temp_a = float(self.temperatures[i])
-            temp_b = float(self.temperatures[j])
-            pair_info.append((i, j, temp_a, temp_b))
-
-        swap_results = []
-        for i, j, temp_a, temp_b in pair_info:
-            ll_aa, ll_bb, ll_ab, ll_ba = self._swap_collapsed_logliks(states, i, j, temp_a, temp_b)
-            delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
-            if count_for_stats:
-                self.swap_attempt_counts[i] += 1
-            workers[i].request_uniform()
-            swap_results.append((i, j, temp_a, temp_b, ll_aa, ll_bb, ll_ab, ll_ba, delta))
-
-        accepted_pairs = []
-        accepted_swap = False
-        for i, j, temp_a, temp_b, ll_aa, ll_bb, ll_ab, ll_ba, delta in swap_results:
-            u = workers[i].recv_uniform()
-            accepted = bool(np.log(u) < delta)
-
-            if self.store_swap_diagnostics or self.print_swap_diagnostics:
-                diag = {
-                    "pair_index": int(i),
-                    "iteration": None if iteration is None else int(iteration),
-                    "swap_step": None if swap_step is None else int(swap_step),
-                    "sweep": None if sweep is None else int(sweep),
-                    "temp_a": temp_a,
-                    "temp_b": temp_b,
-                    "ll_aa": ll_aa,
-                    "ll_bb": ll_bb,
-                    "ll_ab": ll_ab,
-                    "ll_ba": ll_ba,
-                    "delta": delta,
-                    "accepted": accepted,
-                }
-                if self.store_swap_diagnostics:
-                    self.swap_diagnostics.append(diag)
-                if self.print_swap_diagnostics:
-                    print(
-                        "[PT swap collapsed] "
-                        f"iter={diag['iteration']} "
-                        f"step={diag['swap_step']} "
-                        f"sweep={diag['sweep']} "
-                        f"pair={i}-{j} "
-                        f"temp_a={temp_a:.6g} temp_b={temp_b:.6g} "
-                        f"ll_aa={ll_aa:.6g} ll_bb={ll_bb:.6g} "
-                        f"ll_ab={ll_ab:.6g} ll_ba={ll_ba:.6g} "
-                        f"delta={delta:.6g} "
-                        f"accepted={accepted}"
-                    )
-
-            if accepted:
-                accepted_swap = True
-                accepted_pairs.append((i, j))
-                states[i], states[j] = states[j], states[i]
-                if count_for_stats:
-                    self.swap_accept_counts[i] += 1
-
-        for i, j in accepted_pairs:
-            workers[i].request_set_state(states[i])
-            workers[j].request_set_state(states[j])
-        for i, j in accepted_pairs:
-            workers[i].recv_set_state()
-            workers[j].recv_set_state()
-
-        for i, j in accepted_pairs:
-            workers[i].request_refresh()
-            workers[j].request_refresh()
-        for i, j in accepted_pairs:
-            states[i] = workers[i].recv_refresh()
-            states[j] = workers[j].recv_refresh()
-
-        return accepted_swap
+        for position, worker in enumerate(workers):
+            worker.request("set_rng_state", rngs[position].bit_generator.state)
+        for worker in workers:
+            worker.recv()
+        return accepted_any
 
     @staticmethod
     def _build_temperature_ladder(
@@ -982,9 +1181,7 @@ class ParallelTemperingBART(BART):
         return list(np.geomspace(1.0, float(max_temperature), int(n_temperatures)).astype(float))
 
     def _compress_state_for_trace(self, state):
-        state_out = state.copy(copy_cache=False)
-        state_out.clear_cache()
-        return state_out
+        return _compress_state_for_trace(state)
 
     def _state_loglik_rss_eps(self, state):
         if state.cache is not None:
@@ -1000,27 +1197,46 @@ class ParallelTemperingBART(BART):
         loglik = float(-0.5 * (n * np.log(eps_sigma2) + rss / eps_sigma2))
         return loglik, rss, eps_sigma2
 
-    def _state_collapsed_loglik(self, state, temp: float) -> float:
-        collapsed = float(
+    def _state_collapsed_loglik(self, state, temp: float, leaf_basis_svd=None) -> float:
+        collapsed = _loglik_as_float(
             self.sampler.likelihood.trees_log_marginal_lkhd(
                 state,
                 self.data.y,
                 np.arange(state.n_trees),
                 temp=temp,
+                leaf_basis_svd=leaf_basis_svd,
             )
         )
         eps_sigma2 = float(state.global_params["eps_sigma2"][0])
         n = int(self.data.y.shape[0])
         return collapsed - 0.5 * n * np.log(2.0 * np.pi * eps_sigma2) / float(temp)
 
-    def _swap_collapsed_logliks(self, states, i: int, j: int, temp_a: float, temp_b: float):
-        ll_aa = self._state_collapsed_loglik(states[i], temp_a)
-        ll_bb = self._state_collapsed_loglik(states[j], temp_b)
-        ll_ab = self._state_collapsed_loglik(states[j], temp_a)
-        ll_ba = self._state_collapsed_loglik(states[i], temp_b)
+    def _swap_collapsed_logliks(self, states, i: int, j: int, temp_a: float, temp_b: float, swap_cache=None):
+        if swap_cache is None:
+            ll_aa = self._state_collapsed_loglik(states[i], temp_a)
+            ll_bb = self._state_collapsed_loglik(states[j], temp_b)
+            ll_ab = self._state_collapsed_loglik(states[j], temp_a)
+            ll_ba = self._state_collapsed_loglik(states[i], temp_b)
+            return ll_aa, ll_bb, ll_ab, ll_ba
+        ll_aa = self._cached_collapsed_loglik(states, swap_cache, i, temp_a)
+        ll_bb = self._cached_collapsed_loglik(states, swap_cache, j, temp_b)
+        ll_ab = self._cached_collapsed_loglik(states, swap_cache, j, temp_a)
+        ll_ba = self._cached_collapsed_loglik(states, swap_cache, i, temp_b)
         return ll_aa, ll_bb, ll_ab, ll_ba
 
-    def _refresh_state_tempered_params(self, state, chain_id: int) -> None:
+    def _cached_collapsed_loglik(self, states, swap_cache, chain_id: int, temp: float) -> float:
+        values = swap_cache.values[chain_id]
+        if temp in values:
+            return values[temp]
+        entry = swap_cache.entries[chain_id]
+        if entry is _MISSING:
+            entry = _leaf_basis_and_svd_for_sampler_state(self.sampler, states[chain_id])
+            swap_cache.entries[chain_id] = entry
+        value = self._state_collapsed_loglik(states[chain_id], temp, leaf_basis_svd=entry[1])
+        values[temp] = value
+        return value
+
+    def _refresh_state_tempered_params(self, state, chain_id: int, leaf_basis=None) -> None:
         sampler = self.chain_samplers[chain_id]
         temp = float(self.temperatures[chain_id])
         tree_ids = np.arange(state.n_trees, dtype=int)
@@ -1030,6 +1246,7 @@ class ParallelTemperingBART(BART):
             data_y=self.data.y,
             tree_ids=tree_ids,
             temp=temp,
+            leaf_basis=leaf_basis,
         )
         state.update_leaf_vals(tree_ids.tolist(), new_leaf_vals)
 
@@ -1042,12 +1259,15 @@ class ParallelTemperingBART(BART):
         sweep: int | None = None,
         swap_step: int | None = None,
         count_for_stats: bool = True,
+        swap_cache=None,
     ) -> bool:
         sampler = self.chain_samplers[i]
         temp_a = float(self.temperatures[i])
         temp_b = float(self.temperatures[j])
 
-        ll_aa, ll_bb, ll_ab, ll_ba = self._swap_collapsed_logliks(states, i, j, temp_a, temp_b)
+        ll_aa, ll_bb, ll_ab, ll_ba = self._swap_collapsed_logliks(
+            states, i, j, temp_a, temp_b, swap_cache=swap_cache
+        )
         delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
 
         if count_for_stats:
@@ -1055,41 +1275,21 @@ class ParallelTemperingBART(BART):
         u = sampler.generator.uniform(0.0, 1.0)
         accepted = bool(np.log(u) < delta)
 
-        if self.store_swap_diagnostics or self.print_swap_diagnostics:
-            diag = {
-                "pair_index": int(i),
-                "iteration": None if iteration is None else int(iteration),
-                "swap_step": None if swap_step is None else int(swap_step),
-                "sweep": None if sweep is None else int(sweep),
-                "temp_a": temp_a,
-                "temp_b": temp_b,
-                "ll_aa": ll_aa,
-                "ll_bb": ll_bb,
-                "ll_ab": ll_ab,
-                "ll_ba": ll_ba,
-                "delta": delta,
-                "accepted": accepted,
-            }
-            if self.store_swap_diagnostics:
-                self.swap_diagnostics.append(diag)
-            if self.print_swap_diagnostics:
-                print(
-                    "[PT swap collapsed] "
-                    f"iter={diag['iteration']} "
-                    f"step={diag['swap_step']} "
-                    f"sweep={diag['sweep']} "
-                    f"pair={i}-{j} "
-                    f"temp_a={temp_a:.6g} temp_b={temp_b:.6g} "
-                    f"ll_aa={ll_aa:.6g} ll_bb={ll_bb:.6g} "
-                    f"ll_ab={ll_ab:.6g} ll_ba={ll_ba:.6g} "
-                    f"delta={delta:.6g} "
-                    f"accepted={accepted}"
-                )
+        self._record_swap_diagnostic(
+            i, j, temp_a, temp_b, ll_aa, ll_bb, ll_ab, ll_ba, delta, accepted,
+            iteration=iteration, sweep=sweep, swap_step=swap_step,
+        )
 
         if accepted:
             states[i], states[j] = states[j], states[i]
-            self._refresh_state_tempered_params(states[i], i)
-            self._refresh_state_tempered_params(states[j], j)
+            if swap_cache is not None:
+                # After `swap`, entry k belongs to the state now at position k.
+                swap_cache.swap(i, j)
+                basis_i, basis_j = swap_cache.leaf_basis(i), swap_cache.leaf_basis(j)
+            else:
+                basis_i = basis_j = None
+            self._refresh_state_tempered_params(states[i], i, leaf_basis=basis_i)
+            self._refresh_state_tempered_params(states[j], j, leaf_basis=basis_j)
             if count_for_stats:
                 self.swap_accept_counts[i] += 1
             return True
@@ -1116,139 +1316,152 @@ class ParallelTemperingBART(BART):
             current_states.append(sampler.get_init_state())
 
         total_iters = self.ndpost + self.nskip
-        workers = self._effective_parallel_workers()
-        with ExitStack() as stack:
-            maybe_joblib_pool = None
-            persistent_workers = None
-            if workers > 1 and self.local_move_backend == "multiprocessing-pipe":
-                persistent_workers = [
-                    _PTChainWorker(
-                        self.chain_samplers[chain_id],
-                        current_states[chain_id],
-                        self.temperatures[chain_id],
-                    )
-                    for chain_id in range(self.n_temperatures)
-                ]
-                for worker in persistent_workers:
-                    stack.callback(worker.close)
-            elif workers > 1:
-                if self.local_move_backend == "joblib-threading":
-                    maybe_joblib_pool = stack.enter_context(
-                        Parallel(n_jobs=workers, backend="threading")
-                    )
-                elif self.local_move_backend == "joblib-loky":
-                    maybe_joblib_pool = stack.enter_context(
-                        Parallel(n_jobs=workers, backend="loky")
-                    )
-
-            progress = None if quietly else tqdm(total=total_iters, desc="Iterations")
-            it = 0
-            while it < total_iters:
-                steps_to_boundary = self.swap_interval - (it % self.swap_interval)
-                block_steps = min(steps_to_boundary, total_iters - it)
-                keep_states_from = None
-                if it + block_steps > self.nskip:
-                    keep_states_from = max(0, self.nskip - it)
-
-                # Parallelize local moves for the whole block between swap boundaries.
-                if persistent_workers is not None:
-                    block_chain_states = self._advance_all_chains_workers(
-                        persistent_workers,
-                        current_states,
-                        n_steps=block_steps,
-                        keep_states_from=keep_states_from,
-                    )
-                else:
-                    block_chain_states = self._advance_all_chains_block(
-                        current_states,
-                        n_steps=block_steps,
-                        joblib_pool=maybe_joblib_pool,
-                        keep_states_from=keep_states_from,
-                    )
-                    for chain_id, (sampler, final_state, _trace_states, _keep_from) in enumerate(block_chain_states):
-                        self.chain_samplers[chain_id] = sampler
-                        current_states[chain_id] = final_state
-
-                for local_step in range(block_steps):
-                    iter_idx = it + local_step
-                    if local_step < block_steps - 1 and keep_states_from is not None and local_step >= keep_states_from:
-                        current_states[0] = block_chain_states[0][2][local_step - keep_states_from]
-
-                    accepted_swap_this_iter = False
-
-                    # Swap only at interval boundaries (same semantics as before).
-                    if self.n_temperatures > 1 and ((iter_idx + 1) % self.swap_interval == 0):
-                        for chain_id in range(self.n_temperatures):
-                            current_states[chain_id] = block_chain_states[chain_id][1]
-                        swap_step = (iter_idx + 1) // self.swap_interval
-                        base_offset = ((iter_idx + 1) // self.swap_interval) % 2
-                        for sweep in range(self._swap_sweeps_per_interval()):
-                            offset = (base_offset + sweep) % 2
-                            pair_lefts = list(range(offset, self.n_temperatures - 1, 2))
-                            in_posterior = iter_idx >= self.nskip
-                            if persistent_workers is not None:
-                                pairs = [(left, left + 1) for left in pair_lefts]
-                                accepted_swap_this_iter = self._attempt_swap_sweep_with_workers(
-                                    current_states,
-                                    persistent_workers,
-                                    pairs,
-                                    iteration=iter_idx + 1,
-                                    sweep=sweep + 1,
-                                    swap_step=swap_step,
-                                    count_for_stats=in_posterior,
-                                ) or accepted_swap_this_iter
-                            else:
-                                for left in pair_lefts:
-                                    accepted_swap_this_iter = self._attempt_adjacent_swap(
-                                        current_states,
-                                        left,
-                                        left + 1,
-                                        iteration=iter_idx + 1,
-                                        sweep=sweep + 1,
-                                        swap_step=swap_step,
-                                        count_for_stats=in_posterior,
-                                    ) or accepted_swap_this_iter
-
-                    if accepted_swap_this_iter and self.post_swap_repair_steps > 0:
-                        if persistent_workers is not None:
-                            self._advance_all_chains_workers(
-                                persistent_workers,
-                                current_states,
-                                n_steps=self.post_swap_repair_steps,
-                                keep_states_from=None,
-                            )
-                        else:
-                            for _ in range(self.post_swap_repair_steps):
-                                current_states = self._advance_all_chains(
-                                    current_states,
-                                    joblib_pool=None,
-                                )
-
-                    if iter_idx >= self.nskip:
-                        self.trace.append(self._compress_state_for_trace(current_states[0]))
-                        if self.chain_traces is not None:
-                            for chain_id in range(self.n_temperatures):
-                                if local_step < block_steps - 1 and keep_states_from is not None:
-                                    current_states[chain_id] = block_chain_states[chain_id][2][local_step - keep_states_from]
-                                self.chain_traces[chain_id].append(
-                                    self._compress_state_for_trace(current_states[chain_id])
-                                )
-
-                    if progress is not None:
-                        progress.update(1)
-
-                it += block_steps
-
-            if progress is not None:
-                progress.close()
-
-            if persistent_workers is not None:
-                for chain_id, worker in enumerate(persistent_workers):
+        progress = None if quietly else tqdm(total=total_iters, desc="Iterations")
+        if self._effective_parallel_workers() > 1:
+            with ExitStack() as stack:
+                workers, worker_processes = _start_pt_chain_workers(
+                    self.chain_samplers,
+                    current_states,
+                    self.temperatures,
+                    self._effective_parallel_workers(),
+                )
+                for worker_process in worker_processes:
+                    stack.callback(worker_process.close)
+                del current_states  # the workers own the states from here on
+                self._fit_loop_workers(workers, total_iters, progress)
+                for chain_id, worker in enumerate(workers):
                     self.chain_samplers[chain_id] = worker.get_sampler()
+        else:
+            self._fit_loop_serial(current_states, total_iters, progress)
+        if progress is not None:
+            progress.close()
 
         self.is_fitted = True
         self.sampler = self.chain_samplers[0]
         return self
+
+    def _block_bounds(self, it: int, total_iters: int):
+        steps_to_boundary = self.swap_interval - (it % self.swap_interval)
+        block_steps = min(steps_to_boundary, total_iters - it)
+        keep_states_from = None
+        if it + block_steps > self.nskip:
+            keep_states_from = max(0, self.nskip - it)
+        return block_steps, keep_states_from
+
+    def _fit_loop_serial(self, current_states, total_iters: int, progress) -> None:
+        it = 0
+        while it < total_iters:
+            block_steps, keep_states_from = self._block_bounds(it, total_iters)
+            block_chain_states = self._advance_all_chains_block(
+                current_states,
+                n_steps=block_steps,
+                keep_states_from=keep_states_from,
+            )
+
+            for local_step in range(block_steps):
+                iter_idx = it + local_step
+                if local_step < block_steps - 1 and keep_states_from is not None and local_step >= keep_states_from:
+                    current_states[0] = block_chain_states[0][2][local_step - keep_states_from]
+
+                accepted_swap_this_iter = False
+                # The final step of every block must use each chain's final
+                # state, even if this block does not end on a swap boundary.
+                if local_step == block_steps - 1:
+                    for chain_id in range(self.n_temperatures):
+                        current_states[chain_id] = block_chain_states[chain_id][1]
+
+                # Swap only at interval boundaries.
+                if self.n_temperatures > 1 and ((iter_idx + 1) % self.swap_interval == 0):
+                    swap_step = (iter_idx + 1) // self.swap_interval
+                    swap_cache = _PTSwapLoglikCache(self.n_temperatures)
+                    base_offset = ((iter_idx + 1) // self.swap_interval) % 2
+                    for sweep in range(self._swap_sweeps_per_interval()):
+                        offset = (base_offset + sweep) % 2
+                        in_posterior = iter_idx >= self.nskip
+                        for left in range(offset, self.n_temperatures - 1, 2):
+                            accepted_swap_this_iter = self._attempt_adjacent_swap(
+                                current_states,
+                                left,
+                                left + 1,
+                                iteration=iter_idx + 1,
+                                sweep=sweep + 1,
+                                swap_step=swap_step,
+                                count_for_stats=in_posterior,
+                                swap_cache=swap_cache,
+                            ) or accepted_swap_this_iter
+
+                if accepted_swap_this_iter and self.post_swap_repair_steps > 0:
+                    for _ in range(self.post_swap_repair_steps):
+                        current_states = self._advance_all_chains(current_states)
+
+                if iter_idx >= self.nskip:
+                    self.trace.append(self._compress_state_for_trace(current_states[0]))
+                    if self.chain_traces is not None:
+                        for chain_id in range(self.n_temperatures):
+                            if local_step < block_steps - 1 and keep_states_from is not None:
+                                current_states[chain_id] = block_chain_states[chain_id][2][local_step - keep_states_from]
+                            self.chain_traces[chain_id].append(
+                                self._compress_state_for_trace(current_states[chain_id])
+                            )
+
+                if progress is not None:
+                    progress.update(1)
+
+            it += block_steps
+
+    def _fit_loop_workers(self, workers, total_iters: int, progress) -> None:
+        """Parallel counterpart of `_fit_loop_serial` with identical results.
+
+        Full states stay in the workers. Only compressed trace states, swap
+        likelihood values, RNG states and displaced states cross the pipes.
+        """
+        traced_chains = list(range(self.n_temperatures)) if self.chain_traces is not None else [0]
+        it = 0
+        while it < total_iters:
+            block_steps, keep_states_from = self._block_bounds(it, total_iters)
+            kept_states = self._advance_all_chains_workers(
+                workers,
+                n_steps=block_steps,
+                keep_states_from=keep_states_from,
+            )
+
+            for local_step in range(block_steps):
+                iter_idx = it + local_step
+                accepted_swap_this_iter = False
+                if self.n_temperatures > 1 and ((iter_idx + 1) % self.swap_interval == 0):
+                    accepted_swap_this_iter = self._swap_step_with_workers(workers, iter_idx)
+
+                if accepted_swap_this_iter and self.post_swap_repair_steps > 0:
+                    self._advance_all_chains_workers(
+                        workers,
+                        n_steps=self.post_swap_repair_steps,
+                        keep_states_from=None,
+                    )
+
+                if iter_idx >= self.nskip:
+                    if accepted_swap_this_iter:
+                        # States changed after the block: fetch them (cache-free).
+                        for chain_id in traced_chains:
+                            workers[chain_id].request("compressed_state")
+                        step_states = {chain_id: workers[chain_id].recv() for chain_id in traced_chains}
+                    else:
+                        step_states = {
+                            chain_id: kept_states[chain_id][local_step - keep_states_from]
+                            for chain_id in traced_chains
+                        }
+                    # Step states are already cache-free and not shared elsewhere.
+                    self.trace.append(step_states[0])
+                    if self.chain_traces is not None:
+                        for chain_id in traced_chains:
+                            state = step_states[chain_id]
+                            if chain_id == 0:
+                                state = self._compress_state_for_trace(state)
+                            self.chain_traces[chain_id].append(state)
+
+                if progress is not None:
+                    progress.update(1)
+
+            it += block_steps
 
     def update_fit(self, X, y, add_ndpost=20, quietly=False):
         # For PT, a full re-fit is the safest behavior to keep chain coupling coherent.
@@ -1272,6 +1485,12 @@ class ParallelTemperingBART(BART):
             "post_swap_repair_steps": self.post_swap_repair_steps,
             "n_jobs": self.n_jobs,
             "effective_parallel_workers": self._effective_parallel_workers(),
+            "chains_per_worker": [
+                len(group)
+                for group in _split_chains_across_workers(
+                    self.n_temperatures, self._effective_parallel_workers()
+                )
+            ],
             "local_move_backend": self.local_move_backend,
             "store_chain_traces": self.store_chain_traces,
             "store_swap_diagnostics": self.store_swap_diagnostics,
