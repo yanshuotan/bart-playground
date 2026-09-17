@@ -158,11 +158,35 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def load_abalone() -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Load and preprocess UCI Abalone exactly as the fixed-100 runner did."""
+ABALONE_CACHE_DIR = STORE_DIR / "uci_abalone"
+
+
+def fetch_abalone_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Raw Abalone features and target, from a local cache when one exists.
+
+    Cluster compute nodes often have no outbound network, so the first call on
+    a machine that does have one writes the frames next to the stored
+    experiment data and later calls read them back. Run this script once on a
+    networked machine (or a login node) to populate the cache before
+    submitting a batch job.
+    """
+    features_path = ABALONE_CACHE_DIR / "features.csv"
+    targets_path = ABALONE_CACHE_DIR / "targets.csv"
+    if features_path.is_file() and targets_path.is_file():
+        return pd.read_csv(features_path), pd.read_csv(targets_path)
+
     dataset = fetch_ucirepo(id=1)
     features = dataset.data.features.copy()
     targets = dataset.data.targets.copy()
+    ABALONE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    features.to_csv(features_path, index=False)
+    targets.to_csv(targets_path, index=False)
+    return features, targets
+
+
+def load_abalone() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Load and preprocess UCI Abalone exactly as the fixed-100 runner did."""
+    features, targets = fetch_abalone_frames()
     if targets.shape[1] != 1:
         raise ValueError(f"Expected one Abalone target column, found {list(targets.columns)}")
 
