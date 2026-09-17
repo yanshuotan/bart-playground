@@ -14,9 +14,70 @@ from sklearn.metrics import root_mean_squared_error
 from bart_playground import DefaultBART, MultiBART, ParallelTemperingBART
 from bart_playground.samplers import default_proposal_probs, mtmh_proposal_probs
 
+# --------------------------------------------------------------------------
+# Seeds. This module is the single source of truth; fixed100_support re-exports
+# these. Do not redefine them anywhere else.
+#
+# Everything downstream is derived, so the three values below plus the dataset
+# fix the whole experiment:
+#     test points  : rng(GLOBAL_FIXED_TEST_SEED)          -- shared by all runs
+#     train subset : rng(GLOBAL_BASE_TRAIN_SEED + run_id)
+#     short chains : base_chain_seed + run_id*1000 + chain_id
+#     long  chains : base_chain_seed + 100000 + run_id*1000 + chain_id
+#
+# WARNING: base_chain_seed is a *default*, and past runs overrode it on the
+# command line with --base-chain-seed. It is not written to the per-run
+# short_metadata.csv, and where dataset_metadata.csv does record it the value
+# can be stale, so the only reliable way to identify it is to replay one draw
+# and compare. The seeds behind diagnosis/store were established that way
+# (replaying `default` draw 0, which is BLAS-free and so matches exactly):
+#
+#     base_chain_seed=3024   Abalone, Concrete, Friedman,
+#                            FriedmanSparseDir_p100
+#                            (p100's dataset_metadata.csv says 2024 -- wrong)
+#     base_chain_seed=2024   CCPP, SeoulBike, CalHousing_subsample5000,
+#                            FriedmanSparseDir_p20, FriedmanSparseDir_p200
+#
+# So reproducing a stored dataset means passing the right --base-chain-seed,
+# not relying on the default below.
+# --------------------------------------------------------------------------
 GLOBAL_FIXED_TEST_SEED = 42
 GLOBAL_BASE_TRAIN_SEED = 2026
 GLOBAL_BASE_CHAIN_SEED = 2024
+
+# Stored-run chain seeds, keyed by store directory name, so that a replay can
+# look the value up instead of guessing. See the warning above.
+STORE_BASE_CHAIN_SEEDS = {
+    "fixed100_Abalone": 3024,
+    "fixed100_Concrete": 3024,
+    "fixed100_Friedman": 3024,
+    "fixed100_FriedmanSparseDir_p100": 3024,
+    "fixed100_CCPP": 2024,
+    "fixed100_SeoulBike": 2024,
+    "fixed100_CalHousing_subsample5000": 2024,
+    "fixed100_FriedmanSparseDir_p20": 2024,
+    "fixed100_FriedmanSparseDir_p200": 2024,
+}
+
+# Long (`default_long`) chains were run separately from the short ones and all
+# used base_chain_seed=2024, including the datasets whose short chains used
+# 3024 -- so do not carry the short-chain seed over to a long replay. Verified
+# by replaying draw 0 and draw 1; `long_store_every` here is the stride the
+# store actually used, and DATASET_CONFIGS now agrees with it.
+#
+# fixed100_Concrete is the one store that could not be reproduced: with
+# base_chain_seed 2024 its long draw 0 is already off by ~30%, and no seed,
+# n_trees or train split that was tried recovers it. Its provenance
+# (a "corrected long01" rerun) is not recorded anywhere in the repo.
+STORE_LONG_SETTINGS = {
+    # store directory: (base_chain_seed, long_ndpost, long_store_every, reproducible)
+    "fixed100_Abalone":                  (2024,  1_000_000,  100, True),
+    "fixed100_Friedman":                 (2024, 10_000_000, 1000, True),
+    "fixed100_SeoulBike":                (2024, 10_000_000, 1000, True),
+    "fixed100_CalHousing_subsample5000": (2024,  1_000_000,  100, True),
+    "fixed100_FriedmanSparseDir_p100":   (2024,  1_000_000,  100, True),
+    "fixed100_Concrete":                 (None, 10_000_000, 1000, False),
+}
 
 
 METHODS_SHORT = ["default", "default_pt", "mtmh", "mtmh_pt"]

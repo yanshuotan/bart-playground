@@ -23,9 +23,12 @@ from bart_playground.DataGenerator import DataGenerator
 
 import experiment_fixed100 as exp
 
-GLOBAL_FIXED_TEST_SEED = 42
-GLOBAL_BASE_TRAIN_SEED = 2026
-GLOBAL_BASE_CHAIN_SEED = 2024
+# Re-exported from experiment_fixed100, which owns them. Keeping a second set
+# of literals here is what let the two drift apart unnoticed.
+GLOBAL_FIXED_TEST_SEED = exp.GLOBAL_FIXED_TEST_SEED
+GLOBAL_BASE_TRAIN_SEED = exp.GLOBAL_BASE_TRAIN_SEED
+GLOBAL_BASE_CHAIN_SEED = exp.GLOBAL_BASE_CHAIN_SEED
+STORE_BASE_CHAIN_SEEDS = exp.STORE_BASE_CHAIN_SEEDS
 
 
 DATASET_CONFIGS = {
@@ -80,8 +83,10 @@ DATASET_CONFIGS = {
     "seoul_bike": {
         "dataset_tag": "fixed100_SeoulBike",
         "uci_id": 560,
-        "long_ndpost": 1_000_000,
-        "long_store_every": 100,
+        # Matches the stored SeoulBike long chain (see its
+        # default_long_metadata.csv and STORE_LONG_SETTINGS).
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
         "drop_columns": ["Date"],
         "categorical_columns": "auto",
         "target_column": "Rented Bike Count",
@@ -189,6 +194,31 @@ def _clean_finite_rows(X, y):
     return X[mask], y[mask], int((~mask).sum())
 
 
+UCI_CACHE_DIR = Path(__file__).resolve().parent / "store" / "uci_cache"
+
+
+def _fetch_uci_frames(name: str, uci_id: int):
+    """Raw UCI features/targets, from a local cache when one exists.
+
+    Cluster compute nodes generally have no outbound network, so the first call
+    on a machine that does have one writes the frames to disk and later calls
+    read them back. Populate the cache on a login node before submitting a
+    batch job.
+    """
+    features_path = UCI_CACHE_DIR / f"{name}__features.csv"
+    targets_path = UCI_CACHE_DIR / f"{name}__targets.csv"
+    if features_path.is_file() and targets_path.is_file():
+        return pd.read_csv(features_path), pd.read_csv(targets_path)
+
+    ds = fetch_ucirepo(id=uci_id)
+    features = ds.data.features.copy()
+    targets = ds.data.targets.copy()
+    UCI_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    features.to_csv(features_path, index=False)
+    targets.to_csv(targets_path, index=False)
+    return features, targets
+
+
 def load_dataset(name: str):
     cfg = DATASET_CONFIGS[name]
 
@@ -215,10 +245,10 @@ def load_dataset(name: str):
         )
         return X, y
 
-    ds = fetch_ucirepo(id=cfg["uci_id"])
+    features, targets = _fetch_uci_frames(name, cfg["uci_id"])
     features, y = _select_target_and_features(
-        ds.data.features,
-        ds.data.targets,
+        features,
+        targets,
         target_column=cfg.get("target_column"),
     )
     X, feature_names, cat_cols = _preprocess_features(

@@ -40,7 +40,18 @@ def _common_arguments(parser):
     parser.add_argument("--train-fraction", type=float, default=0.75)
     parser.add_argument("--fixed-test-seed", type=int, default=GLOBAL_FIXED_TEST_SEED)
     parser.add_argument("--base-train-seed", type=int, default=GLOBAL_BASE_TRAIN_SEED)
-    parser.add_argument("--base-chain-seed", type=int, default=GLOBAL_BASE_CHAIN_SEED)
+    parser.add_argument(
+        "--base-chain-seed",
+        type=int,
+        default=GLOBAL_BASE_CHAIN_SEED,
+        help=(
+            f"Chain seed base; chain_seed = this + run_id*1000 + chain_id "
+            f"(default {GLOBAL_BASE_CHAIN_SEED}). The existing stores were NOT all "
+            f"made with the default: see STORE_BASE_CHAIN_SEEDS in "
+            f"experiment_fixed100.py for the per-dataset value, and pass it "
+            f"explicitly when reproducing one."
+        ),
+    )
     parser.add_argument("--short-ndpost", type=int, default=10_000)
     parser.add_argument("--short-nskip", type=int, default=0)
     parser.add_argument("--n-trees", type=int, default=100)
@@ -241,6 +252,14 @@ def main(argv=None):
     args = parse_args(argv)
     store_root = _store_root(args)
     print(f"Writing outputs to: {store_root}", flush=True)
+    # Echo the seeds: base_chain_seed is not saved into short_metadata.csv, so
+    # the run log is the only place it is recorded.
+    print(
+        f"Seeds: fixed_test={args.fixed_test_seed} base_train={args.base_train_seed} "
+        f"base_chain={args.base_chain_seed}"
+        f"{'' if args.base_chain_seed == GLOBAL_BASE_CHAIN_SEED else ' (overridden)'}",
+        flush=True,
+    )
     _use_ladder(args)
     if args.experiment == "fixed":
         _run_fixed(args, store_root)
