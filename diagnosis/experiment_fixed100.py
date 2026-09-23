@@ -14,70 +14,14 @@ from sklearn.metrics import root_mean_squared_error
 from bart_playground import DefaultBART, MultiBART, ParallelTemperingBART
 from bart_playground.samplers import default_proposal_probs, mtmh_proposal_probs
 
-# --------------------------------------------------------------------------
-# Seeds. This module is the single source of truth; fixed100_support re-exports
-# these. Do not redefine them anywhere else.
-#
-# Everything downstream is derived, so the three values below plus the dataset
-# fix the whole experiment:
+# Seeds; fixed100_support re-exports these. diagnosis/store was made with them.
 #     test points  : rng(GLOBAL_FIXED_TEST_SEED)          -- shared by all runs
 #     train subset : rng(GLOBAL_BASE_TRAIN_SEED + run_id)
 #     short chains : base_chain_seed + run_id*1000 + chain_id
 #     long  chains : base_chain_seed + 100000 + run_id*1000 + chain_id
-#
-# WARNING: base_chain_seed is a *default*, and past runs overrode it on the
-# command line with --base-chain-seed. It is not written to the per-run
-# short_metadata.csv, and where dataset_metadata.csv does record it the value
-# can be stale, so the only reliable way to identify it is to replay one draw
-# and compare. The seeds behind diagnosis/store were established that way
-# (replaying `default` draw 0, which is BLAS-free and so matches exactly):
-#
-#     base_chain_seed=3024   Abalone, Concrete, Friedman,
-#                            FriedmanSparseDir_p100
-#                            (p100's dataset_metadata.csv says 2024 -- wrong)
-#     base_chain_seed=2024   CCPP, SeoulBike, CalHousing_subsample5000,
-#                            FriedmanSparseDir_p20, FriedmanSparseDir_p200
-#
-# So reproducing a stored dataset means passing the right --base-chain-seed,
-# not relying on the default below.
-# --------------------------------------------------------------------------
 GLOBAL_FIXED_TEST_SEED = 42
 GLOBAL_BASE_TRAIN_SEED = 2026
 GLOBAL_BASE_CHAIN_SEED = 2024
-
-# Stored-run chain seeds, keyed by store directory name, so that a replay can
-# look the value up instead of guessing. See the warning above.
-STORE_BASE_CHAIN_SEEDS = {
-    "fixed100_Abalone": 3024,
-    "fixed100_Concrete": 3024,
-    "fixed100_Friedman": 3024,
-    "fixed100_FriedmanSparseDir_p100": 3024,
-    "fixed100_CCPP": 2024,
-    "fixed100_SeoulBike": 2024,
-    "fixed100_CalHousing_subsample5000": 2024,
-    "fixed100_FriedmanSparseDir_p20": 2024,
-    "fixed100_FriedmanSparseDir_p200": 2024,
-}
-
-# Long (`default_long`) chains were run separately from the short ones and all
-# used base_chain_seed=2024, including the datasets whose short chains used
-# 3024 -- so do not carry the short-chain seed over to a long replay. Verified
-# by replaying draw 0 and draw 1; `long_store_every` here is the stride the
-# store actually used, and DATASET_CONFIGS now agrees with it.
-#
-# fixed100_Concrete is the one store that could not be reproduced: with
-# base_chain_seed 2024 its long draw 0 is already off by ~30%, and no seed,
-# n_trees or train split that was tried recovers it. Its provenance
-# (a "corrected long01" rerun) is not recorded anywhere in the repo.
-STORE_LONG_SETTINGS = {
-    # store directory: (base_chain_seed, long_ndpost, long_store_every, reproducible)
-    "fixed100_Abalone":                  (2024,  1_000_000,  100, True),
-    "fixed100_Friedman":                 (2024, 10_000_000, 1000, True),
-    "fixed100_SeoulBike":                (2024, 10_000_000, 1000, True),
-    "fixed100_CalHousing_subsample5000": (2024,  1_000_000,  100, True),
-    "fixed100_FriedmanSparseDir_p100":   (2024,  1_000_000,  100, True),
-    "fixed100_Concrete":                 (None, 10_000_000, 1000, False),
-}
 
 
 METHODS_SHORT = ["default", "default_pt", "mtmh", "mtmh_pt"]
@@ -467,6 +411,83 @@ def run_short_chain(
     return out
 
 
+def run_short_method(
+    *,
+    method,
+    chain_id,
+    chain_seed,
+    X_train,
+    y_train,
+    X_test_fixed,
+    y_test_fixed,
+    ndpost,
+    nskip,
+    n_trees,
+    tree_alpha,
+    tree_beta,
+    proposal_probs_default,
+    proposal_probs_mtmh,
+    temperatures,
+    swap_interval,
+    post_swap_repair_steps,
+    multi_tries,
+    dirichlet_prior: bool = False,
+    s_alpha: float = 1.0,
+    store_preds=True,
+):
+    """Run one of the four short methods for one chain.
+
+    Each model is seeded with chain_seed alone, so running the methods as
+    separate tasks gives the same draws as the sequential run_short_chain.
+    """
+    common = dict(
+        ndpost=ndpost,
+        nskip=nskip,
+        n_trees=n_trees,
+        tol=1,
+        random_state=chain_seed,
+        dirichlet_prior=dirichlet_prior,
+        s_alpha=s_alpha,
+    )
+    pt = dict(
+        tree_alpha=tree_alpha,
+        tree_beta=tree_beta,
+        temperatures=temperatures,
+        swap_interval=swap_interval,
+        post_swap_repair_steps=post_swap_repair_steps,
+        store_chain_traces=False,
+        store_swap_diagnostics=False,
+        print_swap_diagnostics=False,
+    )
+    if method == "default":
+        model = DefaultBART(proposal_probs=proposal_probs_default, **common)
+    elif method == "default_pt":
+        model = ParallelTemperingBART(proposal_probs=proposal_probs_default, **pt, **common)
+    elif method == "mtmh":
+        model = MultiBART(
+            tree_alpha=tree_alpha,
+            tree_beta=tree_beta,
+            proposal_probs=proposal_probs_mtmh,
+            multi_tries=multi_tries,
+            **common,
+        )
+    elif method == "mtmh_pt":
+        model = ParallelTemperingBART(
+            proposal_probs=proposal_probs_mtmh,
+            sampler_kind="multi",
+            multi_tries=multi_tries,
+            **pt,
+            **common,
+        )
+    else:
+        raise ValueError(f"Unknown short method: {method}")
+    model.fit(X_train, y_train)
+    result = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
+    del model
+    gc.collect()
+    return {"chain_id": chain_id, "chain_seed": chain_seed, "method": method, "result": result}
+
+
 def save_short_run(
     *,
     store_root: Path,
@@ -729,6 +750,7 @@ def run_fixed100_dataset(
     run_long: bool = True,
     dirichlet_prior: bool = False,
     s_alpha: float = 1.0,
+    parallel_methods: bool = False,
 ):
     if not run_short and not run_long:
         raise ValueError("At least one of run_short or run_long must be True.")
@@ -828,33 +850,61 @@ def run_fixed100_dataset(
 
             if progress_print:
                 print(f"[{dataset_tag} RUN {run_id:03d}] ladder selected temps={np.round(run_temperatures, 4).tolist()}", flush=True)
-                print(f"[{dataset_tag} RUN {run_id:03d}] short methods start: n_chains={n_chains}, n_jobs={n_jobs}", flush=True)
-
-            short_results = Parallel(n_jobs=n_jobs, verbose=10)(
-                delayed(run_short_chain)(
-                    chain_id=chain_id,
-                    chain_seed=base_chain_seed + run_id * 1000 + chain_id,
-                    X_train=X_train,
-                    y_train=y_train,
-                    X_test_fixed=X_test_fixed,
-                    y_test_fixed=y_test_fixed,
-                    ndpost=short_ndpost,
-                    nskip=short_nskip,
-                    n_trees=n_trees,
-                    tree_alpha=tree_alpha,
-                    tree_beta=tree_beta,
-                    proposal_probs_default=proposal_probs_default,
-                    proposal_probs_mtmh=proposal_probs_mtmh,
-                    temperatures=run_temperatures,
-                    swap_interval=swap_interval,
-                    post_swap_repair_steps=post_swap_repair_steps,
-                    multi_tries=multi_tries,
-                    dirichlet_prior=dirichlet_prior,
-                    s_alpha=s_alpha,
-                    store_preds=store_preds,
+                print(
+                    f"[{dataset_tag} RUN {run_id:03d}] short methods start: n_chains={n_chains}, n_jobs={n_jobs}, "
+                    f"parallel_methods={parallel_methods}",
+                    flush=True,
                 )
-                for chain_id in range(n_chains)
+
+            short_kwargs = dict(
+                X_train=X_train,
+                y_train=y_train,
+                X_test_fixed=X_test_fixed,
+                y_test_fixed=y_test_fixed,
+                ndpost=short_ndpost,
+                nskip=short_nskip,
+                n_trees=n_trees,
+                tree_alpha=tree_alpha,
+                tree_beta=tree_beta,
+                proposal_probs_default=proposal_probs_default,
+                proposal_probs_mtmh=proposal_probs_mtmh,
+                temperatures=run_temperatures,
+                swap_interval=swap_interval,
+                post_swap_repair_steps=post_swap_repair_steps,
+                multi_tries=multi_tries,
+                dirichlet_prior=dirichlet_prior,
+                s_alpha=s_alpha,
+                store_preds=store_preds,
             )
+            if parallel_methods:
+                # One task per (chain, method); regroup into the per-chain dicts save_short_run expects.
+                method_results = Parallel(n_jobs=n_jobs, verbose=10)(
+                    delayed(run_short_method)(
+                        method=method,
+                        chain_id=chain_id,
+                        chain_seed=base_chain_seed + run_id * 1000 + chain_id,
+                        **short_kwargs,
+                    )
+                    for chain_id in range(n_chains)
+                    for method in METHODS_SHORT
+                )
+                short_results = []
+                for chain_id in range(n_chains):
+                    chain_out = {"chain_id": chain_id, "chain_seed": base_chain_seed + run_id * 1000 + chain_id}
+                    for r in method_results:
+                        if r["chain_id"] == chain_id:
+                            chain_out[r["method"]] = r["result"]
+                    short_results.append(chain_out)
+                del method_results
+            else:
+                short_results = Parallel(n_jobs=n_jobs, verbose=10)(
+                    delayed(run_short_chain)(
+                        chain_id=chain_id,
+                        chain_seed=base_chain_seed + run_id * 1000 + chain_id,
+                        **short_kwargs,
+                    )
+                    for chain_id in range(n_chains)
+                )
             save_short_run(
                 store_root=store_root,
                 dataset_tag=dataset_tag,

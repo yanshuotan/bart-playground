@@ -1,26 +1,35 @@
 #!/usr/bin/env python3
-"""Compare PT execution modes using repeated Abalone timing runs.
+"""Time serial vs parallel PT on the fixed-100 datasets, four chains per run.
 
-The fixed test set, training subset, and PT temperature ladder are loaded from
-``diagnosis/store/fixed100_Abalone`` so the benchmark uses the same setup as
-the existing fixed-100 analysis.  A PT fit is counted as one requested chain;
-its temperature replicas are the chain-internal work that is parallelized.
+For every dataset in ``--datasets`` the benchmark rebuilds the fixed-100 split of
+``--run-id`` with the experiment's own code (checked against stored indices when
+they exist) and reuses the stored PT temperature ladder of that run.  It then
+times, chain by chain (chains are *not* run in parallel, so they do not compete
+for CPUs):
 
-``default`` and ``mtmh`` are timed once each as non-PT baselines.  Each PT
-method is timed once per entry in ``--pt-backends``, which defaults to both
-``multiprocessing-pipe`` (parallel; joblib-loky and joblib-threading were
-removed) and ``serial`` (the same sampler with ``n_jobs=1``).  The serial row
-is what the parallel row must be divided by to get the parallel speed-up, so
-the summary carries ``default_pt__serial`` next to
-``default_pt__multiprocessing-pipe``.  Drop ``serial`` from ``--pt-backends``
-for timings comparable to runs made before it existed.
+    default                 DefaultBART
+    mtmh                    MultiBART
+    default_pt (serial)     ParallelTemperingBART, n_jobs=1
+    default_pt (parallel)   ParallelTemperingBART, one worker per temperature
+    mtmh_pt (serial)        MTMH + PT, n_jobs=1
+    mtmh_pt (parallel)      MTMH + PT, one worker per temperature
 
-``--repeats`` repeats the complete experiment with a new seed while keeping
-the seed matched across configurations within a repeat.  PT runs one worker
-process per physical core by default, each hosting one or more temperature
-chains; see ``--pt-n-jobs``.  ``elapsed_seconds`` starts after model
-construction and all preprocessing, then covers chain initialization,
-backend start-up/shutdown, and the complete MCMC run.
+Chain c of run r uses seed ``2024 + 1000*r + c`` (the store's short-chain seeds)
+unless ``--chain-seed`` overrides the base.  ``elapsed_seconds`` starts after
+model construction and preprocessing and covers chain initialisation, worker
+start-up/shutdown and the complete MCMC run.
+
+For each fit the script measures, on Linux, the peak number of live PT worker
+processes.  It also records the CPUs the scheduler allocated (``PBS_NCPUS``)
+and the process CPU affinity.
+
+Outputs (updated after every fit) in ``--output-dir``, by default
+``diagnosis/analysis/timing_outputs``:
+    <dataset>_run<r>_per_chain.csv   one row per timed fit
+    <dataset>_run<r>_summary.csv     one row per method, totals over chains
+    summary.md                       one table per dataset, rebuilt from every
+                                     per-chain CSV in the directory, so jobs
+                                     sharing it add tables instead of clobbering
 """
 
 from __future__ import annotations
@@ -35,9 +44,11 @@ for _variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", 
 import argparse
 import csv
 import gc
+import json
 import multiprocessing as mp
 import statistics
 import sys
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -45,230 +56,174 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
-from ucimlrepo import fetch_ucirepo
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DIAGNOSIS_DIR = SCRIPT_DIR.parent
 REPO_ROOT = DIAGNOSIS_DIR.parent
-STORE_DIR = DIAGNOSIS_DIR / "store" / "fixed100_Abalone"
 
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+for _path in (REPO_ROOT, DIAGNOSIS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
-from bart_playground.bart import (
+from bart_playground.bart import (  # noqa: E402
     DefaultBART,
     MultiBART,
     ParallelTemperingBART,
     resolve_pt_workers,
 )
-from bart_playground.samplers import default_proposal_probs, mtmh_proposal_probs
+from bart_playground.samplers import default_proposal_probs, mtmh_proposal_probs  # noqa: E402
+
+import experiment_fixed100 as exp  # noqa: E402
+from fixed100_support import DATASET_CONFIGS, load_dataset  # noqa: E402
 
 
-METHODS = ("default", "default_pt", "mtmh", "mtmh_pt")
-# "serial" runs a PT method with n_jobs=1, i.e. every temperature stepped in
-# this process. It is the baseline the parallel backend has to beat, so both
-# are timed by default.
-PT_BACKENDS = ("multiprocessing-pipe", "serial")
+DATASETS = ("abalone", "concrete", "friedman")
+# (label, method, backend) in execution order within a chain. Serial and
+# parallel runs of a PT method are adjacent so both see similar node conditions.
+CONFIGS = (
+    ("default", "default", "none"),
+    ("mtmh", "mtmh", "none"),
+    ("default_pt (serial)", "default_pt", "serial"),
+    ("default_pt (parallel)", "default_pt", "parallel"),
+    ("mtmh_pt (serial)", "mtmh_pt", "serial"),
+    ("mtmh_pt (parallel)", "mtmh_pt", "parallel"),
+)
+PER_CHAIN_FIELDS = (
+    "dataset", "run_id", "chain", "seed", "label", "method", "backend", "n_temperatures",
+    "pt_workers_requested", "peak_worker_processes", "allocated_cpus",
+    "affinity_cpus", "n_rows", "n_train", "n_test", "elapsed_seconds",
+)
 SUMMARY_FIELDS = (
-    "mean_seconds",
-    "std_seconds",
-    "relative_to_default",
+    "label", "n_temperatures", "parallel_cpus", "n_chains_timed",
+    "mean_seconds_per_chain", "std_seconds_per_chain", "relative_to_default",
 )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Time the non-PT Abalone baselines once, then time default+PT and MTMH+PT "
-            "once per selected PT execution mode (parallel and serial by default)."
-        )
+        description="Time default/MTMH and serial vs parallel PT, chain by chain, on the fixed-100 datasets."
     )
-    parser.add_argument("--run-id", type=int, default=0, help="Stored fixed-100 run to reuse (default: 0).")
+    parser.add_argument("--datasets", nargs="+", choices=DATASETS, default=list(DATASETS))
+    parser.add_argument("--run-id", type=int, default=0, help="Fixed-100 run whose split and ladder are reused (default: 0).")
+    parser.add_argument("--n-chains", type=int, default=4, help="Chains per dataset, run one after another (default: 4).")
     parser.add_argument(
-        "--repeats",
+        "--chain-seed",
         type=int,
-        default=1,
-        help="Complete experiment repeats; repeat r uses chain-seed + r - 1 for every configuration (default: 1).",
+        default=None,
+        help="Base seed; chain c uses base + c. Default: 2024 + 1000*run_id, the store's short-chain seeds.",
     )
-    parser.add_argument("--ndpost", type=int, default=10_000, help="Posterior iterations per method.")
-    parser.add_argument("--nskip", type=int, default=0, help="Burn-in iterations per method.")
-    parser.add_argument("--n-trees", type=int, default=100, help="Number of BART trees.")
-    parser.add_argument("--multi-tries", type=int, default=10, help="Number of MTMH tries.")
-    parser.add_argument("--chain-seed", type=int, default=3024, help="Shared base seed for all four methods.")
+    parser.add_argument("--ndpost", type=int, default=10_000, help="Posterior iterations per fit.")
+    parser.add_argument("--nskip", type=int, default=0, help="Burn-in iterations per fit.")
+    parser.add_argument("--n-trees", type=int, default=100)
+    parser.add_argument("--multi-tries", type=int, default=10)
     parser.add_argument("--tree-alpha", type=float, default=0.95)
     parser.add_argument("--tree-beta", type=float, default=2.0)
     parser.add_argument("--swap-interval", type=int, default=50)
     parser.add_argument(
         "--pt-n-jobs",
         type=int,
-        default=-1,
+        default=0,
         help=(
-            "PT worker processes: -1 uses one per physical core (default), -2 all but "
-            "one, 0 one per stored temperature, or an explicit positive count. When "
-            "there are fewer workers than temperatures each worker hosts several "
-            "chains, which is faster than oversubscribing. Timings depend on this; "
-            "sampled results do not."
+            "Workers for the parallel PT rows: 0 = one per temperature (default), -1 one per "
+            "physical core, or an explicit count. Serial rows always use n_jobs=1."
         ),
     )
     parser.add_argument(
-        "--pt-backends",
-        "--pt-backend",
-        dest="pt_backends",
+        "--labels",
         nargs="+",
-        choices=PT_BACKENDS,
-        default=list(PT_BACKENDS),
-        help=(
-            "PT execution modes to time (default: both). 'multiprocessing-pipe' is "
-            "the parallel backend; 'serial' is the same sampler with n_jobs=1 and is "
-            "the baseline for the speed-up. Dropping 'serial' roughly halves the "
-            "default_pt run and cuts far more from mtmh_pt."
-        ),
+        choices=[label for label, _, _ in CONFIGS],
+        default=[label for label, _, _ in CONFIGS],
+        help="Subset of the six configurations to time (default: all).",
     )
     parser.add_argument(
-        "--temperature-file",
+        "--output-dir",
         type=Path,
-        help="Optional temperature CSV override; the first row is used.",
-    )
-    parser.add_argument(
-        "--methods",
-        nargs="+",
-        choices=METHODS,
-        default=list(METHODS),
-        help="Methods to include (default: all four).",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        help="Timing summary CSV. Default: diagnosis/analysis/timing_outputs/<timestamp>.csv",
+        help="Default: diagnosis/analysis/timing_outputs/. Files are named after the dataset, so "
+             "several jobs can share one directory; summary.md is rebuilt from all of them.",
     )
     parser.add_argument("--show-progress", action="store_true", help="Show sampler progress bars (off for cleaner timing).")
-    parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failed method.")
-    parser.add_argument("--dry-run", action="store_true", help="Validate data, indices, temperatures, and worker counts without fitting.")
+    parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failed fit.")
+    parser.add_argument("--dry-run", action="store_true", help="Check data, splits, ladders and worker counts without fitting.")
     args = parser.parse_args()
 
     if args.run_id < 0:
         parser.error("--run-id must be non-negative")
-    for name in ("repeats", "ndpost", "n_trees", "multi_tries", "swap_interval"):
+    for name in ("n_chains", "ndpost", "n_trees", "multi_tries", "swap_interval"):
         if getattr(args, name) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be positive")
     if args.nskip < 0:
         parser.error("--nskip must be non-negative")
+    if args.chain_seed is None:
+        args.chain_seed = 2024 + 1000 * args.run_id
     return args
 
 
-ABALONE_CACHE_DIR = STORE_DIR / "uci_abalone"
+# ---------------------------------------------------------------------------
+# Data, split and temperature ladder
+# ---------------------------------------------------------------------------
+
+def _stored_run_dirs(name: str, run_id: int) -> list[Path]:
+    """Directories that may hold this run's stored indices and ladders."""
+    tag = DATASET_CONFIGS[name]["dataset_tag"]
+    return [
+        DIAGNOSIS_DIR / "store" / tag,
+        DIAGNOSIS_DIR / "store_seed2024" / f"s24_short_{name}_r{run_id}" / tag,
+    ]
 
 
-def fetch_abalone_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Raw Abalone features and target, from a local cache when one exists.
-
-    Cluster compute nodes often have no outbound network, so the first call on
-    a machine that does have one writes the frames next to the stored
-    experiment data and later calls read them back. Run this script once on a
-    networked machine (or a login node) to populate the cache before
-    submitting a batch job.
-    """
-    features_path = ABALONE_CACHE_DIR / "features.csv"
-    targets_path = ABALONE_CACHE_DIR / "targets.csv"
-    if features_path.is_file() and targets_path.is_file():
-        return pd.read_csv(features_path), pd.read_csv(targets_path)
-
-    dataset = fetch_ucirepo(id=1)
-    features = dataset.data.features.copy()
-    targets = dataset.data.targets.copy()
-    ABALONE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    features.to_csv(features_path, index=False)
-    targets.to_csv(targets_path, index=False)
-    return features, targets
+def _load_vector(path: Path, dtype) -> np.ndarray:
+    return np.asarray(np.loadtxt(path, delimiter=",", comments="#", dtype=dtype)).reshape(-1)
 
 
-def load_abalone() -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Load and preprocess UCI Abalone exactly as the fixed-100 runner did."""
-    features, targets = fetch_abalone_frames()
-    if targets.shape[1] != 1:
-        raise ValueError(f"Expected one Abalone target column, found {list(targets.columns)}")
-
-    if "Sex" in features.columns:
-        features = features.drop(columns=["Sex"])
-    for column in features.columns:
-        features[column] = pd.to_numeric(features[column], errors="coerce")
-
-    X = features.to_numpy(dtype=float)
-    y = pd.to_numeric(targets.iloc[:, 0], errors="coerce").to_numpy(dtype=float)
-    finite = np.isfinite(X).all(axis=1) & np.isfinite(y)
-    if not finite.all():
-        X = X[finite]
-        y = y[finite]
-    return X, y, [str(column) for column in features.columns]
-
-
-def _load_integer_vector(path: Path) -> np.ndarray:
-    if not path.is_file():
-        raise FileNotFoundError(f"Required stored index file not found: {path}")
-    values = np.loadtxt(path, delimiter=",", comments="#", dtype=np.int64)
-    return np.asarray(values, dtype=np.int64).reshape(-1)
+def load_split(name: str, run_id: int) -> dict[str, Any]:
+    """Rebuild the fixed-100 split and check it against any stored indices."""
+    X, y = load_dataset(name)
+    split = exp.make_fixed100_splits(X, y, n_runs=run_id + 1)[run_id]
+    tag = DATASET_CONFIGS[name]["dataset_tag"]
+    checked = []
+    for directory in _stored_run_dirs(name, run_id):
+        train_path = directory / "indices" / f"{tag}__run{run_id:03d}__train_idx.csv"
+        test_path = directory / "indices" / f"{tag}__run{run_id:03d}__fixed_test_idx.csv"
+        if train_path.is_file() and test_path.is_file():
+            if not (np.array_equal(_load_vector(train_path, np.int64), split["train_idx"])
+                    and np.array_equal(_load_vector(test_path, np.int64), split["test_idx"])):
+                raise ValueError(f"Rebuilt split for {name} run {run_id} differs from {directory / 'indices'}")
+            checked.append(str(directory))
+    split["n_rows"] = X.shape[0]
+    split["checked_against"] = checked
+    return split
 
 
-def load_stored_split(X: np.ndarray, y: np.ndarray, run_id: int) -> tuple[np.ndarray, ...]:
-    """Reuse the exact train/test indices saved by the fixed-100 experiment."""
-    stem = f"fixed100_Abalone__run{run_id:03d}"
-    index_dir = STORE_DIR / "indices"
-    test_idx = _load_integer_vector(index_dir / f"{stem}__fixed_test_idx.csv")
-    train_idx = _load_integer_vector(index_dir / f"{stem}__train_idx.csv")
-
-    if len(test_idx) != 100:
-        raise ValueError(f"Expected 100 fixed test rows, found {len(test_idx)}")
-    if len(np.unique(test_idx)) != len(test_idx) or len(np.unique(train_idx)) != len(train_idx):
-        raise ValueError("Stored train/test indices contain duplicates")
-    if np.intersect1d(train_idx, test_idx).size:
-        raise ValueError("Stored train and test indices overlap")
-    all_idx = np.concatenate([train_idx, test_idx])
-    if all_idx.min(initial=0) < 0 or all_idx.max(initial=-1) >= len(X):
-        raise IndexError(f"Stored indices are incompatible with Abalone row count {len(X)}")
-
-    return X[train_idx], y[train_idx], X[test_idx], y[test_idx], train_idx, test_idx
-
-
-def default_temperature_path(run_id: int) -> Path:
-    return (
-        STORE_DIR
-        / "swap_temperatures"
-        / f"fixed100_Abalone__run{run_id:03d}__default_pt__swap_temperatures.csv"
-    )
+def load_temperature_ladder(name: str, run_id: int) -> tuple[np.ndarray, Path]:
+    """The stored ladder of this run; default_pt and mtmh_pt must agree."""
+    tag = DATASET_CONFIGS[name]["dataset_tag"]
+    for directory in _stored_run_dirs(name, run_id):
+        ladders = {}
+        for method in ("default_pt", "mtmh_pt"):
+            path = directory / "swap_temperatures" / f"{tag}__run{run_id:03d}__{method}__swap_temperatures.csv"
+            if path.is_file():
+                values = np.loadtxt(path, delimiter=",", comments="#", dtype=float, ndmin=2)
+                if not np.allclose(values, values[0][None, :], rtol=1e-10, atol=1e-12):
+                    raise ValueError(f"Different ladders across chains in {path}")
+                ladders[method] = values[0]
+        if not ladders:
+            continue
+        temperatures = next(iter(ladders.values()))
+        if any(len(t) != len(temperatures) or not np.allclose(t, temperatures) for t in ladders.values()):
+            raise ValueError(f"default_pt and mtmh_pt ladders differ in {directory}")
+        if len(temperatures) < 2 or not np.isclose(temperatures[0], 1.0) or np.any(np.diff(temperatures) <= 0):
+            raise ValueError(f"Invalid stored ladder in {directory}: {temperatures}")
+        return np.asarray(temperatures, dtype=float), directory
+    raise FileNotFoundError(f"No stored temperature ladder for {name} run {run_id} in {_stored_run_dirs(name, run_id)}")
 
 
-def load_temperature_ladder(path: Path) -> np.ndarray:
-    if not path.is_file():
-        raise FileNotFoundError(f"Temperature file not found: {path}")
-    values = np.loadtxt(path, delimiter=",", comments="#", dtype=float)
-    if values.ndim == 1:
-        temperatures = values
-    elif values.ndim == 2:
-        temperatures = values[0]
-        if not np.allclose(values, temperatures[None, :], rtol=1e-10, atol=1e-12):
-            raise ValueError(
-                "Temperature CSV contains different ladders across rows; pass a single-row file with --temperature-file."
-            )
-    else:
-        raise ValueError(f"Unexpected temperature array shape: {values.shape}")
-
-    temperatures = np.asarray(temperatures, dtype=float).reshape(-1)
-    if len(temperatures) < 2:
-        raise ValueError("PT requires at least two temperatures")
-    if not np.isfinite(temperatures).all() or np.any(temperatures <= 0):
-        raise ValueError("Temperatures must be finite and positive")
-    if not np.isclose(temperatures[0], 1.0):
-        raise ValueError(f"The cold-chain temperature must be 1.0, found {temperatures[0]}")
-    if np.any(np.diff(temperatures) <= 0):
-        raise ValueError("Temperatures must be strictly increasing")
-    return temperatures
-
+# ---------------------------------------------------------------------------
+# CPU measurement
+# ---------------------------------------------------------------------------
 
 def allocated_cpu_count() -> int | None:
-    """Read common scheduler CPU-allocation variables when available."""
-    for variable in ("SLURM_CPUS_PER_TASK", "PBS_NCPUS", "NSLOTS"):
+    for variable in ("PBS_NCPUS", "SLURM_CPUS_PER_TASK", "NSLOTS"):
         raw = os.environ.get(variable)
         if raw:
             try:
@@ -278,14 +233,81 @@ def allocated_cpu_count() -> int | None:
     return None
 
 
-def make_model(
-    method: str,
-    args: argparse.Namespace,
-    temperatures: np.ndarray,
-    pt_workers: int,
-    pt_backend: str,
-    chain_seed: int,
-):
+def affinity_cpu_count() -> int | None:
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return None
+
+
+class ChildProcessMonitor:
+    """Count live PT worker processes of this process via /proc (Linux only).
+
+    Workers are the ``multiprocessing.spawn`` children; the ``resource_tracker``
+    helper that multiprocessing also starts is not one.
+    """
+
+    def __init__(self, interval: float = 1.0):
+        self.interval = interval
+        self.available = Path("/proc/self/stat").exists()
+        self.peak_children = 0
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _workers(self) -> int:
+        me = os.getpid()
+        workers = 0
+        for entry in os.scandir("/proc"):
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", "rb") as handle:
+                    stat = handle.read().decode(errors="replace")
+                fields = stat[stat.rfind(")") + 2:].split()
+                if int(fields[1]) != me:  # fields[1] is ppid
+                    continue
+                with open(f"/proc/{entry.name}/cmdline", "rb") as handle:
+                    cmdline = handle.read()
+            except (OSError, IndexError, ValueError):
+                continue
+            if b"multiprocessing.spawn" in cmdline:
+                workers += 1
+        return workers
+
+    def _loop(self):
+        while not self._stop.is_set():
+            self.peak_children = max(self.peak_children, self._workers())
+            self._stop.wait(self.interval)
+
+    def __enter__(self):
+        if self.available:
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+        return False
+
+
+def timed_fit(model, data, quietly: bool) -> dict[str, Any]:
+    with ChildProcessMonitor() as monitor:
+        start = time.perf_counter()
+        model.fit_with_data(data, quietly=quietly)
+        elapsed = time.perf_counter() - start
+    return {
+        "elapsed_seconds": elapsed,
+        "peak_worker_processes": monitor.peak_children if monitor.available else "",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+def make_model(method: str, backend: str, args, temperatures: np.ndarray, pt_workers: int, seed: int, cfg: dict):
     common: dict[str, Any] = {
         "ndpost": args.ndpost,
         "nskip": args.nskip,
@@ -293,14 +315,15 @@ def make_model(
         "tree_alpha": args.tree_alpha,
         "tree_beta": args.tree_beta,
         "tol": 1,
-        "random_state": chain_seed,
+        "random_state": seed,
+        "dirichlet_prior": cfg.get("dirichlet_prior", False),
+        "s_alpha": float(cfg.get("s_alpha", 1.0)),
     }
     if method == "default":
         return DefaultBART(proposal_probs=default_proposal_probs, **common)
     if method == "mtmh":
         return MultiBART(proposal_probs=mtmh_proposal_probs, multi_tries=args.multi_tries, **common)
-
-    pt_common: dict[str, Any] = {
+    pt_common = {
         **common,
         "temperatures": temperatures,
         "swap_interval": args.swap_interval,
@@ -308,219 +331,226 @@ def make_model(
         "store_chain_traces": False,
         "store_swap_diagnostics": False,
         "print_swap_diagnostics": False,
-        # The serial backend is not a different code path, just n_jobs=1.
-        "n_jobs": 1 if pt_backend == "serial" else pt_workers,
-        "local_move_backend": "multiprocessing-pipe",
+        "n_jobs": 1 if backend == "serial" else pt_workers,
     }
     if method == "default_pt":
         return ParallelTemperingBART(proposal_probs=default_proposal_probs, **pt_common)
     if method == "mtmh_pt":
         return ParallelTemperingBART(
-            proposal_probs=mtmh_proposal_probs,
-            sampler_kind="multi",
-            multi_tries=args.multi_tries,
-            **pt_common,
+            proposal_probs=mtmh_proposal_probs, sampler_kind="multi", multi_tries=args.multi_tries, **pt_common
         )
     raise ValueError(f"Unknown method: {method}")
 
 
-def run_numba_warmup(
-    args: argparse.Namespace,
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    temperatures: np.ndarray,
-    pt_workers: int,
-) -> None:
-    """Compile/cache the MTMH+PT Numba paths before any timed experiment."""
-    print(
-        "Numba warm-up: mtmh_pt, 10 trees, 20 steps, swap_interval=10, "
-        "serial in the main process (excluded from timings)",
-        flush=True,
+def run_numba_warmup(args, X_train, y_train, temperatures) -> None:
+    """Compile the MTMH+PT Numba paths before any timed fit (not timed)."""
+    model = ParallelTemperingBART(
+        ndpost=20, nskip=0, n_trees=10, tree_alpha=args.tree_alpha, tree_beta=args.tree_beta, tol=1,
+        proposal_probs=mtmh_proposal_probs, random_state=args.chain_seed, temperatures=temperatures,
+        swap_interval=10, post_swap_repair_steps=0, store_chain_traces=False, store_swap_diagnostics=False,
+        print_swap_diagnostics=False, n_jobs=1, sampler_kind="multi", multi_tries=args.multi_tries,
     )
-    warmup_model = ParallelTemperingBART(
-        ndpost=20,
-        nskip=0,
-        n_trees=10,
-        tree_alpha=args.tree_alpha,
-        tree_beta=args.tree_beta,
-        tol=1,
-        proposal_probs=mtmh_proposal_probs,
-        random_state=args.chain_seed,
-        temperatures=temperatures,
-        swap_interval=10,
-        post_swap_repair_steps=0,
-        store_chain_traces=False,
-        store_swap_diagnostics=False,
-        print_swap_diagnostics=False,
-        n_jobs=1,
-        sampler_kind="multi",
-        multi_tries=args.multi_tries,
-    )
-    warmup_data = warmup_model.preprocessor.fit_transform(X_train, y_train)
-    warmup_start = time.perf_counter()
-    warmup_model.fit_with_data(warmup_data, quietly=True)
-    warmup_seconds = time.perf_counter() - warmup_start
-    print(f"Numba warm-up complete in {warmup_seconds:.3f}s; formal timing starts next.", flush=True)
-    del warmup_model, warmup_data
+    data = model.preprocessor.fit_transform(X_train, y_train)
+    start = time.perf_counter()
+    model.fit_with_data(data, quietly=True)
+    print(f"  Numba warm-up (not timed): {time.perf_counter() - start:.1f}s", flush=True)
+    del model, data
     gc.collect()
 
 
-def resolve_output_path(path: Path | None, run_id: int) -> Path:
-    if path is not None:
-        return path.expanduser().resolve()
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return (SCRIPT_DIR / "timing_outputs" / f"abalone_run{run_id:03d}_pt_backend_timing_{stamp}.csv").resolve()
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
 
-
-def build_run_plan(args: argparse.Namespace) -> list[tuple[str, int, str, int]]:
-    """Return (method, repeat, backend, seed) jobs in execution order."""
-    plan: list[tuple[str, int, str, int]] = []
-    serial_methods = [method for method in args.methods if not method.endswith("_pt")]
-    pt_methods = [method for method in args.methods if method.endswith("_pt")]
-    for repeat in range(1, args.repeats + 1):
-        chain_seed = args.chain_seed + repeat - 1
-        for method in serial_methods:
-            plan.append((method, repeat, "serial", chain_seed))
-        for method in pt_methods:
-            # Backends adjacent per method: on a throttling machine the serial
-            # and parallel timings of a method should see similar conditions.
-            for backend in args.pt_backends:
-                plan.append((method, repeat, backend, chain_seed))
-    return plan
-
-
-def write_summary(path: Path, completed: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for result in completed:
-        key = (str(result["method"]), str(result["pt_backend"]))
-        grouped.setdefault(key, []).append(result)
-
-    summary: list[dict[str, Any]] = []
-    for (method, backend), rows in grouped.items():
-        elapsed_seconds = [float(row["elapsed_seconds"]) for row in rows]
-        # Non-PT methods keep a bare label; every PT row names its backend so
-        # that default_pt__serial and default_pt__multiprocessing-pipe coexist.
-        row_label = f"{method}__{backend}" if method.endswith("_pt") else method
-        summary.append(
-            {
-                "row_label": row_label,
-                "method": method,
-                "pt_backend": backend,
-                "mean_seconds": f"{statistics.mean(elapsed_seconds):.9f}" if elapsed_seconds else "",
-                "std_seconds": (
-                    f"{statistics.stdev(elapsed_seconds):.9f}"
-                    if len(elapsed_seconds) > 1
-                    else "0.000000000" if elapsed_seconds else ""
-                ),
-                "relative_to_default": "",
-            }
-        )
-
-    default_row = next(
-        (row for row in summary if row["method"] == "default" and row["mean_seconds"]),
-        None,
-    )
-    if default_row is not None:
-        default_mean = float(default_row["mean_seconds"])
-        for row in summary:
-            if row["mean_seconds"]:
-                row["relative_to_default"] = f"{float(row['mean_seconds']) / default_mean:.6f}"
-
-    method_order = {method: position for position, method in enumerate(METHODS)}
-    backend_order = {name: position for position, name in enumerate(PT_BACKENDS)}
-    summary.sort(key=lambda row: (method_order[row["method"]], backend_order[row["pt_backend"]]))
-
+def _write_csv(path: Path, fields, rows) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["", *SUMMARY_FIELDS])
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fields})
+
+
+def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summary = []
+    for label, _method, backend in CONFIGS:
+        mine = [row for row in rows if row["label"] == label]
+        if not mine:
+            continue
+        seconds = [float(row["elapsed_seconds"]) for row in mine]
+        if backend == "parallel":
+            peaks = sorted({row["peak_worker_processes"] for row in mine if row["peak_worker_processes"] != ""})
+            parallel_cpus = "/".join(str(p) for p in peaks) if peaks else "n/a"
+        else:
+            parallel_cpus = "1"
+        summary.append({
+            "label": label,
+            "n_temperatures": mine[0]["n_temperatures"] if backend != "none" else "",
+            "parallel_cpus": parallel_cpus,
+            "n_chains_timed": len(mine),
+            "mean_seconds_per_chain": f"{statistics.mean(seconds):.1f}",
+            "std_seconds_per_chain": f"{statistics.stdev(seconds):.1f}" if len(seconds) > 1 else "",
+            "relative_to_default": "",
+            "_mean": statistics.mean(seconds),
+        })
+    default = next((row for row in summary if row["label"] == "default"), None)
+    if default is not None:
         for row in summary:
-            writer.writerow([row["row_label"], *(row[field] for field in SUMMARY_FIELDS)])
+            row["relative_to_default"] = f"{row['_mean'] / default['_mean']:.2f}"
     return summary
 
 
-def run_benchmark(args: argparse.Namespace) -> int:
-    X, y, feature_names = load_abalone()
-    X_train, y_train, X_test, _y_test, train_idx, test_idx = load_stored_split(X, y, args.run_id)
-    temperature_path = (args.temperature_file or default_temperature_path(args.run_id)).expanduser().resolve()
-    temperatures = load_temperature_ladder(temperature_path)
-    # 0 keeps the historical "one worker per temperature"; everything else is
-    # resolved by the model's own rule so the two cannot drift apart.
-    pt_workers = resolve_pt_workers(
-        None if args.pt_n_jobs == 0 else args.pt_n_jobs, len(temperatures)
-    )
-    if pt_workers < 2:
-        raise ValueError("PT internal parallelization requires at least two workers; use --pt-n-jobs >= 2")
+def sections_from_dir(directory: Path) -> list[dict[str, Any]]:
+    """Rebuild one table section per dataset from the per-chain CSVs in a directory.
 
-    output_path = resolve_output_path(args.output, args.run_id)
-    run_plan = build_run_plan(args)
-    allocation = allocated_cpu_count()
-    print(f"Abalone: X={X.shape}; train={X_train.shape}; fixed test={X_test.shape}")
-    print(f"Features: {feature_names}")
-    print(f"Stored indices: train={len(train_idx)}, test={len(test_idx)}, run={args.run_id}")
-    print(f"Temperature ladder: {len(temperatures)} points from {temperatures[0]:g} to {temperatures[-1]:g}")
-    print(f"PT internal parallelism: {pt_workers} workers")
-    print(f"PT backends: {', '.join(args.pt_backends)}")
-    print(f"Complete experiment repeats: {args.repeats}")
-    print(f"Run plan: {len(run_plan)} timed fits")
-    print("Pre-run warm-up: mtmh_pt, 10 trees, 20 steps, swap_interval=10 (not timed)")
-    available_cpus = allocation if allocation is not None else os.cpu_count()
-    if available_cpus is not None and available_cpus < pt_workers:
-        remedy = "request more CPUs"
-        print(f"WARNING: this environment reports {available_cpus} available CPUs but PT requests {pt_workers}; {remedy}.")
-    if args.dry_run:
-        for position, (method, repeat, backend, chain_seed) in enumerate(run_plan, start=1):
-            print(f"  {position:>2}. {method:<10} backend={backend:<20} repeat={repeat} seed={chain_seed}")
-        print("Dry run complete; no models were fitted and no timing CSV was written.")
-        return 0
-    
-    run_numba_warmup(args, X_train, y_train, temperatures, pt_workers)
-    print(f"Timing summary CSV: {output_path}")
-    failures = 0
-    completed: list[dict[str, Any]] = []
-    for position, (method, repeat, backend, chain_seed) in enumerate(run_plan, start=1):
-        gc.collect()
+    summary.md is written from these, so several jobs writing into the same
+    directory add tables instead of overwriting each other's.
+    """
+    sections = []
+    for path in sorted(directory.glob("*_per_chain.csv")):
+        with path.open(encoding="utf-8") as handle:
+            rows = [dict(row) for row in csv.DictReader(handle)]
+        if not rows:
+            continue
+        for row in rows:
+            row["elapsed_seconds"] = float(row["elapsed_seconds"])
+        first = rows[0]
+        present = {r["label"] for r in rows}
+        last_label = next(label for label, _, _ in reversed(CONFIGS) if label in present)
+        sections.append({
+            "dataset": first["dataset"],
+            "n_rows": first.get("n_rows", ""), "n_train": first.get("n_train", ""), "n_test": first.get("n_test", ""),
+            "n_temps": next((r["n_temperatures"] for r in rows if r["n_temperatures"]), "-"),
+            "allocated": first.get("allocated_cpus") or "-", "affinity": first.get("affinity_cpus") or "-",
+            # A chain counts as done once its last timed configuration is in.
+            "chains_done": len({r["chain"] for r in rows if r["label"] == last_label}),
+            "summary": summarize(rows),
+        })
+    order = [DATASET_CONFIGS[name]["dataset_tag"] for name in DATASETS]
+    sections.sort(key=lambda s: order.index(s["dataset"]) if s["dataset"] in order else len(order))
+    return sections
+
+
+def write_markdown(path: Path, sections: list[dict[str, Any]], args) -> None:
+    lines = [
+        "# PT serial vs parallel timing",
+        "",
+        f"run_id={args.run_id}, chains per dataset={args.n_chains} (run one after another), ndpost={args.ndpost}, "
+        f"nskip={args.nskip}, n_trees={args.n_trees}, swap_interval={args.swap_interval}, "
+        f"chain seeds={args.chain_seed}+c, updated {datetime.now().isoformat(timespec='seconds')}",
+        "",
+        "`parallel CPUs` = peak number of live PT worker processes measured during each parallel fit "
+        "(1 for serial / non-PT rows). Times are per chain; `x default` = mean per-chain time "
+        "/ default's mean per-chain time.",
+        "",
+    ]
+    for section in sections:
+        lines += [
+            f"## {section['dataset']} (run {args.run_id:03d})",
+            "",
+            f"n={section['n_rows']}, train={section['n_train']}, test={section['n_test']}, temperatures={section['n_temps']}, "
+            f"allocated CPUs={section['allocated']}, affinity CPUs={section['affinity']}, "
+            f"chains timed so far={section['chains_done']}/{args.n_chains}",
+            "",
+            "| method | temperatures | parallel CPUs | mean s/chain | std s/chain | x default |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+        for row in section["summary"]:
+            lines.append(
+                f"| {row['label']} | {row['n_temperatures'] or '-'} | {row['parallel_cpus']} | "
+                f"{row['mean_seconds_per_chain']} | {row['std_seconds_per_chain'] or '-'} | "
+                f"{row['relative_to_default']} |"
+            )
+        lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def run_benchmark(args) -> int:
+    output_dir = (args.output_dir or SCRIPT_DIR / "timing_outputs").expanduser().resolve()
+    allocated, affinity = allocated_cpu_count(), affinity_cpu_count()
+    configs = [c for c in CONFIGS if c[0] in args.labels]
+    print(f"Output directory: {output_dir}")
+    print(f"Allocated CPUs (PBS_NCPUS etc.)={allocated}; process affinity CPUs={affinity}; os.cpu_count()={os.cpu_count()}")
+
+    prepared = []
+    for name in args.datasets:
+        split = load_split(name, args.run_id)
+        temperatures, ladder_dir = load_temperature_ladder(name, args.run_id)
+        pt_workers = resolve_pt_workers(None if args.pt_n_jobs == 0 else args.pt_n_jobs, len(temperatures))
         print(
-            f"\n[{position}/{len(run_plan)}] {method}: backend={backend}, repeat={repeat}, seed={chain_seed}",
+            f"{name}: n={split['n_rows']} train={len(split['train_idx'])} test={len(split['test_idx'])}; "
+            f"split checked against {split['checked_against'] or 'nothing (no stored indices found)'}; "
+            f"{len(temperatures)} temperatures from {ladder_dir}; parallel PT workers={pt_workers}",
             flush=True,
         )
-        elapsed_start = None
-        model = None
-        try:
-            model = make_model(method, args, temperatures, pt_workers, backend, chain_seed)
-            prepared_data = model.preprocessor.fit_transform(X_train, y_train)
+        limit = min(x for x in (allocated, affinity) if x is not None) if (allocated or affinity) else None
+        if limit is not None and pt_workers > limit:
+            print(f"WARNING: {name} needs {pt_workers} PT workers but only {limit} CPUs are available.", flush=True)
+        prepared.append((name, split, temperatures, pt_workers))
 
-            elapsed_start = time.perf_counter()
-            model.fit_with_data(prepared_data, quietly=not args.show_progress)
-            elapsed_seconds = time.perf_counter() - elapsed_start
-            completed.append(
-                {
-                    "method": method,
-                    "pt_backend": backend,
-                    "elapsed_seconds": elapsed_seconds,
+    if args.dry_run:
+        for name, _split, _t, _w in prepared:
+            for chain in range(args.n_chains):
+                print(f"  {name} chain {chain} seed={args.chain_seed + chain}: " + ", ".join(label for label, _, _ in configs))
+        print("Dry run complete; nothing fitted or written.")
+        return 0
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "config.json").write_text(json.dumps(vars(args), default=str, indent=2), encoding="utf-8")
+    failures = 0
+    for name, split, temperatures, pt_workers in prepared:
+        cfg = DATASET_CONFIGS[name]
+        tag = cfg["dataset_tag"]
+        per_chain_path = output_dir / f"{tag}_run{args.run_id:03d}_per_chain.csv"
+        summary_path = output_dir / f"{tag}_run{args.run_id:03d}_summary.csv"
+        rows: list[dict[str, Any]] = []
+        print(f"\n=== {tag}: {len(temperatures)} temperatures, parallel PT workers={pt_workers} ===", flush=True)
+        run_numba_warmup(args, split["X_train"], split["y_train"], temperatures)
+
+        for chain in range(args.n_chains):
+            seed = args.chain_seed + chain
+            for label, method, backend in configs:
+                gc.collect()
+                model = None
+                try:
+                    model = make_model(method, backend, args, temperatures, pt_workers, seed, cfg)
+                    data = model.preprocessor.fit_transform(split["X_train"], split["y_train"])
+                    measured = timed_fit(model, data, quietly=not args.show_progress)
+                except Exception:
+                    failures += 1
+                    traceback.print_exc()
+                    if args.fail_fast:
+                        return 1
+                    continue
+                finally:
+                    del model
+                    gc.collect()
+                row = {
+                    "dataset": tag, "run_id": args.run_id, "chain": chain, "seed": seed, "label": label,
+                    "method": method, "backend": backend,
+                    "n_temperatures": len(temperatures) if backend != "none" else "",
+                    "pt_workers_requested": pt_workers if backend == "parallel" else 1,
+                    "allocated_cpus": allocated if allocated is not None else "",
+                    "affinity_cpus": affinity if affinity is not None else "",
+                    "n_rows": split["n_rows"], "n_train": len(split["train_idx"]), "n_test": len(split["test_idx"]),
+                    **measured,
                 }
-            )
-            write_summary(output_path, completed)
-            print(f"[{method}/{backend}] elapsed={elapsed_seconds:.3f}s", flush=True)
-        except Exception:
-            failures += 1
-            traceback.print_exc()
-        finally:
-            del model
-            gc.collect()
+                rows.append(row)
+                print(
+                    f"[{tag} chain {chain}] {label:<22} {measured['elapsed_seconds']:10.1f}s  "
+                    f"peak workers={measured['peak_worker_processes']}",
+                    flush=True,
+                )
+                _write_csv(per_chain_path, PER_CHAIN_FIELDS,
+                           [{**r, "elapsed_seconds": f"{r['elapsed_seconds']:.3f}"} for r in rows])
+                _write_csv(summary_path, SUMMARY_FIELDS, summarize(rows))
+                write_markdown(output_dir / "summary.md", sections_from_dir(output_dir), args)
 
-        if failures and args.fail_fast:
-            break
-
-    summary = write_summary(output_path, completed)
-    print("\nElapsed-time summary")
-    for row in summary:
-        timing = f"{float(row['mean_seconds']):.3f}s" if row["mean_seconds"] else "failed"
-        print(
-            f"  {row['method']:<10} {row['pt_backend']:<20} {timing:>12} "
-            f"std={row['std_seconds'] or '-'} relative_to_default={row['relative_to_default'] or '-'}"
-        )
-    print(f"Summary: {output_path}")
+    print("\n" + (output_dir / "summary.md").read_text(encoding="utf-8"))
     return 1 if failures else 0
 
 

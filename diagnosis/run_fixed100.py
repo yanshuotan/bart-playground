@@ -45,11 +45,9 @@ def _common_arguments(parser):
         type=int,
         default=GLOBAL_BASE_CHAIN_SEED,
         help=(
-            f"Chain seed base; chain_seed = this + run_id*1000 + chain_id "
-            f"(default {GLOBAL_BASE_CHAIN_SEED}). The existing stores were NOT all "
-            f"made with the default: see STORE_BASE_CHAIN_SEEDS in "
-            f"experiment_fixed100.py for the per-dataset value, and pass it "
-            f"explicitly when reproducing one."
+            f"Chain seed base (default {GLOBAL_BASE_CHAIN_SEED}); chain_seed = this + "
+            f"run_id*1000 + chain_id, plus 100000 for long chains. diagnosis/store used "
+            f"the default throughout."
         ),
     )
     parser.add_argument("--short-ndpost", type=int, default=10_000)
@@ -66,6 +64,14 @@ def _common_arguments(parser):
     parser.add_argument("--ladder-nskip", type=int, default=500)
     parser.add_argument("--ladder-repeats", type=int, default=3)
     parser.add_argument("--ladder-search-points", type=int, default=1000)
+    parser.add_argument(
+        "--parallel-methods",
+        action="store_true",
+        help=(
+            "Run the four short methods as separate tasks (n_chains*4 in total) "
+            "instead of one sequential task per chain. Same draws; raise --n-jobs to use it."
+        ),
+    )
     parser.add_argument("--preflight-only", action="store_true", help="Validate inputs without fitting or writing results.")
 
 
@@ -150,7 +156,7 @@ def _fit_arguments(args, X, y, dataset_tag, store_root, *, long_ndpost, long_sto
         swap_interval=args.swap_interval, multi_tries=args.multi_tries,
         store_preds=True, progress_print=True, run_short=run_short,
         run_long=run_long, dirichlet_prior=dirichlet_prior,
-        s_alpha=float(s_alpha),
+        s_alpha=float(s_alpha), parallel_methods=args.parallel_methods,
     )
 
 

@@ -28,7 +28,6 @@ import experiment_fixed100 as exp
 GLOBAL_FIXED_TEST_SEED = exp.GLOBAL_FIXED_TEST_SEED
 GLOBAL_BASE_TRAIN_SEED = exp.GLOBAL_BASE_TRAIN_SEED
 GLOBAL_BASE_CHAIN_SEED = exp.GLOBAL_BASE_CHAIN_SEED
-STORE_BASE_CHAIN_SEEDS = exp.STORE_BASE_CHAIN_SEEDS
 
 
 DATASET_CONFIGS = {
@@ -84,7 +83,7 @@ DATASET_CONFIGS = {
         "dataset_tag": "fixed100_SeoulBike",
         "uci_id": 560,
         # Matches the stored SeoulBike long chain (see its
-        # default_long_metadata.csv and STORE_LONG_SETTINGS).
+        # default_long_metadata.csv).
         "long_ndpost": 10_000_000,
         "long_store_every": 1000,
         "drop_columns": ["Date"],
