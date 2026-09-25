@@ -112,6 +112,36 @@ def _leaf_basis_svd_numba(leaf_basis):
     U, S, _ = np.linalg.svd(leaf_basis_float, full_matrices=False)
     return U, S
 
+def _leaf_basis_svd_with_fallback(leaf_basis):
+    """`_leaf_basis_svd_numba`, with more robust retries when LAPACK gives up.
+
+    The leaf basis is structurally rank deficient: each tree's columns sum to
+    the all-ones vector, so an ensemble of T trees has at least T-1 exactly
+    zero singular values. The divide-and-conquer driver (gesdd) that numpy uses
+    can fail to separate that cluster of zeros and raise "Internal algorithm
+    failed to converge", which in float32 happens often enough to kill a long
+    PT run. Retrying in float64, then with the slower but sturdier QR driver
+    (gesvd), recovers those cases.
+    """
+    try:
+        return _leaf_basis_svd_numba(leaf_basis)
+    except Exception as float32_error:
+        logger.warning(
+            "float32 SVD of the %s leaf basis failed (%s); retrying in float64",
+            getattr(leaf_basis, "shape", "?"), float32_error,
+        )
+        basis64 = np.asarray(leaf_basis, dtype=np.float64)
+        try:
+            U, S, _ = np.linalg.svd(basis64, full_matrices=False)
+            return U, S
+        except Exception as float64_error:
+            logger.warning("float64 SVD also failed (%s); retrying with the gesvd driver", float64_error)
+            from scipy.linalg import svd as scipy_svd
+
+            U, S, _ = scipy_svd(basis64, full_matrices=False, lapack_driver="gesvd")
+            return U, S
+
+
 @njit(cache=True)
 def _trees_log_marginal_lkhd_from_svd_numba(U, S, resids, eps_sigma2, f_sigma2, temp=1.0):
     """
@@ -488,7 +518,7 @@ class BARTLikelihood:
         `trees_leaf_basis_svd` for a leaf basis the caller has already built, so
         that it can keep the basis instead of discarding it.
         """
-        return _leaf_basis_svd_numba(leaf_basis)
+        return _leaf_basis_svd_with_fallback(leaf_basis)
 
     def trees_log_marginal_lkhd(self, bart_params : Parameters, data_y, tree_ids, temp: float = 1.0, leaf_basis_svd=None):
         """
@@ -552,13 +582,27 @@ class BARTLikelihood:
             )
         else:
             leaf_basis = bart_params.leaf_basis(tree_ids)
-            return _trees_log_marginal_lkhd_numba(
-                leaf_basis, 
-                resids, 
-                bart_params.global_params["eps_sigma2"], 
-                self.f_sigma2,
-                temp=temp,
-            )
+            try:
+                return _trees_log_marginal_lkhd_numba(
+                    leaf_basis,
+                    resids,
+                    bart_params.global_params["eps_sigma2"],
+                    self.f_sigma2,
+                    temp=temp,
+                )
+            except Exception as error:
+                # Same SVD, same failure mode; redo it with the retries and feed
+                # the result to the precomputed-SVD version of this formula.
+                logger.warning("SVD inside the multi-tree likelihood failed (%s); retrying", error)
+                U, S = _leaf_basis_svd_with_fallback(leaf_basis)
+                return _trees_log_marginal_lkhd_from_svd_numba(
+                    U,
+                    S,
+                    resids,
+                    bart_params.global_params["eps_sigma2"],
+                    self.f_sigma2,
+                    temp=temp,
+                )
             
 
     def trees_log_marginal_lkhd_ratio(self, move : Move, data_y, marginalize: bool=False, temp: float = 1.0):
