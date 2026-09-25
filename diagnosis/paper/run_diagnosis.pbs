@@ -1,0 +1,23 @@
+#!/bin/bash
+#PBS -q auto_free
+#PBS -N bart_diag
+#PBS -j oe
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=1:mpiprocs=1:ompthreads=1:mem=20gb
+
+set -o pipefail
+cd "$PBS_O_WORKDIR" || exit 1
+
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
+LOG="diagnosis/paper/pbs_diagnosis_${PBS_JOBID}.log"
+PYTHON=".venv/bin/python"
+
+echo "host=$(hostname) started=$(date -Is)" | tee "$LOG"
+"$PYTHON" -u diagnosis/paper/diagnosis.py 2>&1 | tee -a "$LOG"
+status=${PIPESTATUS[0]}
+echo "diagnosis_exit=${status} finished=$(date -Is)" | tee -a "$LOG"
+exit "$status"

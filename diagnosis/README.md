@@ -1,22 +1,21 @@
 # Diagnosis experiments and analyses
 
-This directory holds fixed-100 test-point BART experiments, their stored results,
-and analyses. The main comparison uses `default`, `default_pt`, `mtmh`, and
-`mtmh_pt` short chains, with `default_long` as a long-chain reference where
-available.
+This directory contains the fixed-100 BART experiments, stored chains, paper
+analysis, timing measurements, and older exploratory work. The main comparison
+uses `default`, `default_pt`, `mtmh`, and `mtmh_pt`, with `default_long` as the
+long-chain empirical reference.
 
 ## Directory guide
 
 | Path | Purpose |
 | --- | --- |
-| `store/` | Results for Abalone, CalHousing, CCPP, Concrete, Friedman, FriedmanSparseDir (p20/p100/p200), and SeoulBike. Each dataset has metric CSVs and metadata. |
-| `run_fixed100.py` | Single entry point for the fixed datasets, selected run IDs, and the p20/p200 sparse variants. |
-| `experiment_fixed100.py` | Runs chains and writes fixed-100 results. `fixed100_support.py` provides data loading, ladder search, and sparse data generation. |
-| `analysis/` | Analysis scripts, the Abalone notebook, figures and tables in `analysis_outputs/`, and timing results in `timing_outputs/`. |
-
-New runs save predictions, per-draw RMSE/noise traces, PT swap summaries, test
-splits, and metadata. The analysis scripts recompute predictive RMSE and CRPS
-from predictions and test targets.
+| `store/` | Stored predictions, traces, splits, temperatures, and metadata for every dataset and run. |
+| `paper/` | Standalone diagnosis and comparison scripts plus paper-facing tables, figures, and summaries. |
+| `timing/` | PT timing benchmark, per-run CSV files, and the timing summary used by the paper analysis. |
+| `exploratory/` | Earlier general analysis scripts, the notebook, and exploratory results. |
+| `run_fixed100.py` | Entry point for running selected fixed datasets and run IDs. |
+| `experiment_fixed100.py` | Chain execution and fixed-100 result writing. |
+| `fixed100_support.py` | Dataset loading, ladder search, and sparse-data utilities. |
 
 ## Run experiments
 
@@ -30,24 +29,34 @@ python diagnosis/run_fixed100.py sparse --variants friedman_p20_k5 friedman_p200
 ```
 
 For `fixed`, `--skip-long` runs only short methods and `--skip-short` runs only
-the long reference. `--run-ids` selects specific run numbers. The sparse command
-uses the same output format and allows chain count, draws, and ladder settings
-to be changed through command-line options. Use `--help` after either command
-to see all settings.
+the long reference. `--run-ids` selects specific run numbers. Use `--help` for
+all settings.
 
-## Analyze stored results
+## Paper analysis
 
 ```bash
-python diagnosis/analysis/run_all_analyses.py fixed100_Abalone
-python diagnosis/analysis/benchmark_pt_parallelization.py --dry-run
+python diagnosis/paper/diagnosis.py
+python diagnosis/paper/comparison.py
 ```
 
-`run_all_analyses.py` reads a named directory in `store/` and writes diagnostic
-tables and figures to `analysis/analysis_outputs/<dataset>/`. Use `--only` to
-select analysis groups. `analysis/run_all_datasets.ps1` runs this script for
-its configured dataset list. `analysis/Abalone_fixed100_final.ipynb` contains
-the Abalone notebook analysis.
+The scripts analyze five paired runs of Abalone, Concrete, and Friedman. They
+write CSV tables to `paper/tables/` and figures to `paper/figures/`. The rolling
+R-hat window is 1,000 draws and the step is 100.
 
-`benchmark_pt_parallelization.py` measures Abalone PT execution time using the
-stored split and temperatures; its CSV summaries go to `analysis/timing_outputs/`.
-`--dry-run` checks inputs without fitting models.
+## Exploratory analysis
+
+```bash
+python diagnosis/exploratory/run_all_analyses.py fixed100_Abalone
+```
+
+Results go to `diagnosis/exploratory/results/<dataset>/`. The notebook and the
+older focused plotting scripts are retained in the same directory.
+
+## Timing
+
+```bash
+python diagnosis/timing/benchmark_pt_parallelization.py --dry-run
+```
+
+The benchmark reads stored splits and temperature ladders. Its CSV files and
+summary are written directly to `diagnosis/timing/`.

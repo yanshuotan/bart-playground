@@ -7,7 +7,7 @@ python run_all_analyses.py fixed100_Abalone
 
 The positional argument is a dataset/store name. The script finds the
 corresponding directory under ``diagnosis/store`` and saves
-every table and figure under ``analysis_outputs/<dataset name>/``.
+every table and figure under ``exploratory/results/<dataset name>/``.
 """
 
 from __future__ import annotations
@@ -59,6 +59,7 @@ PAIRWISE_COMPARISONS = (("default", "default_pt"), ("default", "mtmh"), ("mtmh",
 ALL_GROUPS = (
     "long",
     "pca",
+    "separation",
     "predictive",
     "energy_ref",
     "rhat",
@@ -80,6 +81,8 @@ class Config:
     n_segments: int = 4
     plot_draws: int = 1000
     energy_ref_draws: int = 2000
+    separation_draws_per_chain: int = 1500
+    separation_seed: int = 2028
     eigen_projection_start: int = 3000
     plot_chain_seed: int = 2029
 
@@ -269,6 +272,56 @@ def energy_distance(x: np.ndarray, y: np.ndarray) -> float:
     return float(2.0 * dxy - within_x - within_y)
 
 
+def chain_separation_metrics(
+    draws: np.ndarray,
+    max_draws_per_chain: int,
+    seed: int,
+) -> dict[str, float | int]:
+    """Measure chain separation in the original prediction coordinates.
+
+    ``draws`` has shape (chain, draw, test point).  The same number of
+    post-burn-in draws is sampled from each chain before calculating the
+    average pairwise distance between chain centroids and the ratio of
+    between-chain to within-chain squared dispersion.
+    """
+    draws = np.asarray(draws, dtype=float)
+    if draws.ndim != 3:
+        raise ValueError(f"Expected (chain, draw, test point); got {draws.shape}")
+
+    rng = np.random.default_rng(seed)
+    n_use = min(max_draws_per_chain, draws.shape[1])
+    sampled = []
+    for chain in draws:
+        if n_use < len(chain):
+            indices = np.sort(rng.choice(len(chain), size=n_use, replace=False))
+            sampled.append(chain[indices])
+        else:
+            sampled.append(chain)
+    sampled_draws = np.stack(sampled)
+
+    centroids = sampled_draws.mean(axis=1)
+    pairwise_distances = [
+        float(np.linalg.norm(centroids[left] - centroids[right]))
+        for left in range(len(centroids))
+        for right in range(left + 1, len(centroids))
+    ]
+    mean_centroid_distance = float(np.mean(pairwise_distances)) if pairwise_distances else np.nan
+
+    grand_centroid = sampled_draws.reshape(-1, sampled_draws.shape[-1]).mean(axis=0)
+    between = float(np.mean(np.sum((centroids - grand_centroid) ** 2, axis=1)))
+    within = float(np.mean([
+        np.mean(np.sum((chain - centroid) ** 2, axis=1))
+        for chain, centroid in zip(sampled_draws, centroids)
+    ]))
+
+    return {
+        "draws_per_chain": n_use,
+        "n_test_points": sampled_draws.shape[-1],
+        "mean_centroid_distance": mean_centroid_distance,
+        "between_within_ratio": between / within if within > 0 else np.nan,
+    }
+
+
 def multivariate_rhat(draws: np.ndarray, ridge_fraction: float = 1e-8) -> float:
     draws = np.asarray(draws, dtype=float)
     m, n, p = draws.shape
@@ -432,6 +485,31 @@ def analyze_pca_comparisons(store: Store, cfg: Config, short_methods: list[str],
             fig.suptitle(f"Run {run_id:03d}: {method_name(method_a)} vs {method_name(method_b)} on long axes")
             fig.tight_layout(rect=[0, 0.08, 1, 0.94])
             save_figure(fig, cfg, f"r{run_id:03d}_pca_long_{method_a}-{method_b}.png")
+
+
+def analyze_chain_separation(
+    store: Store,
+    cfg: Config,
+    short_methods: list[str],
+    short_runs: list[int],
+) -> None:
+    print_metric("original prediction-space chain separation")
+    rows = []
+    for run_id in short_runs:
+        for method in available_methods_for_run(store, short_methods, run_id):
+            draws = store.predictions(run_id, method, cfg.short_burn)
+            metrics = chain_separation_metrics(
+                draws,
+                max_draws_per_chain=cfg.separation_draws_per_chain,
+                seed=cfg.separation_seed + run_id,
+            )
+            rows.append({
+                "run": run_id,
+                "method": method_name(method),
+                "n_chains": draws.shape[0],
+                **metrics,
+            })
+    save_table(rows, cfg, "chain_separation.csv")
 
 
 def analyze_predictive(store: Store, cfg: Config, short_methods: list[str], short_runs: list[int], long_runs: list[int]) -> None:
@@ -843,7 +921,7 @@ def analyze_ess(store: Store, cfg: Config, short_methods: list[str], short_runs:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run every fixed-100 diagnostic for a named stored dataset.")
     parser.add_argument("dataset", help="Dataset/store name, e.g. fixed100_Abalone")
-    parser.add_argument("--output-root", type=Path, help="Parent output directory (default: analysis_outputs beside this script)")
+    parser.add_argument("--output-root", type=Path, help="Parent output directory (default: results beside this script)")
     parser.add_argument("--store-root", type=Path, help="Store root override")
     parser.add_argument("--only", help=f"Comma-separated groups; choices: {', '.join(ALL_GROUPS)}")
     parser.add_argument("--window", type=int, default=1000)
@@ -858,7 +936,7 @@ def main() -> int:
     store_root = (args.store_root or fixed_root / "store").resolve()
     dataset_name = Path(args.dataset).name
     store_dir = locate_store(dataset_name, store_root)
-    output_root = (args.output_root or script_dir / "analysis_outputs").resolve()
+    output_root = (args.output_root or script_dir / "results").resolve()
     output_dir = output_root / re.sub(r"[^A-Za-z0-9_.-]+", "_", dataset_name)
 
     if store_dir is None:
@@ -899,6 +977,8 @@ def main() -> int:
         analyze_long_behavior(store, cfg, long_runs)
     if short_runs and "pca" in groups:
         analyze_pca_comparisons(store, cfg, short_methods, short_runs, long_runs)
+    if short_runs and "separation" in groups:
+        analyze_chain_separation(store, cfg, short_methods, short_runs)
     if (short_runs or long_runs) and "predictive" in groups:
         analyze_predictive(store, cfg, short_methods, short_runs, long_runs)
     if short_runs and long_runs and "energy_ref" in groups:

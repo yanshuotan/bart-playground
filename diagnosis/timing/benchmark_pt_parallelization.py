@@ -24,7 +24,7 @@ processes.  It also records the CPUs the scheduler allocated (``PBS_NCPUS``)
 and the process CPU affinity.
 
 Outputs (updated after every fit) in ``--output-dir``, by default
-``diagnosis/analysis/timing_outputs``:
+``diagnosis/timing``:
     <dataset>_run<r>_per_chain.csv   one row per timed fit
     <dataset>_run<r>_summary.csv     one row per method, totals over chains
     summary.md                       one table per dataset, rebuilt from every
@@ -139,7 +139,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="Default: diagnosis/analysis/timing_outputs/. Files are named after the dataset, so "
+        help="Default: diagnosis/timing/. Files are named after the dataset, so "
              "several jobs can share one directory; summary.md is rebuilt from all of them.",
     )
     parser.add_argument("--show-progress", action="store_true", help="Show sampler progress bars (off for cleaner timing).")
@@ -470,7 +470,7 @@ def write_markdown(path: Path, sections: list[dict[str, Any]], args) -> None:
 # ---------------------------------------------------------------------------
 
 def run_benchmark(args) -> int:
-    output_dir = (args.output_dir or SCRIPT_DIR / "timing_outputs").expanduser().resolve()
+    output_dir = (args.output_dir or SCRIPT_DIR).expanduser().resolve()
     allocated, affinity = allocated_cpu_count(), affinity_cpu_count()
     configs = [c for c in CONFIGS if c[0] in args.labels]
     print(f"Output directory: {output_dir}")

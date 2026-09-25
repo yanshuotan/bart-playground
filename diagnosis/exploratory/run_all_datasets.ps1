@@ -3,7 +3,7 @@ $repoDir = (Resolve-Path (Join-Path $scriptDir "..\..")).Path
 
 $python = Join-Path $repoDir ".venv\Scripts\python.exe"
 $script = Join-Path $scriptDir "run_all_analyses.py"
-$log = Join-Path $scriptDir "analysis_outputs\all_datasets.log"
+$log = Join-Path $scriptDir "results\all_datasets.log"
 
 $datasets = @(
     "fixed100_CalHousing_subsample5000",

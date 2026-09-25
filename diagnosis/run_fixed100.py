@@ -87,7 +87,12 @@ def parse_args(argv=None):
     fixed.add_argument("--temperatures", type=float, nargs="+", default=[1.0, 100.0], help="Initial temperatures when --ladder=original")
     fixed.add_argument("--skip-short", action="store_true")
     fixed.add_argument("--skip-long", action="store_true")
-    fixed.add_argument("--long-chunk-size", type=int, default=10_000)
+    fixed.add_argument(
+        "--long-chunk-size",
+        type=int,
+        default=10_000,
+        help="Long-chain iterations held in memory at once; a memory/speed knob that leaves the draws unchanged.",
+    )
     fixed.add_argument("--enable-memory-log", action="store_true")
     fixed.add_argument("--memory-log-interval", type=int, default=60)
     sparse = sub.add_parser("sparse", help="Run the retained p20/p200 sparse variants")
@@ -143,7 +148,7 @@ def _fit_arguments(args, X, y, dataset_tag, store_root, *, long_ndpost, long_sto
         n_trees=args.n_trees, short_ndpost=args.short_ndpost,
         short_nskip=args.short_nskip, long_ndpost=long_ndpost,
         long_store_every=long_store_every,
-        long_chunk_size=getattr(args, "long_chunk_size", 1),
+        long_chunk_size=getattr(args, "long_chunk_size", 10_000),
         n_fixed_test_points=args.n_fixed_test_points,
         train_fraction=args.train_fraction, fixed_test_seed=args.fixed_test_seed,
         base_train_seed=args.base_train_seed, base_chain_seed=args.base_chain_seed,

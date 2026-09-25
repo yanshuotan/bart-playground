@@ -567,8 +567,8 @@ def _cleanup_sampler_after_long_chunk(model, *, thinned, last_state):
     sampler = model.sampler
     sampler.trace = []
     sampler.accepted_moves_logmh.clear()
-    sampler.moves_str_cache = None
-    sampler.moves_cache_iterator = None
+    # The cache of pre-drawn moves is left alone: resetting it would redraw a
+    # batch and make the chain depend on long_chunk_size.
 
 
 def run_long_default_chain_streaming(
