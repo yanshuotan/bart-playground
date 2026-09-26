@@ -133,13 +133,14 @@ def _leaf_basis_svd_with_fallback(leaf_basis):
         basis64 = np.asarray(leaf_basis, dtype=np.float64)
         try:
             U, S, _ = np.linalg.svd(basis64, full_matrices=False)
-            return U, S
         except Exception as float64_error:
             logger.warning("float64 SVD also failed (%s); retrying with the gesvd driver", float64_error)
             from scipy.linalg import svd as scipy_svd
 
             U, S, _ = scipy_svd(basis64, full_matrices=False, lapack_driver="gesvd")
-            return U, S
+        # Back to the dtype of the fast path: the callers are Numba kernels that
+        # multiply U by float32 residuals and reject mixed dtypes.
+        return U.astype(np.float32), S.astype(np.float32)
 
 
 @njit(cache=True)
