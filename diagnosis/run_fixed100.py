@@ -102,6 +102,12 @@ def parse_args(argv=None):
     sparse.add_argument("--data-seed", type=int, default=42)
     sparse.add_argument("--noise-sd", type=float, default=1.0)
     sparse.add_argument("--s-alpha", type=float, default=1.0)
+    sparse.add_argument("--run-ids", nargs="+", help="Only these run IDs, e.g. 2 3 4 or 2-4")
+    sparse.add_argument("--skip-short", action="store_true")
+    sparse.add_argument("--skip-long", action="store_true", help="Skip the long chains; sparse runs were short-only before long chains were added here.")
+    sparse.add_argument("--long-ndpost", type=int, default=10_000_000, help="Long-chain iterations; matches the named datasets.")
+    sparse.add_argument("--long-store-every", type=int, default=1000)
+    sparse.add_argument("--long-chunk-size", type=int, default=10_000)
     args = parser.parse_args(supplied)
     if args.experiment == "fixed" and args.ladder == "original":
         if "--short-ndpost" not in supplied:
@@ -122,7 +128,7 @@ def parse_args(argv=None):
         parser.error("--n-runs, --n-chains, and --n-jobs must be positive.")
     if args.short_ndpost < 1 or args.n_trees < 1:
         parser.error("--short-ndpost and --n-trees must be positive.")
-    if args.experiment == "fixed" and args.skip_short and args.skip_long:
+    if args.skip_short and args.skip_long:
         parser.error("--skip-short and --skip-long cannot be used together.")
     if args.experiment == "sparse":
         if args.s_alpha <= 0:
@@ -232,6 +238,9 @@ def _run_sparse(args, store_root):
         print("PREFLIGHT PASSED; no model fitted or result written")
         return
     store_root.mkdir(parents=True, exist_ok=True)
+    run_ids = _parse_run_ids(args.run_ids) if args.run_ids else None
+    if run_ids:
+        args.n_runs = max(run_ids) + 1
     for name in args.variants:
         spec = SPECS[name]
         X, y, metadata = generate_sparse_variant(
@@ -247,10 +256,12 @@ def _run_sparse(args, store_root):
             )
         kwargs = _fit_arguments(
             args, X, y, spec.dataset_tag, store_root,
-            long_ndpost=1, long_store_every=1, run_short=True,
-            run_long=False, dirichlet_prior=True, s_alpha=args.s_alpha,
+            long_ndpost=args.long_ndpost, long_store_every=args.long_store_every,
+            run_short=not args.skip_short, run_long=not args.skip_long,
+            dirichlet_prior=True, s_alpha=args.s_alpha,
         )
-        exp.run_fixed100_dataset(**kwargs)
+        with SelectedRunsPatch(run_ids) if run_ids else nullcontext():
+            exp.run_fixed100_dataset(**kwargs)
         metadata_dir = store_root / spec.dataset_tag / "metadata"
         metadata_dir.mkdir(parents=True, exist_ok=True)
         with (metadata_dir / f"{spec.dataset_tag}__generator_metadata.json").open(

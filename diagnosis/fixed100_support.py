@@ -34,8 +34,8 @@ DATASET_CONFIGS = {
     "abalone": {
         "dataset_tag": "fixed100_Abalone",
         "uci_id": 1,
-        "long_ndpost": 1_000_000,
-        "long_store_every": 100,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
         "drop_columns": ["Sex"],
         "target_column": None,
     },
@@ -58,8 +58,8 @@ DATASET_CONFIGS = {
     },
     "friedman_sparse_dir": {
         "dataset_tag": "fixed100_FriedmanSparseDir",
-        "long_ndpost": 1_000_000,
-        "long_store_every": 100,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
         "n_samples": 2000,
         "n_features": 100,
         "noise": 1.0,
@@ -71,8 +71,8 @@ DATASET_CONFIGS = {
     "ccpp": {
         "dataset_tag": "fixed100_CCPP",
         "uci_id": 294,
-        "long_ndpost": 1_000_000,
-        "long_store_every": 100,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
         "drop_columns": [],
         "categorical_columns": [],
         "target_column": None,
@@ -95,8 +95,8 @@ DATASET_CONFIGS = {
         "dataset_tag": "fixed100_CalHousing_subsample5000",
         "subsample_n": 5000,
         "subsample_seed": 42,
-        "long_ndpost": 1_000_000,
-        "long_store_every": 100,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
     },
 }
 
