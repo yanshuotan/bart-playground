@@ -91,6 +91,29 @@ DATASET_CONFIGS = {
         "target_column": "Rented Bike Count",
     },
 
+    "cpu_act": {
+        "dataset_tag": "fixed100_CPUAct",
+        # OpenML version 8 of cpu_act; 8192 rows, 21 numeric features, target usr.
+        "openml_id": 44132,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
+        "drop_columns": [],
+        "categorical_columns": [],
+        "target_column": None,
+    },
+
+    "airfoil": {
+        "dataset_tag": "fixed100_Airfoil",
+        # OpenML airfoil_self_noise version 1; 1503 rows, 5 numeric features,
+        # target pressure (scaled sound pressure level in dB).
+        "openml_id": 43919,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
+        "drop_columns": [],
+        "categorical_columns": [],
+        "target_column": None,
+    },
+
     "calhousing": {
         "dataset_tag": "fixed100_CalHousing_subsample5000",
         "subsample_n": 5000,
@@ -194,6 +217,7 @@ def _clean_finite_rows(X, y):
 
 
 UCI_CACHE_DIR = Path(__file__).resolve().parent / "store" / "uci_cache"
+OPENML_CACHE_DIR = Path(__file__).resolve().parent / "store" / "openml_cache"
 
 
 def _fetch_uci_frames(name: str, uci_id: int):
@@ -213,6 +237,30 @@ def _fetch_uci_frames(name: str, uci_id: int):
     features = ds.data.features.copy()
     targets = ds.data.targets.copy()
     UCI_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    features.to_csv(features_path, index=False)
+    targets.to_csv(targets_path, index=False)
+    return features, targets
+
+
+def _fetch_openml_frames(name: str, data_id: int):
+    """Raw OpenML features/target, cached next to the UCI frames.
+
+    Fetching is by numeric data_id, never by name: OpenML keeps several
+    versions of a dataset under one name and they do not all have the same
+    columns. Same offline story as `_fetch_uci_frames`: populate the cache on a
+    login node before submitting a batch job.
+    """
+    features_path = OPENML_CACHE_DIR / f"{name}__features.csv"
+    targets_path = OPENML_CACHE_DIR / f"{name}__targets.csv"
+    if features_path.is_file() and targets_path.is_file():
+        return pd.read_csv(features_path), pd.read_csv(targets_path)
+
+    from sklearn.datasets import fetch_openml
+
+    bunch = fetch_openml(data_id=data_id, as_frame=True)
+    features = bunch.data.copy()
+    targets = bunch.target.to_frame() if hasattr(bunch.target, "to_frame") else pd.DataFrame(bunch.target)
+    OPENML_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     features.to_csv(features_path, index=False)
     targets.to_csv(targets_path, index=False)
     return features, targets
@@ -244,7 +292,10 @@ def load_dataset(name: str):
         )
         return X, y
 
-    features, targets = _fetch_uci_frames(name, cfg["uci_id"])
+    if "openml_id" in cfg:
+        features, targets = _fetch_openml_frames(name, cfg["openml_id"])
+    else:
+        features, targets = _fetch_uci_frames(name, cfg["uci_id"])
     features, y = _select_target_and_features(
         features,
         targets,
