@@ -74,17 +74,21 @@ def long_predictions(store_root: Path, dataset: str, run: int, burn: int) -> np.
 
 
 def dataset_tag(store_root: Path, dataset: str) -> str:
-    """File-name tag of a store directory (p100 stores files as ...SparseDir)."""
-    metadata = sorted((store_root / dataset / "metadata").glob("*__dataset_metadata.csv"))
-    if not metadata:
-        raise FileNotFoundError(f"No dataset metadata in {store_root / dataset}")
-    return metadata[0].name.split("__dataset_metadata")[0]
+    """File-name tag of a store directory (p100 stores files as ...SparseDir).
+
+    Taken from the prediction files themselves rather than dataset_metadata.csv,
+    which run_fixed100_dataset overwrites on every run and can be stale.
+    """
+    preds = sorted((store_root / dataset / "preds").glob("*__default_long__preds.csv"))
+    if not preds:
+        raise FileNotFoundError(f"No long-chain predictions in {store_root / dataset / 'preds'}")
+    return preds[0].name.split("__run")[0]
 
 
 def long_runs(store_root: Path, dataset: str) -> list[int]:
     tag = dataset_tag(store_root, dataset)
     runs = []
-    for path in (store_root / dataset / "rmses").glob(f"{tag}__run*__default_long__rmses.csv"):
+    for path in (store_root / dataset / "preds").glob(f"{tag}__run*__default_long__preds.csv"):
         runs.append(int(re.search(r"__run(\d+)__", path.name).group(1)))
     return sorted(runs)
 
