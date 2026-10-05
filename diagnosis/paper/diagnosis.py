@@ -37,8 +37,21 @@ def load_with_shape(path: Path) -> np.ndarray:
     return np.loadtxt(path, delimiter=",", comments="#").reshape(shape)
 
 
+def dataset_tag(store_root: Path, dataset: str) -> str:
+    """File-name prefix inside a store directory.
+
+    Usually the directory name, but the sparse variants differ: files in
+    fixed100_FriedmanSparseDir_p20 are named fixed100_FriedmanSparseDirP20K5__*.
+    """
+    preds = sorted((store_root / dataset / "preds").glob("*__preds.csv"))
+    if not preds:
+        raise FileNotFoundError(f"No predictions in {store_root / dataset / 'preds'}")
+    return preds[0].name.split("__run")[0]
+
+
 def prediction_path(store_root: Path, dataset: str, run: int, method: str) -> Path:
-    return store_root / dataset / "preds" / f"{dataset}__run{run:03d}__{method}__preds.csv"
+    tag = dataset_tag(store_root, dataset)
+    return store_root / dataset / "preds" / f"{tag}__run{run:03d}__{method}__preds.csv"
 
 
 def predictions(store_root: Path, dataset: str, run: int, method: str, burn: int = 0) -> np.ndarray:

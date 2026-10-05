@@ -19,8 +19,14 @@ All values summarize five runs per dataset.
 
 | dataset | worst_projected_rhat_mean | cross_rhat_median_mean | within_rhat_median_mean | short_centroid_distance_mean | long_rhat_median_mean |
 | --- | --- | --- | --- | --- | --- |
-| fixed100_Abalone | 1.9488 | 1.2447 | 1.2006 | 3.0620 | 1.0012 |
+| fixed100_Abalone | 1.9488 | 1.2447 | 1.2006 | 3.0620 | 1.0001 |
+| fixed100_CCPP | 2.6997 | 1.7608 | 1.3839 | 14.3999 | 1.1021 |
+| fixed100_CalHousing_subsample5000 | 2.5100 | 1.4956 | 1.2837 | 1.8482 | 1.0147 |
 | fixed100_Concrete | 2.2827 | 1.3887 | 1.2548 | 19.5801 | 1.0026 |
 | fixed100_Friedman | 2.3150 | 1.4700 | 1.2712 | 5.0399 | 1.0013 |
+| fixed100_FriedmanSparseDir_p100 | 2.5177 | 1.4735 | 1.3269 | 3.8009 | 1.0003 |
+| fixed100_FriedmanSparseDir_p20 | 2.5198 | 1.4763 | 1.3203 | 4.1051 | 1.0002 |
+| fixed100_FriedmanSparseDir_p200 | 2.4533 | 1.4909 | 1.3422 | 3.9360 | 1.0003 |
+| fixed100_SeoulBike | 2.5936 | 1.6351 | 1.3119 | 1166.5787 | 1.1774 |
 
 The long chains are empirical references; their own R-hat summaries qualify PCA-based interpretation.

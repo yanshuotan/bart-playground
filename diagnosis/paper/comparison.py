@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+import sys
 from pathlib import Path
 
 import arviz as az
@@ -51,11 +52,24 @@ def load_with_shape(path: Path) -> np.ndarray:
     return np.loadtxt(path, delimiter=",", comments="#").reshape(shape)
 
 
+def dataset_tag(store_root: Path, dataset: str) -> str:
+    """File-name prefix inside a store directory.
+
+    Usually the directory name, but the sparse variants differ: files in
+    fixed100_FriedmanSparseDir_p20 are named fixed100_FriedmanSparseDirP20K5__*.
+    """
+    preds = sorted((store_root / dataset / "preds").glob("*__preds.csv"))
+    if not preds:
+        raise FileNotFoundError(f"No predictions in {store_root / dataset / 'preds'}")
+    return preds[0].name.split("__run")[0]
+
+
 def stored_path(store_root: Path, dataset: str, folder: str, run: int, suffix: str) -> Path:
+    tag = dataset_tag(store_root, dataset)
     if folder == "preds":
-        filename = f"{dataset}__run{run:03d}__{suffix}__preds.csv"
+        filename = f"{tag}__run{run:03d}__{suffix}__preds.csv"
     else:
-        filename = f"{dataset}__run{run:03d}__{suffix}.csv"
+        filename = f"{tag}__run{run:03d}__{suffix}.csv"
     return store_root / dataset / folder / filename
 
 
@@ -70,33 +84,60 @@ def y_test(store_root: Path, dataset: str, run: int) -> np.ndarray:
     return load_with_shape(path).reshape(-1)
 
 
+# Store directory -> the loader name the experiment uses. Sparse variants are
+# regenerated rather than loaded, so they go through generate_sparse_variant.
+TARGET_LOADERS = {
+    "fixed100_Abalone": "abalone",
+    "fixed100_Airfoil": "airfoil",
+    "fixed100_CCPP": "ccpp",
+    "fixed100_CalHousing_subsample5000": "calhousing",
+    "fixed100_CPUAct": "cpu_act",
+    "fixed100_Concrete": "concrete",
+    "fixed100_Friedman": "friedman",
+    "fixed100_FriedmanSparseDir_p100": "friedman_sparse_dir",
+    "fixed100_SeoulBike": "seoul_bike",
+}
+SPARSE_TARGET_LOADERS = {
+    "fixed100_FriedmanSparseDir_p20": "friedman_p20_k5",
+    "fixed100_FriedmanSparseDir_p200": "friedman_p200_k5",
+}
+
+
 def full_target_vector(store_root: Path, dataset: str) -> np.ndarray:
-    """Load/regenerate the full target vector used to create the saved split."""
-    if dataset == "fixed100_Abalone":
-        path = store_root / "uci_cache" / "abalone__targets.csv"
-        values = pd.read_csv(path).iloc[:, 0].to_numpy(dtype=float)
-    elif dataset == "fixed100_Concrete":
-        path = store_root / "uci_cache" / "concrete__targets.csv"
-        values = pd.read_csv(path).iloc[:, 0].to_numpy(dtype=float)
-    elif dataset == "fixed100_Friedman":
-        rng = np.random.default_rng(42)
-        features = rng.uniform(0.0, 1.0, size=(2000, 10))
-        values = (
-            10.0 * np.sin(np.pi * features[:, 0] * features[:, 1])
-            + 20.0 * (features[:, 2] - 0.5) ** 2
-            + 10.0 * features[:, 3]
-            + 5.0 * features[:, 4]
-            + rng.normal(0.0, 1.0, size=2000)
+    """The full target vector the saved split indexes into.
+
+    This calls the experiment's own loader instead of repeating the
+    per-dataset preprocessing here: the stored indices are positions in
+    whatever that loader returns, and SeoulBike alone drops a column, encodes
+    two categoricals and removes non-finite rows. Checked against the previous
+    hand-written branches for Abalone, Concrete and Friedman: identical.
+    """
+    diagnosis_root = Path(__file__).resolve().parent.parent
+    if str(diagnosis_root) not in sys.path:
+        sys.path.insert(0, str(diagnosis_root))
+
+    if dataset in SPARSE_TARGET_LOADERS:
+        from fixed100_support import generate_sparse_variant, repo_nested_friedman1_generator
+
+        _, values, _ = generate_sparse_variant(
+            SPARSE_TARGET_LOADERS[dataset], n_samples=2000, seed=42, noise_sd=1.0,
+            friedman_generator=repo_nested_friedman1_generator,
         )
+    elif dataset in TARGET_LOADERS:
+        from fixed100_support import load_dataset
+
+        _, values = load_dataset(TARGET_LOADERS[dataset])
     else:
-        raise ValueError(f"No self-contained target loader for {dataset}")
+        raise ValueError(f"No target loader registered for {dataset}")
+    values = np.asarray(values, dtype=float).reshape(-1)
     if not np.all(np.isfinite(values)):
         raise ValueError(f"Non-finite targets in full target vector for {dataset}")
     return values
 
 
 def split_indices(store_root: Path, dataset: str, run: int, split: str) -> np.ndarray:
-    path = store_root / dataset / "indices" / f"{dataset}__run{run:03d}__{split}.csv"
+    tag = dataset_tag(store_root, dataset)
+    path = store_root / dataset / "indices" / f"{tag}__run{run:03d}__{split}.csv"
     return load_with_shape(path).reshape(-1).astype(int)
 
 
@@ -525,7 +566,7 @@ def write_root_summary(
             "scaled energy": transition(default["scaled_energy_distance_mean"], combined["scaled_energy_distance_mean"]),
             "relative RMSE": transition(default["relative_rmse_mean"], combined["relative_rmse_mean"]),
             "relative CRPS": transition(default["relative_crps_mean"], combined["relative_crps_mean"]),
-            "time / Default": f"{cost:.2f}x",
+            "time / Default": f"{cost:.2f}x" if np.isfinite(cost) else "not measured",
         })
 
     compact = pd.DataFrame(rows)
@@ -541,14 +582,17 @@ def write_root_summary(
     cost_min = timing[timing["method"] == "MTMH+PT"]["relative_to_default"].min()
     cost_max = timing[timing["method"] == "MTMH+PT"]["relative_to_default"].max()
 
+    n_datasets = summary["dataset"].nunique()
+    n_timed = timing[timing["method"] == "MTMH+PT"]["dataset"].nunique()
     lines = ["# Paper analysis outputs", "",
-             "This directory contains standalone paper-facing analyses for five paired runs of three datasets.", "",
+             f"This directory contains standalone paper-facing analyses for five paired runs of {n_datasets} datasets.", "",
              "## Main result", ""]
     if combined_wins:
-        lines.append("MTMH+PT has the lowest five-run mean for all five reported mixing diagnostics in all three datasets.")
+        lines.append(f"MTMH+PT has the lowest five-run mean for all five reported mixing diagnostics in all {n_datasets} datasets.")
     lines.extend([
         "Predictive changes are reported relative to training-only baselines.",
-        f"The measured MTMH+PT cost is {cost_min:.2f}x to {cost_max:.2f}x the Default runtime per chain.", "",
+        f"The measured MTMH+PT cost is {cost_min:.2f}x to {cost_max:.2f}x the Default runtime per chain "
+        f"({n_timed} of {n_datasets} datasets have timing runs).", "",
         "The table reports five-run means as `Default -> MTMH+PT`.", "",
         markdown_table(compact), "",
         "## Default diagnosis", "",
