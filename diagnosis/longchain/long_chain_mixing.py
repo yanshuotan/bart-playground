@@ -12,9 +12,15 @@ Per dataset and run it reports, on the post-burn long draws:
     (c) within-chain segment rank-split R-hat (four adjacent segments as
         dependent pseudo-chains), i.e. local stability inside one chain
     (d) the four chains on their own PCA axes, with centroids
-    (e) prefix curves: R-hat and bulk ESS recomputed on the first x% of the
-        draws, which is what says whether more draws would still move them
+    (e) prefix curves on log-log axes: R-hat and per-chain bulk ESS recomputed
+        on the first x% of the draws. The ESS slope is the growth exponent; a
+        slope-1 guide marks a chain whose information grows with its length
     (f) autocorrelation of the worst-direction projection per chain
+
+Every ESS here is computed on one chain alone. The four chains exist for the
+between-chain diagnostics (R-hat, separation, energy distance), and nothing in
+`diagnosis/paper` pools them either, so a pooled ESS would describe an estimator
+this project never forms.
 
 Conventions follow `diagnosis/paper/diagnosis.py`: windows and segments count
 *stored* draws, so a window of 1,000 is 1,000 × long_store_every original
@@ -109,9 +115,25 @@ def pointwise_rhat(draws: np.ndarray) -> np.ndarray:
     return np.asarray(az.rhat(data, method="rank")["prediction"].values)
 
 
-def pointwise_ess(draws: np.ndarray, method: str = "bulk") -> np.ndarray:
-    data = xr.DataArray(draws, dims=("chain", "draw", "test_point"), name="prediction")
-    return np.asarray(az.ess(data, method=method)["prediction"].values)
+def per_chain_ess(draws: np.ndarray, method: str = "bulk") -> np.ndarray:
+    """(chain, test_point) ESS, each chain on its own — never pooled.
+
+    arviz still splits the chain in half internally, so this stays sensitive to
+    drift within the chain, but not to where the other three chains sit.
+    """
+    values = np.empty((draws.shape[0], draws.shape[2]), dtype=float)
+    for index, chain in enumerate(draws):
+        data = xr.DataArray(chain[None], dims=("chain", "draw", "test_point"), name="prediction")
+        values[index] = np.asarray(az.ess(data, method=method)["prediction"].values)
+    return values
+
+
+def growth_exponent(draws_per_chain: np.ndarray, ess: np.ndarray) -> float:
+    """Slope of log ESS on log draws: 1 is information growing with length, 0 is stuck."""
+    keep = (ess > 0) & np.isfinite(ess)
+    if keep.sum() < 2:
+        return float("nan")
+    return float(np.polyfit(np.log(draws_per_chain[keep]), np.log(ess[keep]), 1)[0])
 
 
 def summarize(values: np.ndarray) -> dict[str, float]:
@@ -160,9 +182,9 @@ def prefix_convergence(draws: np.ndarray, fractions: tuple[float, ...]) -> pd.Da
             continue
         prefix = draws[:, :n]
         rhat = pointwise_rhat(prefix)
-        bulk = pointwise_ess(prefix, "bulk")
-        tail = pointwise_ess(prefix, "tail")
-        rows.append({
+        bulk = per_chain_ess(prefix, "bulk")
+        tail = per_chain_ess(prefix, "tail")
+        row = {
             "fraction": fraction,
             "draws_per_chain": n,
             "rhat_median": float(np.nanmedian(rhat)),
@@ -172,9 +194,22 @@ def prefix_convergence(draws: np.ndarray, fractions: tuple[float, ...]) -> pd.Da
             "ess_bulk_min": float(np.nanmin(bulk)),
             "ess_bulk_median": float(np.nanmedian(bulk)),
             "ess_tail_min": float(np.nanmin(tail)),
-            "ess_bulk_per_draw": float(np.nanmedian(bulk) / (n * draws.shape[0])),
-        })
+            "ess_bulk_per_draw": float(np.nanmedian(bulk) / n),
+        }
+        # one column per chain: a pooled minimum hides how uneven they are
+        for chain_id, chain_values in enumerate(bulk):
+            row[f"ess_bulk_min_chain{chain_id + 1}"] = float(np.nanmin(chain_values))
+        rows.append(row)
     return pd.DataFrame(rows)
+
+
+def ess_columns(prefix: pd.DataFrame) -> list[str]:
+    return [c for c in prefix.columns if c.startswith("ess_bulk_min_chain")]
+
+
+def exponent_span(exponents: list[float]) -> str:
+    low, high = min(exponents), max(exponents)
+    return f"{low:.2f}" if round(high - low, 2) == 0 else f"{low:.2f}-{high:.2f}"
 
 
 def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, object]:
@@ -196,11 +231,17 @@ def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, objec
     direction /= np.linalg.norm(direction)
     projected = np.einsum("mnp,p->mn", draws, direction)
     data = xr.DataArray(projected, dims=("chain", "draw"), name="projection")
+    # R-hat is a between-chain statistic and stays on all four; ESS does not
+    per_chain = np.array([float(az.ess(xr.DataArray(series[None, :], dims=("chain", "draw"),
+                                                   name="projection"),
+                                       method="bulk")["projection"].values)
+                          for series in projected])
     return {
         "lambda_max": float(eigenvalues[0]),
         "eigen_gap": float(eigenvalues[0] - eigenvalues[1]),
         "projected_rhat": float(az.rhat(data, method="rank")["projection"].values),
-        "projected_ess_bulk": float(az.ess(data, method="bulk")["projection"].values),
+        "projected_ess_bulk_min": float(per_chain.min()),
+        "projected_ess_bulk_by_chain": per_chain,
         "projected": projected,
     }
 
@@ -287,19 +328,41 @@ def plot_run(draws, worst, cross, within, prefix, burn, plot_draws, max_lag, tit
                ylabel=f"PC2 ({pca.explained_variance_ratio_[1]:.1%})")
     pca_ax.legend(ncol=2, fontsize=8)
 
-    prefix_ax.plot(prefix["draws_per_chain"], prefix["rhat_max"], color="#b5391f", marker="o",
+    n_prefix = prefix["draws_per_chain"].to_numpy(dtype=float)
+    prefix_ax.plot(n_prefix, prefix["rhat_max"], color="#b5391f", marker="o",
                    markersize=3.5, label="max R-hat")
-    prefix_ax.plot(prefix["draws_per_chain"], prefix["rhat_median"], color="#245f9e", marker="o",
+    prefix_ax.plot(n_prefix, prefix["rhat_median"], color="#245f9e", marker="o",
                    markersize=3.5, label="median R-hat")
     prefix_ax.axhline(RHAT_THRESHOLD, color="#555555", linestyle="--", linewidth=1, label="1.01")
-    prefix_ax.set(title="(e) Prefix convergence", xlabel="draws per chain used", ylabel="R-hat")
+    prefix_ax.set_xscale("log")
+    prefix_ax.set(xlabel="draws per chain used (log)", ylabel="R-hat")
+    low, high = prefix_ax.get_ylim()  # headroom so the legend clears the curves
+    prefix_ax.set_ylim(low, high + 0.45 * (high - low))
+
+    # Right axis log as well, so each ESS curve's slope is its growth exponent.
     ess_ax = prefix_ax.twinx()
-    ess_ax.plot(prefix["draws_per_chain"], prefix["ess_bulk_min"], color="#2ca02c", marker="s",
-                markersize=3.5, linestyle="--", label="min bulk ESS")
-    ess_ax.set_ylabel("bulk ESS (min over test points)")
-    handles = prefix_ax.get_legend_handles_labels()[0] + ess_ax.get_legend_handles_labels()[0]
-    labels = prefix_ax.get_legend_handles_labels()[1] + ess_ax.get_legend_handles_labels()[1]
-    prefix_ax.legend(handles, labels, fontsize=8, loc="center right")
+    exponents = []
+    for chain_id, column in enumerate(ess_columns(prefix)):
+        values = prefix[column].to_numpy(dtype=float)
+        exponents.append(growth_exponent(n_prefix, values))
+        ess_ax.plot(n_prefix, values, color=CHAIN_COLORS[chain_id], marker="s", markersize=3.5,
+                    linestyle="--", linewidth=1.2)
+    ess_ax.set_yscale("log")
+    ess_ax.set_ylabel("bulk ESS per chain (min over test points)")
+    ess_ax.axhline(ESS_PER_CHAIN_TARGET, color="#2ca02c", linestyle=":", linewidth=1.2)
+    guide_start = float(prefix[ess_columns(prefix)].to_numpy(dtype=float)[0].min())
+    ess_ax.plot(n_prefix, guide_start * n_prefix / n_prefix[0], color="#999999", linewidth=1.0,
+                linestyle="-.")
+    prefix_ax.set_title(f"(e) Prefix convergence (ESS slope {exponent_span(exponents)})")
+
+    guide = plt.Line2D([], [], color="#999999", linewidth=1.0, linestyle="-.")
+    ess_proxy = plt.Line2D([], [], color="#444444", linewidth=1.2, linestyle="--", marker="s",
+                           markersize=3.5)
+    target = plt.Line2D([], [], color="#2ca02c", linestyle=":", linewidth=1.2)
+    handles = prefix_ax.get_legend_handles_labels()[0] + [ess_proxy, target, guide]
+    labels = prefix_ax.get_legend_handles_labels()[1] + [
+        "bulk ESS, per chain (colours as (a))", f"{ESS_PER_CHAIN_TARGET:g}/chain", "slope 1"]
+    prefix_ax.legend(handles, labels, fontsize=7.5, loc="upper left")
 
     lags = np.arange(max_lag + 1)
     for chain_id in range(projected.shape[0]):
@@ -332,8 +395,8 @@ def analyse_run(args, dataset: str, run: int) -> dict[str, object]:
     prefix = prefix_convergence(draws, tuple(args.prefix_fractions))
 
     rhat = pointwise_rhat(draws)
-    bulk = pointwise_ess(draws, "bulk")
-    tail = pointwise_ess(draws, "tail")
+    bulk = per_chain_ess(draws, "bulk")
+    tail = per_chain_ess(draws, "tail")
     overall = summarize(rhat)
 
     fig = plot_run(draws, worst, cross, within, prefix, args.long_burn, args.plot_draws,
@@ -357,10 +420,14 @@ def analyse_run(args, dataset: str, run: int) -> dict[str, object]:
         "ess_bulk_min": float(np.nanmin(bulk)),
         "ess_bulk_median": float(np.nanmedian(bulk)),
         "ess_tail_min": float(np.nanmin(tail)),
-        "ess_bulk_min_per_chain": float(np.nanmin(bulk)) / n_chains,
+        "ess_bulk_spread": float(np.nanmax(bulk.min(axis=1)) / np.nanmin(bulk.min(axis=1))),
+        "ess_growth_exponent_min": min(
+            growth_exponent(prefix["draws_per_chain"].to_numpy(dtype=float),
+                            prefix[column].to_numpy(dtype=float))
+            for column in ess_columns(prefix)),
         "worst_lambda_max": worst["lambda_max"],
         "worst_projected_rhat": worst["projected_rhat"],
-        "worst_projected_ess_bulk": worst["projected_ess_bulk"],
+        "worst_projected_ess_bulk_min": worst["projected_ess_bulk_min"],
         "cross_rhat_median": float(cross["median"].median()),
         "cross_rhat_max": float(cross["maximum"].max()),
         "within_rhat_median": float(within["median"].median()),
@@ -370,9 +437,11 @@ def analyse_run(args, dataset: str, run: int) -> dict[str, object]:
         "prefix_rhat_max_last": float(prefix["rhat_max"].iloc[-1]),
         "prefix_rhat_max_half": float(prefix.loc[prefix["fraction"] <= 0.5, "rhat_max"].iloc[-1]),
     }
+    for chain_id, chain_values in enumerate(bulk):
+        row[f"ess_bulk_min_chain{chain_id + 1}"] = float(np.nanmin(chain_values))
     row["mixed"] = bool(row["rhat_max"] < RHAT_THRESHOLD
                         and row["worst_projected_rhat"] < RHAT_THRESHOLD
-                        and row["ess_bulk_min_per_chain"] >= ESS_PER_CHAIN_TARGET)
+                        and row["ess_bulk_min"] >= ESS_PER_CHAIN_TARGET)
     return {
         "row": row,
         "cross": cross.assign(dataset=dataset, run=run),
@@ -397,7 +466,9 @@ def write_summary(path: Path, args, runs: pd.DataFrame) -> None:
         "Are the stored `default_long` chains themselves mixed, and are their draws enough?",
         "The short-chain diagnostics in `diagnosis/paper` use them as the reference, so this",
         "asks the prior question. Windows, segments and burn-in all count *stored* draws;",
-        "multiply by `store_every` for original iterations.",
+        "multiply by `store_every` for original iterations. Every ESS is computed on one",
+        "chain alone; only R-hat, the separation ratio and the centroid distance look across",
+        "chains, which is what the four chains are for.",
         "",
         "## Settings",
         "",
@@ -411,21 +482,25 @@ def write_summary(path: Path, args, runs: pd.DataFrame) -> None:
     lines += [
         "",
         "`mixed` is max pointwise R-hat < 1.01 **and** worst-direction R-hat < 1.01 **and**",
-        f"min bulk ESS ≥ {ESS_PER_CHAIN_TARGET:g} per chain. It is a screening rule, not a proof.",
+        f"single-chain bulk ESS ≥ {ESS_PER_CHAIN_TARGET:g} for every chain and test point.",
+        "It is a screening rule, not a proof.",
         "",
         "## Per run",
         "",
     ]
     view = runs[["dataset", "run", "stored_draws_per_chain", "iterations_per_chain", "rhat_max",
-                 "worst_projected_rhat", "ess_bulk_min", "ess_tail_min", "between_within_ratio",
+                 "worst_projected_rhat", "ess_bulk_min", "ess_bulk_spread",
+                 "ess_growth_exponent_min", "ess_tail_min", "between_within_ratio",
                  "mixed"]].copy()
+    view["ess_bulk_spread"] = view["ess_bulk_spread"].map(lambda v: f"{v:.1f}x")
+    view["ess_growth_exponent_min"] = view["ess_growth_exponent_min"].map(lambda v: f"{v:.2f}")
     for column in ("rhat_max", "worst_projected_rhat", "between_within_ratio"):
         view[column] = view[column].map(lambda v: f"{v:.4f}")
     for column in ("ess_bulk_min", "ess_tail_min"):
         view[column] = view[column].map(lambda v: f"{v:.0f}")
     lines.append(markdown_table(view))
 
-    lines += ["", "## Per dataset (mean over runs)", ""]
+    lines += ["", "## Per dataset (worst run, except the exponent which is the run minimum)", ""]
     grouped = runs.groupby("dataset", sort=False).agg(
         runs=("run", "count"),
         stored_draws=("stored_draws_per_chain", "max"),
@@ -433,8 +508,10 @@ def write_summary(path: Path, args, runs: pd.DataFrame) -> None:
         rhat_max=("rhat_max", "max"),
         worst_rhat_max=("worst_projected_rhat", "max"),
         ess_bulk_min=("ess_bulk_min", "min"),
+        ess_growth_exponent_min=("ess_growth_exponent_min", "min"),
         mixed=("mixed", "all"),
     ).reset_index()
+    grouped["ess_growth_exponent_min"] = grouped["ess_growth_exponent_min"].map(lambda v: f"{v:.2f}")
     for column in ("rhat_max", "worst_rhat_max"):
         grouped[column] = grouped[column].map(lambda v: f"{v:.4f}")
     grouped["ess_bulk_min"] = grouped["ess_bulk_min"].map(lambda v: f"{v:.0f}")

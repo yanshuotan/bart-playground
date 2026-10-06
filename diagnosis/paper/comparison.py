@@ -322,6 +322,43 @@ def chain_pair_energy(
     return float(pair_values.mean()), float(pair_values.std(ddof=1)), pair_values
 
 
+def reference_self_energy(
+    long: np.ndarray,
+    draws_per_chain: int,
+    seed: int,
+) -> tuple[float, float, np.ndarray]:
+    """Energy distance among the long reference chains themselves.
+
+    Scored exactly like the short/long pairs, so it is the resolution floor of
+    the comparison: the distance the metric reports when both sides come from
+    the same sampler at the same length. A method cannot be shown to be closer
+    to the reference than the reference is to itself.
+
+    The estimator is close to unbiased, so where the long chains mix this sits
+    near the statistic's fluctuation scale and is small. Where they do not, it
+    is their real disagreement, and a floor of that size says the dataset has no
+    single reference posterior to measure against.
+    """
+    if long.shape[0] != 4:
+        raise ValueError(f"Requires four long chains; received {long.shape[0]}.")
+    if long.shape[1] < draws_per_chain:
+        raise ValueError(
+            f"Energy floor requested {draws_per_chain} draws per chain, but the "
+            f"available post-burn length is {long.shape[1]}."
+        )
+    rng = np.random.default_rng(seed)
+    sample = np.stack([
+        chain[rng.choice(len(chain), draws_per_chain, replace=False)]
+        for chain in long
+    ])
+    pair_values = np.asarray([
+        energy_distance(sample[left], sample[right])
+        for left in range(sample.shape[0])
+        for right in range(left + 1, sample.shape[0])
+    ])
+    return float(pair_values.mean()), float(pair_values.std(ddof=1)), pair_values
+
+
 def crps_from_samples(samples: np.ndarray, truth: np.ndarray) -> np.ndarray:
     n_points, n_samples = samples.shape
     first = np.mean(np.abs(samples - truth[:, None]), axis=1)
@@ -432,6 +469,40 @@ def dataset_summary(run_frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def energy_resolution(summary: pd.DataFrame) -> pd.DataFrame:
+    """Dataset-level rho: mean scaled energy over mean floor, per method.
+
+    Deliberately not the mean of per-run ratios. The floor estimates a quantity
+    close to zero wherever the reference chains are nearly exchangeable, so an
+    individual run's floor can be negative and its ratio meaningless; dividing
+    the two five-run means keeps the quantity stable. `floor_resolved` reports
+    whether the mean floor exceeds twice its across-run standard deviation, and
+    a ratio is reported only when it does.
+    """
+    rows = []
+    for dataset, frame in summary.groupby("dataset", sort=False):
+        floor = float(frame["scaled_energy_floor_mean"].iloc[0])
+        floor_sd = float(frame["scaled_energy_floor_sd"].iloc[0])
+        resolved = bool(floor > 2 * floor_sd)
+        for _, row in frame.iterrows():
+            rows.append({
+                "dataset": dataset,
+                "method": row["method"],
+                "scaled_energy_floor": floor,
+                "scaled_energy_floor_sd": floor_sd,
+                "floor_resolved": resolved,
+                "rho": row["scaled_energy_distance_mean"] / floor if resolved else np.nan,
+            })
+    return pd.DataFrame(rows)
+
+
+def format_rho(frame: pd.DataFrame, dataset: str, method: str) -> str:
+    row = frame[(frame["dataset"] == dataset) & (frame["method"] == method)]
+    if row.empty or not bool(row.iloc[0]["floor_resolved"]):
+        return "floor unresolved"
+    return f"{row.iloc[0]['rho']:.1f}x"
+
+
 def paired_ratios(run_frame: pd.DataFrame) -> pd.DataFrame:
     metrics = [
         "worst_projected_rhat", "cross_rhat_median", "within_rhat_median",
@@ -508,6 +579,7 @@ def write_summary(
         "",
         "`short_burn` is also the start of the worst-direction calculation. `long_burn` counts stored long-chain draws; because the long chains were saved after downsampling, its effective burn-in in original iterations is `long_burn × long_store_every`.",
     ])
+    resolution = energy_resolution(summary)
     for dataset in summary["dataset"].drop_duplicates():
         lines.extend(["", f"## {dataset}", ""])
         frame = summary[summary["dataset"] == dataset].copy()
@@ -518,10 +590,27 @@ def write_summary(
             "within R-hat": [format_mean_sd(row, "within_rhat_median") for _, row in frame.iterrows()],
             "B/W ratio": [format_mean_sd(row, "between_within_ratio") for _, row in frame.iterrows()],
             "scaled energy": [format_mean_sd(row, "scaled_energy_distance") for _, row in frame.iterrows()],
+            "energy / floor": [format_rho(resolution, dataset, row["method"]) for _, row in frame.iterrows()],
             "relative RMSE": [format_mean_sd(row, "relative_rmse") for _, row in frame.iterrows()],
             "relative CRPS": [format_mean_sd(row, "relative_crps") for _, row in frame.iterrows()],
         })
         lines.append(markdown_table(table))
+        floor = frame["scaled_energy_floor_mean"].iloc[0]
+        floor_sd = frame["scaled_energy_floor_sd"].iloc[0]
+        if floor <= 2 * floor_sd:
+            note = ("the reference chains are not distinguishable from each other at this "
+                    "sample size, so the floor is below detection and the ratios are omitted")
+        else:
+            worst = resolution[resolution["dataset"] == dataset]["rho"].min()
+            note = ("the smallest ratio above is {:.1f}, so the reference disagrees with itself "
+                    "by as much as the closest method differs from it and no ordering should be "
+                    "read from this dataset".format(worst) if worst < 2 else
+                    "the smallest ratio above is {:.1f}, so the comparison is resolved".format(worst))
+        lines.extend([
+            "",
+            f"Reference floor (scaled energy among the six pairs of long chains): "
+            f"{floor:.5f} (SD {floor_sd:.5f} across runs); {note}.",
+        ])
         timing_frame = timing[timing["dataset"] == dataset]
         if not timing_frame.empty:
             timing_display = timing_frame.copy()
@@ -534,6 +623,7 @@ def write_summary(
                   "- Segment R-hat uses temporally dependent pseudo-chains and is a stability diagnostic, not a formal convergence certificate.",
                   f"- Energy distance is averaged over all {settings['energy_chain_pairs']} short-chain/long-chain pairs, using {settings['energy_draws_per_chain']:,} randomly sampled draws from each chain.",
                   "- The chain-pair mean is divided by training-target SD times sqrt(number of test points); the within-run SD across the 16 pairs is retained in the numerical tables.",
+                  "- The reference floor is the mean energy distance over the six pairs of long reference chains, scored with the same draw count and scale. `energy / floor` below about two is not a resolvable difference.",
                   "- Raw RMSE, CRPS, and energy distance remain available in the CSV tables.",
                   "- Timing reports the actual parallel PT implementation and omits serial PT speed-up.", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -551,6 +641,7 @@ def write_root_summary(
     timing: pd.DataFrame,
 ) -> None:
     rows = []
+    resolution = energy_resolution(summary)
     for dataset in summary["dataset"].drop_duplicates():
         dataset_frame = summary[summary["dataset"] == dataset].set_index("method")
         default = dataset_frame.loc["Default"]
@@ -564,6 +655,8 @@ def write_root_summary(
             "within R-hat": transition(default["within_rhat_median_mean"], combined["within_rhat_median_mean"]),
             "B/W ratio": transition(default["between_within_ratio_mean"], combined["between_within_ratio_mean"]),
             "scaled energy": transition(default["scaled_energy_distance_mean"], combined["scaled_energy_distance_mean"]),
+            "energy floor": f"{default['scaled_energy_floor_mean']:.5f}",
+            "MTMH+PT / floor": format_rho(resolution, dataset, "MTMH+PT"),
             "relative RMSE": transition(default["relative_rmse_mean"], combined["relative_rmse_mean"]),
             "relative CRPS": transition(default["relative_crps_mean"], combined["relative_crps_mean"]),
             "time / Default": f"{cost:.2f}x" if np.isfinite(cost) else "not measured",
@@ -677,6 +770,24 @@ def main() -> int:
                     raise ValueError(f"Missing unique energy scale for {dataset} run {run:03d}")
                 energy_scale = float(baseline_match.iloc[0]["energy_scale_train_sd_sqrt_p"])
                 long_draws = predictions(args.store_root, dataset, run, "default_long", args.long_burn)
+                floor, floor_pair_sd, floor_values = reference_self_energy(
+                    long_draws, args.energy_draws, seed=9090 + 10000 * dataset_index + 100 * run,
+                )
+                scaled_floor = floor / energy_scale
+                baseline_mask = (
+                    (baseline_frame["dataset"] == dataset) & (baseline_frame["run"] == run)
+                )
+                baseline_frame.loc[baseline_mask, "energy_floor"] = floor
+                baseline_frame.loc[baseline_mask, "energy_floor_pair_sd"] = floor_pair_sd
+                baseline_frame.loc[baseline_mask, "scaled_energy_floor"] = scaled_floor
+                for pair_index, value in enumerate(floor_values):
+                    pair_rows.append({
+                        "dataset": dataset, "run": run, "method": "Reference floor",
+                        "short_chain": -1, "long_chain": pair_index,
+                        "energy_distance": value,
+                        "scaled_energy_distance": value / energy_scale,
+                        "draws_per_chain": args.energy_draws,
+                    })
                 for method_index, method in enumerate(METHODS):
                     post_burn = predictions(
                         args.store_root, dataset, run, method, args.short_burn
@@ -701,6 +812,7 @@ def main() -> int:
                     run_frame.loc[mask, "energy_pair_sd"] = pair_sd
                     run_frame.loc[mask, "scaled_energy_distance"] = energy / energy_scale
                     run_frame.loc[mask, "scaled_energy_pair_sd"] = pair_sd / energy_scale
+                    run_frame.loc[mask, "scaled_energy_floor"] = scaled_floor
                     for pair_index, value in enumerate(pair_values):
                         pair_rows.append({
                             "dataset": dataset,
@@ -718,6 +830,7 @@ def main() -> int:
         timing_frame = parse_timing_summary(args.timing_summary)
         paper_table = summary_frame.merge(timing_frame, on=["dataset", "method"], how="left")
         run_frame.to_csv(run_path, index=False)
+        baseline_frame.to_csv(baseline_path, index=False)
         summary_frame.to_csv(table_dir / "comparison_dataset_summary.csv", index=False)
         ratio_frame.to_csv(table_dir / "paired_ratios_to_default.csv", index=False)
         pd.DataFrame(pair_rows).to_csv(table_dir / "comparison_energy_chain_pairs.csv", index=False)
@@ -746,6 +859,10 @@ def main() -> int:
             baseline = predictive_baselines(train_targets, truth)
             energy_scale = baseline["train_sd"] * np.sqrt(len(truth))
             long_draws = predictions(args.store_root, dataset, run, "default_long", args.long_burn)
+            floor, floor_pair_sd, floor_values = reference_self_energy(
+                long_draws, args.energy_draws, seed=9090 + 10000 * dataset_index + 100 * run,
+            )
+            scaled_floor = floor / energy_scale
             baseline_rows.append({
                 "dataset": dataset,
                 "run": run,
@@ -753,7 +870,18 @@ def main() -> int:
                 "training_points": len(train_targets),
                 **baseline,
                 "energy_scale_train_sd_sqrt_p": energy_scale,
+                "energy_floor": floor,
+                "energy_floor_pair_sd": floor_pair_sd,
+                "scaled_energy_floor": scaled_floor,
             })
+            for pair_index, value in enumerate(floor_values):
+                pair_rows.append({
+                    "dataset": dataset, "run": run, "method": "Reference floor",
+                    "short_chain": -1, "long_chain": pair_index,
+                    "energy_distance": value,
+                    "scaled_energy_distance": value / energy_scale,
+                    "draws_per_chain": args.energy_draws,
+                })
 
             cross_by_method, within_by_method, worst_by_method = {}, {}, {}
             for method_index, method in enumerate(METHODS):
@@ -799,6 +927,7 @@ def main() -> int:
                     "energy_distance": energy,
                     "energy_pair_sd": energy_pair_sd,
                     "scaled_energy_distance": scaled_energy,
+                    "scaled_energy_floor": scaled_floor,
                     "scaled_energy_pair_sd": energy_pair_sd / energy_scale,
                     "rmse": rmse,
                     "crps": crps,
