@@ -12,9 +12,11 @@ Per dataset and run it reports, on the post-burn long draws:
     (c) within-chain segment rank-split R-hat (four adjacent segments as
         dependent pseudo-chains), i.e. local stability inside one chain
     (d) the four chains on their own PCA axes, with centroids
-    (e) prefix curves on log-log axes: R-hat and per-chain bulk ESS recomputed
-        on the first x% of the draws. The ESS slope is the growth exponent; a
-        slope-1 guide marks a chain whose information grows with its length
+    (e) prefix curves: R-hat and single-chain bulk ESS recomputed on the first
+        x% of the draws, the ESS averaged over the four chains and the 100 test
+        inputs. The panel title gives that curve's growth exponent, the slope of
+        log ESS on log draws; near one it grows with run length, near zero it
+        does not grow at all
     (f) autocorrelation of the worst-direction projection per chain
 
 Every ESS here is computed on one chain alone. The four chains exist for the
@@ -54,8 +56,8 @@ from sklearn.decomposition import PCA
 
 CHAIN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728")
 # A stored long draw is long_store_every original iterations; read from metadata.
-RHAT_THRESHOLD = 1.01
-ESS_PER_CHAIN_TARGET = 100.0  # 400 total for four chains, the usual rule of thumb
+RHAT_THRESHOLD = 1.01  # drawn as a reference line only, never used as a rule
+SEPARATION_NULL = 1.0  # the separation index's value under perfect mixing
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +194,7 @@ def prefix_convergence(draws: np.ndarray, fractions: tuple[float, ...]) -> pd.Da
             "rhat_max": float(np.nanmax(rhat)),
             "fraction_above_1_01": float(np.nanmean(rhat > RHAT_THRESHOLD)),
             "ess_bulk_min": float(np.nanmin(bulk)),
+            "ess_bulk_mean": float(np.nanmean(bulk)),
             "ess_bulk_median": float(np.nanmedian(bulk)),
             "ess_tail_min": float(np.nanmin(tail)),
             "ess_bulk_per_draw": float(np.nanmedian(bulk) / n),
@@ -205,11 +208,6 @@ def prefix_convergence(draws: np.ndarray, fractions: tuple[float, ...]) -> pd.Da
 
 def ess_columns(prefix: pd.DataFrame) -> list[str]:
     return [c for c in prefix.columns if c.startswith("ess_bulk_min_chain")]
-
-
-def exponent_span(exponents: list[float]) -> str:
-    low, high = min(exponents), max(exponents)
-    return f"{low:.2f}" if round(high - low, 2) == 0 else f"{low:.2f}-{high:.2f}"
 
 
 def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, object]:
@@ -263,12 +261,40 @@ def mean_pairwise_centroid_distance(draws: np.ndarray) -> float:
 
 
 def between_within_ratio(draws: np.ndarray) -> float:
-    """Mean squared distance between chain centroids over mean within-chain squared radius."""
+    """Mean squared centroid displacement over mean within-chain squared radius.
+
+    Same definition as `chain_separation` in diagnosis/paper/comparison.py, so
+    the two scripts' numbers can be read side by side. An earlier version here
+    used mean *pairwise* centroid distance, which is 8/3 times larger for four
+    chains.
+    """
     centers = draws.mean(axis=1)
-    between = np.mean([np.sum((centers[i] - centers[j]) ** 2)
-                       for i in range(len(centers)) for j in range(i + 1, len(centers))])
+    between = float(np.mean(np.sum((centers - centers.mean(axis=0)) ** 2, axis=1)))
     within = np.mean([np.mean(np.sum((chain - chain.mean(axis=0)) ** 2, axis=1)) for chain in draws])
     return float(between / within) if within > 0 else float("nan")
+
+
+def separation_index(draws: np.ndarray, n_blocks: int = 4) -> tuple[float, float]:
+    """Chain separation measured against what one chain's own time blocks produce.
+
+    `between_within_ratio` has no scale of its own, so divide it by the same
+    statistic computed on `n_blocks` consecutive blocks of a single chain,
+    averaged over chains. That denominator is what the statistic reads when all
+    the pieces come from one run, and it recalibrates per dataset and per run.
+
+    Because a block holds 1/n_blocks of a chain's draws, its centroid scatters
+    n_blocks times as far, so the raw ratio is 1/n_blocks under perfect mixing
+    whatever the autocorrelation. Multiplying by `n_blocks` puts the null at 1:
+    above one, independent chains sit further apart than one chain's own drift
+    accounts for. Returns the index and the null denominator behind it.
+    """
+    across = between_within_ratio(draws)
+    length = draws.shape[1] // n_blocks
+    within = float(np.mean([
+        between_within_ratio(chain[: n_blocks * length].reshape(n_blocks, length, draws.shape[2]))
+        for chain in draws
+    ]))
+    return (float(n_blocks * across / within) if within > 0 else float("nan")), within
 
 
 def spaced_indices(size: int, count: int) -> np.ndarray:
@@ -334,34 +360,25 @@ def plot_run(draws, worst, cross, within, prefix, burn, plot_draws, max_lag, tit
     prefix_ax.plot(n_prefix, prefix["rhat_median"], color="#245f9e", marker="o",
                    markersize=3.5, label="median R-hat")
     prefix_ax.axhline(RHAT_THRESHOLD, color="#555555", linestyle="--", linewidth=1, label="1.01")
-    prefix_ax.set_xscale("log")
-    prefix_ax.set(xlabel="draws per chain used (log)", ylabel="R-hat")
+    prefix_ax.set(xlabel="draws per chain used", ylabel="R-hat")
     low, high = prefix_ax.get_ylim()  # headroom so the legend clears the curves
     prefix_ax.set_ylim(low, high + 0.45 * (high - low))
 
-    # Right axis log as well, so each ESS curve's slope is its growth exponent.
+    # One ESS curve: single-chain values averaged over the four chains and the
+    # 100 test inputs. Its own growth exponent goes in the title, so the panel
+    # keeps linear axes like the other five and needs no guide line.
     ess_ax = prefix_ax.twinx()
-    exponents = []
-    for chain_id, column in enumerate(ess_columns(prefix)):
-        values = prefix[column].to_numpy(dtype=float)
-        exponents.append(growth_exponent(n_prefix, values))
-        ess_ax.plot(n_prefix, values, color=CHAIN_COLORS[chain_id], marker="s", markersize=3.5,
-                    linestyle="--", linewidth=1.2)
-    ess_ax.set_yscale("log")
-    ess_ax.set_ylabel("bulk ESS per chain (min over test points)")
-    ess_ax.axhline(ESS_PER_CHAIN_TARGET, color="#2ca02c", linestyle=":", linewidth=1.2)
-    guide_start = float(prefix[ess_columns(prefix)].to_numpy(dtype=float)[0].min())
-    ess_ax.plot(n_prefix, guide_start * n_prefix / n_prefix[0], color="#999999", linewidth=1.0,
-                linestyle="-.")
-    prefix_ax.set_title(f"(e) Prefix convergence (ESS slope {exponent_span(exponents)})")
+    mean_ess = prefix["ess_bulk_mean"].to_numpy(dtype=float)
+    ess_ax.plot(n_prefix, mean_ess, color="#2ca02c", marker="s", markersize=3.5,
+                linestyle="--", linewidth=1.4)
+    ess_ax.set_ylabel("bulk ESS per chain (mean over chains and test points)")
+    ess_ax.set_ylim(0.0, float(np.nanmax(mean_ess)) * 1.18)
+    prefix_ax.set_title("(e) Prefix convergence")
 
-    guide = plt.Line2D([], [], color="#999999", linewidth=1.0, linestyle="-.")
-    ess_proxy = plt.Line2D([], [], color="#444444", linewidth=1.2, linestyle="--", marker="s",
+    ess_proxy = plt.Line2D([], [], color="#2ca02c", linewidth=1.4, linestyle="--", marker="s",
                            markersize=3.5)
-    target = plt.Line2D([], [], color="#2ca02c", linestyle=":", linewidth=1.2)
-    handles = prefix_ax.get_legend_handles_labels()[0] + [ess_proxy, target, guide]
-    labels = prefix_ax.get_legend_handles_labels()[1] + [
-        "bulk ESS, per chain (colours as (a))", f"{ESS_PER_CHAIN_TARGET:g}/chain", "slope 1"]
+    handles = prefix_ax.get_legend_handles_labels()[0] + [ess_proxy]
+    labels = prefix_ax.get_legend_handles_labels()[1] + ["bulk ESS, mean"]
     prefix_ax.legend(handles, labels, fontsize=7.5, loc="upper left")
 
     lags = np.arange(max_lag + 1)
@@ -389,6 +406,7 @@ def analyse_run(args, dataset: str, run: int) -> dict[str, object]:
     draws = long_predictions(args.store_root, dataset, run, args.long_burn)
     n_chains, n_draws, n_points = draws.shape
 
+    index, within_null = separation_index(draws, args.separation_blocks)
     worst = worst_direction(draws, args.ridge_fraction)
     cross = rolling_cross_rhat(draws, args.window, args.step)
     within = rolling_within_rhat(draws, args.segment_length, args.n_segments, args.step)
@@ -417,10 +435,17 @@ def analyse_run(args, dataset: str, run: int) -> dict[str, object]:
         "rhat_q90": overall["q90"],
         "rhat_max": overall["maximum"],
         "fraction_above_1_01": overall["fraction_above_1_01"],
+        "ess_bulk_mean": float(np.nanmean(bulk)),
         "ess_bulk_min": float(np.nanmin(bulk)),
         "ess_bulk_median": float(np.nanmedian(bulk)),
+        "ess_tail_mean": float(np.nanmean(tail)),
         "ess_tail_min": float(np.nanmin(tail)),
-        "ess_bulk_spread": float(np.nanmax(bulk.min(axis=1)) / np.nanmin(bulk.min(axis=1))),
+        "ess_bulk_spread": float(np.nanmax(bulk.mean(axis=1)) / np.nanmin(bulk.mean(axis=1))),
+        # the curve panel (e) draws
+        "ess_growth_exponent_mean": growth_exponent(
+            prefix["draws_per_chain"].to_numpy(dtype=float),
+            prefix["ess_bulk_mean"].to_numpy(dtype=float)),
+        # the stricter per-chain reading, kept for the appendix
         "ess_growth_exponent_min": min(
             growth_exponent(prefix["draws_per_chain"].to_numpy(dtype=float),
                             prefix[column].to_numpy(dtype=float))
@@ -434,14 +459,14 @@ def analyse_run(args, dataset: str, run: int) -> dict[str, object]:
         "within_rhat_max": float(within["maximum"].max()),
         "centroid_distance": mean_pairwise_centroid_distance(draws),
         "between_within_ratio": between_within_ratio(draws),
+        "separation_index": index,
+        "separation_within_null": within_null,
         "prefix_rhat_max_last": float(prefix["rhat_max"].iloc[-1]),
         "prefix_rhat_max_half": float(prefix.loc[prefix["fraction"] <= 0.5, "rhat_max"].iloc[-1]),
     }
     for chain_id, chain_values in enumerate(bulk):
+        row[f"ess_bulk_mean_chain{chain_id + 1}"] = float(np.nanmean(chain_values))
         row[f"ess_bulk_min_chain{chain_id + 1}"] = float(np.nanmin(chain_values))
-    row["mixed"] = bool(row["rhat_max"] < RHAT_THRESHOLD
-                        and row["worst_projected_rhat"] < RHAT_THRESHOLD
-                        and row["ess_bulk_min"] >= ESS_PER_CHAIN_TARGET)
     return {
         "row": row,
         "cross": cross.assign(dataset=dataset, run=run),
@@ -467,8 +492,8 @@ def write_summary(path: Path, args, runs: pd.DataFrame) -> None:
         "The short-chain diagnostics in `diagnosis/paper` use them as the reference, so this",
         "asks the prior question. Windows, segments and burn-in all count *stored* draws;",
         "multiply by `store_every` for original iterations. Every ESS is computed on one",
-        "chain alone; only R-hat, the separation ratio and the centroid distance look across",
-        "chains, which is what the four chains are for.",
+        "chain alone and then averaged; only R-hat, the separation ratio and the centroid",
+        "distance look across chains, which is what the four chains are for.",
         "",
         "## Settings",
         "",
@@ -477,44 +502,46 @@ def write_summary(path: Path, args, runs: pd.DataFrame) -> None:
         "long_burn": args.long_burn, "window": args.window, "step": args.step,
         "segment_length": args.segment_length, "n_segments": args.n_segments,
         "prefix_fractions": list(args.prefix_fractions), "ridge_fraction": args.ridge_fraction,
-        "rhat_threshold": RHAT_THRESHOLD, "ess_per_chain_target": ESS_PER_CHAIN_TARGET,
+        "rhat_threshold": RHAT_THRESHOLD, "separation_blocks": args.separation_blocks,
     }.items()]
     lines += [
         "",
-        "`mixed` is max pointwise R-hat < 1.01 **and** worst-direction R-hat < 1.01 **and**",
-        f"single-chain bulk ESS ≥ {ESS_PER_CHAIN_TARGET:g} for every chain and test point.",
-        "It is a screening rule, not a proof.",
+        "`separation_index` divides the across-chain separation by the same statistic computed",
+        f"on {args.separation_blocks} consecutive blocks of one chain, times {args.separation_blocks},",
+        "so that perfect mixing gives 1 whatever the autocorrelation. Above one, independent",
+        "chains sit further apart than a single chain's own drift accounts for. No threshold is",
+        "applied anywhere in this file; 1.01 appears on the figures as a reference line only.",
         "",
         "## Per run",
         "",
     ]
-    view = runs[["dataset", "run", "stored_draws_per_chain", "iterations_per_chain", "rhat_max",
-                 "worst_projected_rhat", "ess_bulk_min", "ess_bulk_spread",
-                 "ess_growth_exponent_min", "ess_tail_min", "between_within_ratio",
-                 "mixed"]].copy()
-    view["ess_bulk_spread"] = view["ess_bulk_spread"].map(lambda v: f"{v:.1f}x")
-    view["ess_growth_exponent_min"] = view["ess_growth_exponent_min"].map(lambda v: f"{v:.2f}")
-    for column in ("rhat_max", "worst_projected_rhat", "between_within_ratio"):
+    view = runs[["dataset", "run", "iterations_per_chain", "separation_index",
+                 "between_within_ratio", "separation_within_null", "rhat_max",
+                 "worst_projected_rhat", "ess_bulk_mean"]].copy()
+    view["separation_index"] = view["separation_index"].map(lambda v: f"{v:.2f}")
+    for column in ("rhat_max", "worst_projected_rhat"):
         view[column] = view[column].map(lambda v: f"{v:.4f}")
-    for column in ("ess_bulk_min", "ess_tail_min"):
-        view[column] = view[column].map(lambda v: f"{v:.0f}")
+    for column in ("between_within_ratio", "separation_within_null"):
+        view[column] = view[column].map(lambda v: f"{v:.5f}")
+    view["ess_bulk_mean"] = view["ess_bulk_mean"].map(lambda v: f"{v:.0f}")
     lines.append(markdown_table(view))
 
-    lines += ["", "## Per dataset (worst run, except the exponent which is the run minimum)", ""]
+    lines += ["", "## Per dataset, ordered by separation index (range over runs)", ""]
     grouped = runs.groupby("dataset", sort=False).agg(
         runs=("run", "count"),
-        stored_draws=("stored_draws_per_chain", "max"),
         iterations=("iterations_per_chain", "max"),
+        index_lo=("separation_index", "min"),
+        index_hi=("separation_index", "max"),
         rhat_max=("rhat_max", "max"),
         worst_rhat_max=("worst_projected_rhat", "max"),
-        ess_bulk_min=("ess_bulk_min", "min"),
-        ess_growth_exponent_min=("ess_growth_exponent_min", "min"),
-        mixed=("mixed", "all"),
-    ).reset_index()
-    grouped["ess_growth_exponent_min"] = grouped["ess_growth_exponent_min"].map(lambda v: f"{v:.2f}")
+        ess_bulk_mean=("ess_bulk_mean", "min"),
+    ).reset_index().sort_values("index_lo")
+    grouped["separation_index"] = [f"{lo:.2f}-{hi:.2f}"
+                                   for lo, hi in zip(grouped["index_lo"], grouped["index_hi"])]
+    grouped = grouped.drop(columns=["index_lo", "index_hi"])
     for column in ("rhat_max", "worst_rhat_max"):
         grouped[column] = grouped[column].map(lambda v: f"{v:.4f}")
-    grouped["ess_bulk_min"] = grouped["ess_bulk_min"].map(lambda v: f"{v:.0f}")
+    grouped["ess_bulk_mean"] = grouped["ess_bulk_mean"].map(lambda v: f"{v:.0f}")
     lines.append(markdown_table(grouped))
     lines += ["", "Figures: one per run in `figures/`, panels (a)-(f) as described in the script docstring.", ""]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -535,6 +562,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--step", type=int, default=100)
     parser.add_argument("--segment-length", type=int, default=1000)
     parser.add_argument("--n-segments", type=int, default=4)
+    parser.add_argument("--separation-blocks", type=int, default=4,
+                        help="Blocks per chain for the separation index null.")
     parser.add_argument("--prefix-fractions", nargs="+", type=float,
                         default=[0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
     parser.add_argument("--max-lag", type=int, default=100)
@@ -578,10 +607,6 @@ def main() -> int:
     write_summary(args.out_dir / "long_chain_mixing_summary.md", args, runs)
 
     print("\n" + (args.out_dir / "long_chain_mixing_summary.md").read_text(encoding="utf-8"))
-    not_mixed = runs.loc[~runs["mixed"], ["dataset", "run", "rhat_max", "ess_bulk_min"]]
-    if len(not_mixed):
-        print("Runs that did not pass the screening rule:")
-        print(not_mixed.to_string(index=False))
     return 0
 
 

@@ -260,9 +260,31 @@ def chain_separation(draws: np.ndarray, max_draws: int, seed: int) -> dict[str, 
         np.mean(np.sum((chain - center) ** 2, axis=1))
         for chain, center in zip(sampled, centers)
     ])
+    # The ratio has no scale of its own, so divide it by the same statistic
+    # computed on four consecutive blocks of a single chain and multiply by the
+    # block count. A block holds a quarter of a chain's draws, so its centroid
+    # scatters four times as far, and the correction puts perfect mixing at 1
+    # whatever the autocorrelation.
+    blocks = 4
+    length = sampled.shape[1] // blocks
+    nulls = []
+    for chain in sampled:
+        pieces = chain[: blocks * length].reshape(blocks, length, chain.shape[-1])
+        piece_centers = pieces.mean(axis=1)
+        piece_between = np.mean(np.sum((piece_centers - piece_centers.mean(axis=0)) ** 2, axis=1))
+        piece_within = np.mean([
+            np.mean(np.sum((piece - center) ** 2, axis=1))
+            for piece, center in zip(pieces, piece_centers)
+        ])
+        nulls.append(piece_between / piece_within if piece_within > 0 else np.nan)
+    null = float(np.nanmean(nulls))
+    ratio = float(between / within)
     return {
         "centroid_distance": float(np.mean(centroid_distances)),
-        "between_within_ratio": float(between / within),
+        "between_within_ratio": ratio,
+        "separation_within_null": null,
+        "separation_index": float(blocks * ratio / null) if null > 0 else float("nan"),
+        "separation_blocks": blocks,
         "separation_draws_per_chain": n_use,
     }
 
@@ -913,6 +935,8 @@ def main() -> int:
                     "dataset": dataset,
                     "run": run,
                     "method": method_label,
+                    "separation_index": separation["separation_index"],
+                    "separation_within_null": separation["separation_within_null"],
                     "worst_lambda_max": worst["lambda_max"],
                     "worst_eigen_gap": worst["eigen_gap"],
                     "worst_projected_rhat": worst["projected_rhat"],
