@@ -287,7 +287,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--segment-length", type=int, default=1000)
     parser.add_argument("--n-segments", type=int, default=4)
     parser.add_argument("--short-burn", type=int, default=3000)
-    parser.add_argument("--long-burn", type=int, default=30)
+    parser.add_argument("--long-burn", type=int, default=3000)
     parser.add_argument("--plot-draws", type=int, default=750)
     parser.add_argument("--ridge-fraction", type=float, default=1e-8)
     parser.add_argument("--dpi", type=int, default=160)

@@ -242,18 +242,9 @@ def build_figure(
     )
     rhat_ax.legend(fontsize=8)
 
-    long_index = evenly_spaced_indices(long_coords.shape[1], plot_draws)
-    for chain_id in range(long_coords.shape[0]):
-        pca_ax.scatter(
-            long_coords[chain_id, long_index, 0],
-            long_coords[chain_id, long_index, 1],
-            s=8,
-            alpha=0.07,
-            color="#4a4a4a",
-            edgecolors="none",
-            label="long default reference" if chain_id == 0 else "_nolegend_",
-        )
-
+    # The axes come from the long chains, so the panel already sits in the
+    # reference frame and its origin is the reference centre. Drawing the long
+    # draws as well only crowds it.
     short_index = evenly_spaced_indices(short_coords.shape[1], plot_draws)
     for chain_id in range(short_coords.shape[0]):
         color = CHAIN_COLORS[chain_id % len(CHAIN_COLORS)]
@@ -281,6 +272,8 @@ def build_figure(
         xlabel=f"PC1 ({pca.explained_variance_ratio_[0]:.1%})",
         ylabel=f"PC2 ({pca.explained_variance_ratio_[1]:.1%})",
     )
+    pca_ax.axhline(0.0, color="#999999", linewidth=0.6, zorder=0)
+    pca_ax.axvline(0.0, color="#999999", linewidth=0.6, zorder=0)
     pca_ax.legend(ncol=2, fontsize=7.5)
 
     for ax in axes.flat:
@@ -300,7 +293,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--figure-output", type=Path)
     parser.add_argument("--projection-start", type=int, default=3000)
     parser.add_argument("--short-burn", type=int, default=500)
-    parser.add_argument("--long-burn", type=int, default=10)
+    parser.add_argument("--long-burn", type=int, default=3000)
     parser.add_argument("--window", type=int, default=1000)
     parser.add_argument("--step", type=int, default=100)
     parser.add_argument("--segment-length", type=int, default=1000)

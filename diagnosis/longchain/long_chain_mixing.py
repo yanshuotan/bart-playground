@@ -94,7 +94,11 @@ def dataset_tag(store_root: Path, dataset: str) -> str:
 
 
 def long_runs(store_root: Path, dataset: str) -> list[int]:
-    tag = dataset_tag(store_root, dataset)
+    """Run ids with a stored long chain; empty when the dataset has none."""
+    try:
+        tag = dataset_tag(store_root, dataset)
+    except FileNotFoundError:
+        return []
     runs = []
     for path in (store_root / dataset / "preds").glob(f"{tag}__run*__default_long__preds.csv"):
         runs.append(int(re.search(r"__run(\d+)__", path.name).group(1)))
@@ -557,7 +561,8 @@ def parse_args() -> argparse.Namespace:
                         help="Default: every store directory that has default_long results.")
     parser.add_argument("--runs", nargs="+", type=int, default=None,
                         help="Default: every run with a long chain in each dataset.")
-    parser.add_argument("--long-burn", type=int, default=30, help="Stored draws dropped (paper uses 30).")
+    parser.add_argument("--long-burn", type=int, default=3000,
+                        help="Stored draws dropped, matching the short-chain burn-in.")
     parser.add_argument("--window", type=int, default=1000)
     parser.add_argument("--step", type=int, default=100)
     parser.add_argument("--segment-length", type=int, default=1000)

@@ -50,15 +50,8 @@ Both Python scripts accept command-line options. Use `--help` to list them.
   `long_store_every=100` for Abalone and `1000` for Concrete and Friedman.
 - The original-space between/within statistic is the mean squared distance
   between chain centroids divided by the mean within-chain squared radius.
-- Raw energy distance is calculated for all 16 short-chain/long-chain pairs.
-  Each chain is independently sampled without replacement to 1,000 post-burn
-  draws using reproducible random seeds; the run-level value is the mean over
-  the 16 pairs, and their standard deviation records chain-pair heterogeneity.
-  The cross-dataset version divides the pair mean by
-  `SD(y_train) × sqrt(number of test points)`.
-- Relative RMSE divides method RMSE by the RMSE of the training-mean predictor.
-  Relative CRPS divides method CRPS by the CRPS of the empirical training-target
-  distribution. Both baselines use only the training portion of each run, and
-  values below one improve on that baseline.
-- Raw RMSE, CRPS, and energy distance remain in the CSV outputs.
-- Only measured parallel PT timing rows are included in the paper tables.
+- Energy distance compares deterministic pooled subsamples of 500 short-run
+  and 500 long-run predictive draws. The long Default run is an empirical
+  reference.
+- RMSE and CRPS use post-burn predictive draws. Only measured parallel PT
+  timing rows are included in the paper tables.

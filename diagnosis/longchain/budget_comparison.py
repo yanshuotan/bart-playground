@@ -76,7 +76,7 @@ def main() -> int:
     parser.add_argument("--store-root", type=Path, default=script.parent.parent / "store")
     parser.add_argument("--out-dir", type=Path, default=script.parent)
     parser.add_argument("--short-burn", type=int, default=3000)
-    parser.add_argument("--long-burn", type=int, default=30)
+    parser.add_argument("--long-burn", type=int, default=3000)
     parser.add_argument("--blocks", type=int, default=4)
     parser.add_argument("--verify-null", action="store_true",
                         help="Simulate exchangeable AR(1) chains and print the index's null.")
