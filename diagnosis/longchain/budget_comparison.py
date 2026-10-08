@@ -20,12 +20,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from long_chain_mixing import (
-    dataset_tag,
-    load_with_shape,
-    long_predictions,
-    separation_index,
-)
+from chains import dataset_tag, load_with_shape, long_predictions, separation_index
 
 DISPLAY = {
     "fixed100_Abalone": "Abalone",
