@@ -15,6 +15,7 @@ same number of draws per chain, so they differ only in the iterations those draw
 | Friedman-S p20 | 5 | 7000 | 2.43-3.09 | 0.84-1.14 |
 | Concrete | 5 | 7000 | 2.42-5.61 | 0.98-2.41 |
 | CalHousing | 5 | 7000 | 3.92-5.61 | 2.03-4.30 |
-| Airfoil | 2 | 7000 | 4.63-7.12 | 3.94-4.29 |
+| Airfoil | 5 | 7000 | 4.63-7.12 | 3.94-5.57 |
 | CCPP | 5 | 7000 | 4.93-7.64 | 7.62-9.43 |
+| CPUAct | 5 | 7000 | 4.02-8.26 | 11.13-15.76 |
 | SeoulBike | 5 | 7000 | 5.21-6.50 | 11.49-23.07 |

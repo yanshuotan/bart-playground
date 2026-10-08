@@ -30,6 +30,7 @@ from long_chain_mixing import (
 DISPLAY = {
     "fixed100_Abalone": "Abalone",
     "fixed100_Airfoil": "Airfoil",
+    "fixed100_CPUAct": "CPUAct",
     "fixed100_CCPP": "CCPP",
     "fixed100_CalHousing_subsample5000": "CalHousing",
     "fixed100_Concrete": "Concrete",
@@ -78,6 +79,8 @@ def main() -> int:
     parser.add_argument("--short-burn", type=int, default=3000)
     parser.add_argument("--long-burn", type=int, default=3000)
     parser.add_argument("--blocks", type=int, default=4)
+    parser.add_argument("--force", action="store_true",
+                        help="Recompute every run instead of reusing the cache.")
     parser.add_argument("--verify-null", action="store_true",
                         help="Simulate exchangeable AR(1) chains and print the index's null.")
     args = parser.parse_args()
@@ -86,6 +89,13 @@ def main() -> int:
         return verify_null(args.blocks)
 
     store = args.store_root.resolve()
+    cache_path = args.out_dir / "tables" / "budget_comparison_cache.csv"
+    fingerprint = f"short_burn={args.short_burn};long_burn={args.long_burn};blocks={args.blocks}"
+    cached = {}
+    if cache_path.is_file() and not args.force:
+        frame = pd.read_csv(cache_path)
+        frame = frame[frame["settings"] == fingerprint]  # stale settings drop out
+        cached = {(r.dataset, int(r.run)): r._asdict() for r in frame.itertuples(index=False)}
     rows = []
     for directory in sorted(store.glob("fixed100_*")):
         dataset = directory.name
@@ -94,6 +104,12 @@ def main() -> int:
         tag = dataset_tag(store, dataset)
         for path in sorted((directory / "preds").glob(f"{tag}__run*__default__preds.csv")):
             run = int(re.search(r"__run(\d+)__", path.name).group(1))
+            if (dataset, run) in cached:
+                hit = cached[(dataset, run)]
+                rows.append({k: hit[k] for k in
+                             ("dataset", "run", "draws_per_chain", "short_index", "long_index")})
+                print(f"[budget] {dataset} run {run:03d}  cached", flush=True)
+                continue
             short = short_default(store, dataset, run, args.short_burn)
             long = long_predictions(store, dataset, run, args.long_burn)
             count = min(short.shape[1], long.shape[1])
@@ -108,6 +124,7 @@ def main() -> int:
 
     runs = pd.DataFrame(rows)
     (args.out_dir / "tables").mkdir(parents=True, exist_ok=True)
+    runs.assign(settings=fingerprint).to_csv(cache_path, index=False)
     runs.to_csv(args.out_dir / "tables" / "budget_comparison_runs.csv", index=False)
 
     grouped = runs.groupby("dataset").agg(

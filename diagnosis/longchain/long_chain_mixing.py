@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -299,6 +300,41 @@ def separation_index(draws: np.ndarray, n_blocks: int = 4) -> tuple[float, float
         for chain in draws
     ]))
     return (float(n_blocks * across / within) if within > 0 else float("nan")), within
+
+
+def cache_fingerprint(args) -> str:
+    """Settings that change a run's numbers; a mismatch invalidates the cache."""
+    return json.dumps({
+        "long_burn": args.long_burn, "window": args.window, "step": args.step,
+        "segment_length": args.segment_length, "n_segments": args.n_segments,
+        "prefix_fractions": list(args.prefix_fractions),
+        "separation_blocks": args.separation_blocks, "ridge_fraction": args.ridge_fraction,
+    }, sort_keys=True)
+
+
+def cached_run(cache_dir: Path, dataset: str, run: int) -> dict | None:
+    path = cache_dir / f"{dataset}__run{run:03d}.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        "row": payload["row"],
+        "cross": pd.DataFrame(payload["cross"]),
+        "within": pd.DataFrame(payload["within"]),
+        "prefix": pd.DataFrame(payload["prefix"]),
+        "figure": payload["figure"],
+    }
+
+
+def store_run(cache_dir: Path, dataset: str, run: int, result: dict) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f"{dataset}__run{run:03d}.json").write_text(json.dumps({
+        "row": result["row"],
+        "cross": result["cross"].to_dict("list"),
+        "within": result["within"].to_dict("list"),
+        "prefix": result["prefix"].to_dict("list"),
+        "figure": result["figure"],
+    }), encoding="utf-8")
 
 
 def spaced_indices(size: int, count: int) -> np.ndarray:
@@ -576,6 +612,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ridge-fraction", type=float, default=1e-8)
     parser.add_argument("--dpi", type=int, default=150)
     parser.add_argument("--jobs", type=int, default=4, help="Runs analysed in parallel.")
+    parser.add_argument("--force", action="store_true",
+                        help="Recompute every run instead of reusing the cache.")
     return parser.parse_args()
 
 
@@ -598,11 +636,35 @@ def main() -> int:
         for run in (args.runs if args.runs is not None else available):
             if run in available:
                 jobs.append((dataset, run))
-    print(f"[long-mixing] {len(jobs)} runs: " + ", ".join(f"{d}/{r:03d}" for d, r in jobs), flush=True)
+    cache_dir = args.table_dir / "cache"
+    stamp_path = cache_dir / "settings.json"
+    fingerprint = cache_fingerprint(args)
+    if args.force or (stamp_path.is_file() and stamp_path.read_text(encoding="utf-8") != fingerprint):
+        for stale in cache_dir.glob("*.json"):
+            stale.unlink()
+        print("[long-mixing] cache cleared", flush=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    stamp_path.write_text(fingerprint, encoding="utf-8")
 
-    results = Parallel(n_jobs=args.jobs, verbose=10)(
-        delayed(analyse_run)(args, dataset, run) for dataset, run in jobs
-    )
+    cached, todo = {}, []
+    for dataset, run in jobs:
+        hit = cached_run(cache_dir, dataset, run)
+        if hit is not None and (args.figure_dir / hit["figure"]).is_file():
+            cached[(dataset, run)] = hit
+        else:
+            todo.append((dataset, run))
+    print(f"[long-mixing] {len(jobs)} runs: {len(cached)} cached, {len(todo)} to compute",
+          flush=True)
+    if todo:
+        print("  computing: " + ", ".join(f"{d}/{r:03d}" for d, r in todo), flush=True)
+
+    fresh = Parallel(n_jobs=args.jobs, verbose=10)(
+        delayed(analyse_run)(args, dataset, run) for dataset, run in todo
+    ) if todo else []
+    for (dataset, run), result in zip(todo, fresh):
+        store_run(cache_dir, dataset, run, result)
+        cached[(dataset, run)] = result
+    results = [cached[key] for key in jobs]
 
     runs = pd.DataFrame([r["row"] for r in results])
     runs.to_csv(args.table_dir / "long_run_metrics.csv", index=False)

@@ -20,7 +20,9 @@ All values summarize five runs per dataset.
 | dataset | worst_projected_rhat_mean | cross_rhat_median_mean | within_rhat_median_mean | short_centroid_distance_mean | long_rhat_median_mean |
 | --- | --- | --- | --- | --- | --- |
 | fixed100_Abalone | 1.9488 | 1.2447 | 1.2006 | 3.0620 | 1.0001 |
+| fixed100_Airfoil | 2.4644 | 1.5883 | 1.3367 | 15.0097 | 1.0415 |
 | fixed100_CCPP | 2.6997 | 1.7608 | 1.3839 | 14.3999 | 1.1261 |
+| fixed100_CPUAct | 2.6702 | 1.8670 | 1.4266 | 12.7371 | 1.2363 |
 | fixed100_CalHousing_subsample5000 | 2.5100 | 1.4956 | 1.2837 | 1.8482 | 1.0177 |
 | fixed100_Concrete | 2.2827 | 1.3887 | 1.2548 | 19.5801 | 1.0035 |
 | fixed100_Friedman | 2.3150 | 1.4700 | 1.2712 | 5.0399 | 1.0016 |

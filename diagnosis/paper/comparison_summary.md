@@ -37,6 +37,17 @@ Reference floor (scaled energy among the six pairs of long chains): 0.00006 (SD 
 | fixed100_Abalone | Default+PT | 20 | 20 | 288.9 | 5.0 | 3.85 |
 | fixed100_Abalone | MTMH+PT | 20 | 20 | 756.2 | 3.8 | 10.08 |
 
+## fixed100_Airfoil
+
+| method | worst projected R-hat | cross R-hat | within R-hat | B/W ratio | scaled energy | energy / floor | relative RMSE | relative CRPS |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Default | 2.4644 (0.3427) | 1.5883 (0.1169) | 1.3367 (0.0629) | 0.5821 (0.2382) | 0.1291 (0.0151) | 3.4x | 0.4981 (0.0385) | 0.5335 (0.0516) |
+| Default+PT | 2.0193 (0.3105) | 1.1751 (0.0268) | 1.1259 (0.0139) | 0.1119 (0.0433) | 0.0612 (0.0130) | 1.6x | 0.4822 (0.0432) | 0.4926 (0.0511) |
+| MTMH | 2.3899 (0.4911) | 1.4191 (0.0950) | 1.2423 (0.0547) | 0.4322 (0.1718) | 0.1112 (0.0329) | 2.9x | 0.4903 (0.0399) | 0.5121 (0.0551) |
+| MTMH+PT | 1.9595 (0.1066) | 1.1727 (0.0416) | 1.1266 (0.0348) | 0.1280 (0.0479) | 0.0550 (0.0110) | 1.4x | 0.4835 (0.0423) | 0.4892 (0.0503) |
+
+Reference floor (scaled energy among the six pairs of long chains): 0.03840 (SD 0.00645 across runs); the smallest ratio above is 1.4, so the reference disagrees with itself by as much as the closest method differs from it and no ordering should be read from this dataset.
+
 ## fixed100_CCPP
 
 | method | worst projected R-hat | cross R-hat | within R-hat | B/W ratio | scaled energy | energy / floor | relative RMSE | relative CRPS |
@@ -47,6 +58,17 @@ Reference floor (scaled energy among the six pairs of long chains): 0.00006 (SD 
 | MTMH+PT | 2.0730 (0.5429) | 1.4375 (0.0585) | 1.2441 (0.0143) | 0.4496 (0.1477) | 0.0580 (0.0094) | 1.4x | 0.1901 (0.0058) | 0.2113 (0.0088) |
 
 Reference floor (scaled energy among the six pairs of long chains): 0.04141 (SD 0.00334 across runs); the smallest ratio above is 1.4, so the reference disagrees with itself by as much as the closest method differs from it and no ordering should be read from this dataset.
+
+## fixed100_CPUAct
+
+| method | worst projected R-hat | cross R-hat | within R-hat | B/W ratio | scaled energy | energy / floor | relative RMSE | relative CRPS |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Default | 2.6702 (0.2507) | 1.8670 (0.0420) | 1.4266 (0.0103) | 1.0867 (0.2689) | 0.0734 (0.0103) | 1.2x | 0.1370 (0.0073) | 0.2147 (0.0126) |
+| Default+PT | 2.4183 (0.3092) | 1.3359 (0.0631) | 1.1990 (0.0279) | 0.3185 (0.0984) | 0.0560 (0.0072) | 0.9x | 0.1321 (0.0045) | 0.1990 (0.0072) |
+| MTMH | 2.3929 (0.3396) | 1.7072 (0.0284) | 1.3317 (0.0176) | 1.1193 (0.1936) | 0.0708 (0.0064) | 1.1x | 0.1410 (0.0062) | 0.2143 (0.0084) |
+| MTMH+PT | 2.4723 (0.1831) | 1.3758 (0.0549) | 1.2078 (0.0243) | 0.5430 (0.1845) | 0.0576 (0.0058) | 0.9x | 0.1363 (0.0075) | 0.2022 (0.0091) |
+
+Reference floor (scaled energy among the six pairs of long chains): 0.06327 (SD 0.01169 across runs); the smallest ratio above is 0.9, so the reference disagrees with itself by as much as the closest method differs from it and no ordering should be read from this dataset.
 
 ## fixed100_CalHousing_subsample5000
 

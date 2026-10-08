@@ -44,6 +44,11 @@ applied anywhere in this file; 1.01 appears on the figures as a reference line o
 | fixed100_CCPP | 2 | 7000000 | 7.71 | 0.34403 | 0.17855 | 1.9158 | 2.5859 | 63 |
 | fixed100_CCPP | 3 | 7000000 | 9.43 | 0.28754 | 0.12200 | 1.6340 | 2.4911 | 71 |
 | fixed100_CCPP | 4 | 7000000 | 7.62 | 0.30194 | 0.15850 | 1.7204 | 2.1299 | 67 |
+| fixed100_CPUAct | 0 | 7000000 | 14.52 | 0.69547 | 0.19161 | 1.5716 | 2.7939 | 100 |
+| fixed100_CPUAct | 1 | 7000000 | 11.13 | 0.59800 | 0.21489 | 2.2435 | 2.7869 | 106 |
+| fixed100_CPUAct | 2 | 7000000 | 14.74 | 0.80907 | 0.21953 | 2.1999 | 2.1171 | 64 |
+| fixed100_CPUAct | 3 | 7000000 | 14.89 | 1.01126 | 0.27175 | 2.0363 | 2.1552 | 57 |
+| fixed100_CPUAct | 4 | 7000000 | 15.76 | 0.74653 | 0.18951 | 2.0006 | 2.8414 | 86 |
 | fixed100_CalHousing_subsample5000 | 0 | 7000000 | 2.53 | 0.03246 | 0.05130 | 1.1549 | 1.4339 | 237 |
 | fixed100_CalHousing_subsample5000 | 1 | 7000000 | 2.03 | 0.02625 | 0.05185 | 1.1812 | 1.4462 | 320 |
 | fixed100_CalHousing_subsample5000 | 2 | 7000000 | 2.90 | 0.04133 | 0.05697 | 1.1422 | 1.5598 | 289 |
@@ -93,6 +98,7 @@ applied anywhere in this file; 1.01 appears on the figures as a reference line o
 | fixed100_CalHousing_subsample5000 | 5 | 7000000 | 1.2961 | 1.7168 | 237 | 2.03-4.30 |
 | fixed100_Airfoil | 5 | 7000000 | 1.5054 | 2.0064 | 99 | 3.94-5.57 |
 | fixed100_CCPP | 5 | 7000000 | 1.9158 | 2.5859 | 52 | 7.62-9.43 |
+| fixed100_CPUAct | 5 | 7000000 | 2.2435 | 2.8414 | 57 | 11.13-15.76 |
 | fixed100_SeoulBike | 5 | 7000000 | 2.6306 | 2.6047 | 84 | 11.49-23.07 |
 
 Figures: one per run in `figures/`, panels (a)-(f) as described in the script docstring.
