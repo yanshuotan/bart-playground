@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from scipy.linalg import eigh
-from sklearn.decomposition import PCA
 
 
 DATASETS = ("fixed100_Abalone", "fixed100_Concrete", "fixed100_Friedman")
@@ -73,7 +72,6 @@ def summarize(values: np.ndarray) -> dict[str, float]:
         "q75": float(np.nanquantile(values, 0.75)),
         "q90": float(np.nanquantile(values, 0.90)),
         "maximum": float(np.nanmax(values)),
-        "fraction_above_1_01": float(np.nanmean(values > 1.01)),
     }
 
 
@@ -128,16 +126,26 @@ def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.nd
     eigenvalues, eigenvectors = eigh(between / n, within + ridge * np.eye(p))
     order = np.argsort(eigenvalues)[::-1]
     eigenvalues = np.maximum(eigenvalues[order], 0.0)
-    direction = eigenvectors[:, order[0]]
-    direction /= np.linalg.norm(direction)
-    projected = np.einsum("mnp,p->mn", draws, direction)
-    data = xr.DataArray(projected, dims=("chain", "draw"), name="projection")
-    projected_rhat = float(az.rhat(data, method="rank")["projection"].values)
+    directions = eigenvectors[:, order[:2]].copy()
+    for column in range(directions.shape[1]):
+        directions[:, column] /= np.linalg.norm(directions[:, column])
+        anchor = int(np.argmax(np.abs(directions[:, column])))
+        if directions[anchor, column] < 0:
+            directions[:, column] *= -1
+    projected_2d = np.einsum("mnp,pk->mnk", draws - grand[None, None, :], directions)
+    projected_rhats = []
+    for column in range(projected_2d.shape[2]):
+        data = xr.DataArray(projected_2d[:, :, column], dims=("chain", "draw"), name="projection")
+        projected_rhats.append(float(az.rhat(data, method="rank")["projection"].values))
     return {
         "lambda_max": float(eigenvalues[0]),
+        "lambda_second": float(eigenvalues[1]),
         "eigen_gap": float(eigenvalues[0] - eigenvalues[1]),
-        "projected_rhat": projected_rhat,
-        "projected": projected,
+        "projected_rhat": projected_rhats[0],
+        "second_projected_rhat": projected_rhats[1],
+        "directions": directions,
+        "projected": projected_2d[:, :, 0],
+        "projected_2d": projected_2d,
     }
 
 
@@ -158,7 +166,6 @@ def spaced_indices(size: int, count: int) -> np.ndarray:
 def plot_diagnosis(
     short_all: np.ndarray,
     short_post_burn: np.ndarray,
-    long_post_burn: np.ndarray,
     worst: dict[str, np.ndarray | float],
     cross: pd.DataFrame,
     within: pd.DataFrame,
@@ -166,17 +173,8 @@ def plot_diagnosis(
     plot_draws: int,
     title: str,
 ) -> plt.Figure:
-    pca = PCA(n_components=2, random_state=0)
-    pca.fit(long_post_burn.reshape(-1, long_post_burn.shape[-1]))
-    long_coords = pca.transform(long_post_burn.reshape(-1, long_post_burn.shape[-1])).reshape(
-        long_post_burn.shape[0], long_post_burn.shape[1], 2
-    )
-    short_coords = pca.transform(short_post_burn.reshape(-1, short_post_burn.shape[-1])).reshape(
-        short_post_burn.shape[0], short_post_burn.shape[1], 2
-    )
-
     fig, axes = plt.subplots(2, 2, figsize=(13.2, 8.6), layout="constrained")
-    trace_ax, cross_ax, within_ax, pca_ax = axes.flat
+    trace_ax, direction_ax, cross_ax, within_ax = axes.flat
     projected = np.asarray(worst["projected"])
     iterations = np.arange(short_burn, short_all.shape[1])
     for chain_id in range(projected.shape[0]):
@@ -191,7 +189,7 @@ def plot_diagnosis(
     cross_ax.fill_between(x, cross["q25"], cross["q75"], color="#245f9e", alpha=0.2,
                           label="test-point IQR")
     cross_ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1, label="1.01")
-    cross_ax.set(title="(b) Cross-chain pointwise rank-split R-hat", xlabel="window end", ylabel="R-hat")
+    cross_ax.set(title="(c) Cross-chain pointwise rank-split R-hat", xlabel="window end", ylabel="R-hat")
     cross_ax.legend(fontsize=8)
 
     for chain_id, frame in within.groupby("original_chain"):
@@ -202,27 +200,28 @@ def plot_diagnosis(
                        label=f"chain {int(chain_id) + 1}")
         within_ax.fill_between(x, frame["q25"], frame["q75"], color=color, alpha=0.08)
     within_ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1, label="1.01")
-    within_ax.set(title="(c) Within-chain segment rank-split R-hat", xlabel="window end", ylabel="R-hat")
+    within_ax.set(title="(d) Within-chain segment rank-split R-hat", xlabel="window end", ylabel="R-hat")
     within_ax.legend(ncol=3, fontsize=8)
 
-    long_idx = spaced_indices(long_coords.shape[1], plot_draws)
+    short_coords = np.asarray(worst["projected_2d"])
+    panel_title = "(b) Top two between/within directions"
+    xlabel = f"direction 1 ($\\lambda_1$={float(worst['lambda_max']):.3g})"
+    ylabel = f"direction 2 ($\\lambda_2$={float(worst['lambda_second']):.3g})"
     short_idx = spaced_indices(short_coords.shape[1], plot_draws)
-    for chain_id in range(long_coords.shape[0]):
-        pca_ax.scatter(long_coords[chain_id, long_idx, 0], long_coords[chain_id, long_idx, 1],
-                       s=8, alpha=0.07, color="#4a4a4a", edgecolors="none",
-                       label="long default reference" if chain_id == 0 else "_nolegend_")
     for chain_id in range(short_coords.shape[0]):
         color = CHAIN_COLORS[chain_id]
-        pca_ax.scatter(short_coords[chain_id, short_idx, 0], short_coords[chain_id, short_idx, 1],
-                       s=10, alpha=0.18, color=color, edgecolors="none",
-                       label=f"default chain {chain_id + 1}")
+        direction_ax.scatter(short_coords[chain_id, short_idx, 0], short_coords[chain_id, short_idx, 1],
+                             s=10, alpha=0.18, color=color, edgecolors="none",
+                             label=f"default chain {chain_id + 1}")
         center = short_coords[chain_id].mean(axis=0)
-        pca_ax.scatter(center[0], center[1], marker="X", s=85, color=color,
-                       edgecolor="black", linewidth=0.6)
-    pca_ax.set(title="(d) Short Default chains on long-chain PCA axes",
-               xlabel=f"PC1 ({pca.explained_variance_ratio_[0]:.1%})",
-               ylabel=f"PC2 ({pca.explained_variance_ratio_[1]:.1%})")
-    pca_ax.legend(ncol=2, fontsize=7.5)
+        direction_ax.scatter(center[0], center[1], marker="X", s=85, color=color,
+                             edgecolor="black", linewidth=0.6)
+    direction_ax.set(
+        title=panel_title,
+        xlabel=xlabel,
+        ylabel=ylabel,
+    )
+    direction_ax.legend(ncol=2, fontsize=7.5)
     for ax in axes.flat:
         ax.grid(alpha=0.2)
     fig.suptitle(title, fontsize=14)
@@ -268,7 +267,7 @@ def write_summary(path: Path, settings: dict[str, int | float], dataset_summary:
     for column in columns[1:]:
         view[column] = view[column].map(lambda value: f"{value:.4f}")
     lines.append(markdown_table(view))
-    lines.extend(["", "The long chains are empirical references; their own R-hat summaries qualify PCA-based interpretation.", ""])
+    lines.extend(["", "The long chains are empirical references; their own R-hat summaries qualify comparisons with the production-length chains.", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -324,22 +323,21 @@ def main() -> int:
                 "dataset": dataset,
                 "run": run,
                 "worst_lambda_max": worst["lambda_max"],
+                "worst_lambda_second": worst["lambda_second"],
                 "worst_eigen_gap": worst["eigen_gap"],
                 "worst_projected_rhat": worst["projected_rhat"],
+                "second_projected_rhat": worst["second_projected_rhat"],
                 "cross_rhat_median": cross["median"].median(),
                 "cross_rhat_q90": cross["q90"].median(),
-                "cross_fraction_above_1_01": cross["fraction_above_1_01"].median(),
                 "within_rhat_median": within["median"].median(),
                 "within_rhat_q90": within["q90"].median(),
-                "within_fraction_above_1_01": within["fraction_above_1_01"].median(),
                 "short_centroid_distance": mean_pairwise_centroid_distance(short_post_burn),
                 "long_rhat_median": long_summary["median"],
                 "long_rhat_q90": long_summary["q90"],
-                "long_fraction_above_1_01": long_summary["fraction_above_1_01"],
             })
 
             fig = plot_diagnosis(
-                short_all, short_post_burn, long_post_burn, worst, cross, within,
+                short_all, short_post_burn, worst, cross, within,
                 args.short_burn, args.plot_draws,
                 f"{dataset} | run {run:03d} | Default sampler diagnosis",
             )

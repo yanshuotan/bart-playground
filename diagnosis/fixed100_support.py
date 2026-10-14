@@ -36,7 +36,8 @@ DATASET_CONFIGS = {
         "uci_id": 1,
         "long_ndpost": 10_000_000,
         "long_store_every": 1000,
-        "drop_columns": ["Sex"],
+        "drop_columns": [],
+        "categorical_columns": "auto",
         "target_column": None,
     },
     "concrete": {
@@ -86,7 +87,8 @@ DATASET_CONFIGS = {
         # default_long_metadata.csv).
         "long_ndpost": 10_000_000,
         "long_store_every": 1000,
-        "drop_columns": ["Date"],
+        "drop_columns": [],
+        "datetime_columns": ["Date"],
         "categorical_columns": "auto",
         "target_column": "Rented Bike Count",
     },
@@ -159,9 +161,11 @@ def _select_target_and_features(features, targets, *, target_column=None):
     if isinstance(target_column, str):
         if targets_df is not None and target_column in _safe_column_names(targets_df):
             y = targets_df[target_column].to_numpy()
+            consumed = target_column
         elif target_column in _safe_column_names(X_df):
             y = X_df[target_column].to_numpy()
             X_df = X_df.drop(columns=[target_column])
+            consumed = None
         else:
             raise ValueError(
                 f"target_column={target_column!r} not found. "
@@ -172,6 +176,7 @@ def _select_target_and_features(features, targets, *, target_column=None):
         if targets_df is None or targets_df.shape[1] == 0:
             raise ValueError("Integer target_column requested, but targets are empty")
         y = targets_df.iloc[:, int(target_column)].to_numpy()
+        consumed = _safe_column_names(targets_df)[int(target_column)]
     else:
         if targets_df is None or targets_df.shape[1] == 0:
             raise ValueError("Dataset has no target")
@@ -181,16 +186,32 @@ def _select_target_and_features(features, targets, *, target_column=None):
                 "set target_column in DATASET_CONFIGS"
             )
         y = targets_df.iloc[:, 0].to_numpy()
+        consumed = _safe_column_names(targets_df)[0]
+
+    # UCI sometimes files a genuine predictor under "targets" (SeoulBike's
+    # Functioning Day). Anything there that is not the target is a feature.
+    for col in _safe_column_names(targets_df):
+        if col != consumed:
+            X_df[col] = targets_df[col].to_numpy()
 
     return X_df, np.asarray(y).reshape(-1).astype(float)
 
 
-def _preprocess_features(features, *, drop_columns=None, categorical_columns=None):
-    """Match the prior long-only preprocessing: drop, full one-hot, numeric."""
+def _preprocess_features(features, *, drop_columns=None, categorical_columns=None,
+                         datetime_columns=None):
+    """Drop nothing by default; dates become a day index, categories one-hot."""
     X_df = features.copy()
     for col in list(drop_columns or []):
         if col in X_df.columns:
             X_df = X_df.drop(columns=[col])
+
+    # A date is a timestamp, not a category: days since the earliest row keeps
+    # the ordering in one column instead of one dummy per distinct date.
+    for col in list(datetime_columns or []):
+        if col not in X_df.columns:
+            continue
+        parsed = pd.to_datetime(X_df[col], dayfirst=True)
+        X_df[col] = (parsed - parsed.min()).dt.days.astype(float)
 
     if categorical_columns == "auto":
         cat_cols = list(
@@ -305,6 +326,7 @@ def load_dataset(name: str):
         features,
         drop_columns=cfg.get("drop_columns", []),
         categorical_columns=cfg.get("categorical_columns", "auto"),
+        datetime_columns=cfg.get("datetime_columns", []),
     )
     X, y, n_removed = _clean_finite_rows(X, y)
     print(

@@ -53,7 +53,7 @@ import time
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, NamedTuple
 
 import numpy as np
 
@@ -75,19 +75,82 @@ from bart_playground.bart import (  # noqa: E402
 from bart_playground.samplers import default_proposal_probs, mtmh_proposal_probs  # noqa: E402
 
 import experiment_fixed100 as exp  # noqa: E402
-from fixed100_support import DATASET_CONFIGS, load_dataset  # noqa: E402
+from fixed100_support import (  # noqa: E402
+    DATASET_CONFIGS,
+    generate_sparse_variant,
+    load_dataset,
+)
+from run_fixed100 import repo_nested_friedman1_generator  # noqa: E402
 
 
-DATASETS = ("abalone", "concrete", "friedman")
+class _Source(NamedTuple):
+    """Where a dataset's draws live and how to rebuild its inputs.
+
+    `directory` is the store folder, `tag` the prefix inside its file names.
+    The two differ for the sparse variants, which were produced by two
+    different entry points.
+    """
+
+    directory: str
+    tag: str
+    loader: Callable[[], tuple[np.ndarray, np.ndarray]]
+    # Prior settings the production run used, as recorded in its metadata. The
+    # DART sweep runs with the Dirichlet prior on splitting proportions, so it
+    # has to be timed with it too.
+    cfg: dict = {}
+
+
+def _named(key: str) -> Callable[[], tuple[np.ndarray, np.ndarray]]:
+    return lambda: load_dataset(key)[:2]
+
+
+def _sparse(variant: str) -> Callable[[], tuple[np.ndarray, np.ndarray]]:
+    def build() -> tuple[np.ndarray, np.ndarray]:
+        X, y, _ = generate_sparse_variant(
+            variant, n_samples=2000, seed=42, noise_sd=1.0,
+            friedman_generator=repo_nested_friedman1_generator,
+        )
+        return X, y
+
+    return build
+
+
+DART = {"dirichlet_prior": True, "s_alpha": 1.0}
+
+SOURCES = {
+    "abalone": _Source("fixed100_Abalone", "fixed100_Abalone", _named("abalone")),
+    "airfoil": _Source("fixed100_Airfoil", "fixed100_Airfoil", _named("airfoil")),
+    "calhousing": _Source("fixed100_CalHousing_subsample5000",
+                          "fixed100_CalHousing_subsample5000", _named("calhousing")),
+    "ccpp": _Source("fixed100_CCPP", "fixed100_CCPP", _named("ccpp")),
+    "concrete": _Source("fixed100_Concrete", "fixed100_Concrete", _named("concrete")),
+    "cpu_act": _Source("fixed100_CPUAct", "fixed100_CPUAct", _named("cpu_act")),
+    "friedman": _Source("fixed100_Friedman", "fixed100_Friedman", _named("friedman")),
+    "friedman_p20": _Source("fixed100_FriedmanSparseDir_p20",
+                            "fixed100_FriedmanSparseDirP20K5", _sparse("friedman_p20_k5"),
+                            DART),
+    "friedman_p100": _Source("fixed100_FriedmanSparseDir_p100", "fixed100_FriedmanSparseDir",
+                             _named("friedman_sparse_dir"), DART),
+    "friedman_p200": _Source("fixed100_FriedmanSparseDir_p200",
+                             "fixed100_FriedmanSparseDirP200K5", _sparse("friedman_p200_k5"),
+                             DART),
+    "seoul_bike": _Source("fixed100_SeoulBike", "fixed100_SeoulBike", _named("seoul_bike")),
+}
+DATASETS = tuple(SOURCES)
 # (label, method, backend) in execution order within a chain. Serial and
 # parallel runs of a PT method are adjacent so both see similar node conditions.
+# The paper's cost table reads the four production rows; the serial PT variants
+# cost two orders of magnitude more and appear in no reported number, so they
+# are off by default and can be restored with --with-serial.
 CONFIGS = (
     ("default", "default", "none"),
     ("mtmh", "mtmh", "none"),
-    ("default_pt (serial)", "default_pt", "serial"),
     ("default_pt (parallel)", "default_pt", "parallel"),
-    ("mtmh_pt (serial)", "mtmh_pt", "serial"),
     ("mtmh_pt (parallel)", "mtmh_pt", "parallel"),
+)
+SERIAL_CONFIGS = (
+    ("default_pt (serial)", "default_pt", "serial"),
+    ("mtmh_pt (serial)", "mtmh_pt", "serial"),
 )
 PER_CHAIN_FIELDS = (
     "dataset", "run_id", "chain", "seed", "label", "method", "backend", "n_temperatures",
@@ -132,8 +195,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--labels",
         nargs="+",
-        choices=[label for label, _, _ in CONFIGS],
-        default=[label for label, _, _ in CONFIGS],
+        choices=[label for label, _, _ in CONFIGS + SERIAL_CONFIGS],
+        default=None,
         help="Subset of the six configurations to time (default: all).",
     )
     parser.add_argument(
@@ -142,10 +205,15 @@ def parse_args() -> argparse.Namespace:
         help="Default: diagnosis/timing/. Files are named after the dataset, so "
              "several jobs can share one directory; summary.md is rebuilt from all of them.",
     )
+    parser.add_argument("--with-serial", action="store_true",
+                        help="Also time the serial PT variants, which the paper does not report.")
     parser.add_argument("--show-progress", action="store_true", help="Show sampler progress bars (off for cleaner timing).")
     parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failed fit.")
     parser.add_argument("--dry-run", action="store_true", help="Check data, splits, ladders and worker counts without fitting.")
     args = parser.parse_args()
+    if args.labels is None:
+        args.labels = [label for label, _, _ in
+                       (CONFIGS + SERIAL_CONFIGS if args.with_serial else CONFIGS)]
 
     if args.run_id < 0:
         parser.error("--run-id must be non-negative")
@@ -165,10 +233,10 @@ def parse_args() -> argparse.Namespace:
 
 def _stored_run_dirs(name: str, run_id: int) -> list[Path]:
     """Directories that may hold this run's stored indices and ladders."""
-    tag = DATASET_CONFIGS[name]["dataset_tag"]
+    source = SOURCES[name]
     return [
-        DIAGNOSIS_DIR / "store" / tag,
-        DIAGNOSIS_DIR / "store_seed2024" / f"s24_short_{name}_r{run_id}" / tag,
+        DIAGNOSIS_DIR / "store" / source.directory,
+        DIAGNOSIS_DIR / "store_seed2024" / f"s24_short_{name}_r{run_id}" / source.directory,
     ]
 
 
@@ -178,9 +246,9 @@ def _load_vector(path: Path, dtype) -> np.ndarray:
 
 def load_split(name: str, run_id: int) -> dict[str, Any]:
     """Rebuild the fixed-100 split and check it against any stored indices."""
-    X, y = load_dataset(name)
+    X, y = SOURCES[name].loader()
     split = exp.make_fixed100_splits(X, y, n_runs=run_id + 1)[run_id]
-    tag = DATASET_CONFIGS[name]["dataset_tag"]
+    tag = SOURCES[name].tag
     checked = []
     for directory in _stored_run_dirs(name, run_id):
         train_path = directory / "indices" / f"{tag}__run{run_id:03d}__train_idx.csv"
@@ -197,7 +265,7 @@ def load_split(name: str, run_id: int) -> dict[str, Any]:
 
 def load_temperature_ladder(name: str, run_id: int) -> tuple[np.ndarray, Path]:
     """The stored ladder of this run; default_pt and mtmh_pt must agree."""
-    tag = DATASET_CONFIGS[name]["dataset_tag"]
+    tag = SOURCES[name].tag
     for directory in _stored_run_dirs(name, run_id):
         ladders = {}
         for method in ("default_pt", "mtmh_pt"):
@@ -342,13 +410,15 @@ def make_model(method: str, backend: str, args, temperatures: np.ndarray, pt_wor
     raise ValueError(f"Unknown method: {method}")
 
 
-def run_numba_warmup(args, X_train, y_train, temperatures) -> None:
+def run_numba_warmup(args, X_train, y_train, temperatures, cfg=None) -> None:
     """Compile the MTMH+PT Numba paths before any timed fit (not timed)."""
     model = ParallelTemperingBART(
         ndpost=20, nskip=0, n_trees=10, tree_alpha=args.tree_alpha, tree_beta=args.tree_beta, tol=1,
         proposal_probs=mtmh_proposal_probs, random_state=args.chain_seed, temperatures=temperatures,
         swap_interval=10, post_swap_repair_steps=0, store_chain_traces=False, store_swap_diagnostics=False,
         print_swap_diagnostics=False, n_jobs=1, sampler_kind="multi", multi_tries=args.multi_tries,
+        dirichlet_prior=(cfg or {}).get("dirichlet_prior", False),
+        s_alpha=float((cfg or {}).get("s_alpha", 1.0)),
     )
     data = model.preprocessor.fit_transform(X_train, y_train)
     start = time.perf_counter()
@@ -373,7 +443,9 @@ def _write_csv(path: Path, fields, rows) -> None:
 
 def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     summary = []
-    for label, _method, backend in CONFIGS:
+    # Serial rows only exist when --with-serial was given; the lookup below
+    # skips any configuration that was not timed, so listing both is safe.
+    for label, _method, backend in CONFIGS + SERIAL_CONFIGS:
         mine = [row for row in rows if row["label"] == label]
         if not mine:
             continue
@@ -426,7 +498,7 @@ def sections_from_dir(directory: Path) -> list[dict[str, Any]]:
             "chains_done": len({r["chain"] for r in rows if r["label"] == last_label}),
             "summary": summarize(rows),
         })
-    order = [DATASET_CONFIGS[name]["dataset_tag"] for name in DATASETS]
+    order = [SOURCES[name].tag for name in DATASETS]
     sections.sort(key=lambda s: order.index(s["dataset"]) if s["dataset"] in order else len(order))
     return sections
 
@@ -472,7 +544,8 @@ def write_markdown(path: Path, sections: list[dict[str, Any]], args) -> None:
 def run_benchmark(args) -> int:
     output_dir = (args.output_dir or SCRIPT_DIR).expanduser().resolve()
     allocated, affinity = allocated_cpu_count(), affinity_cpu_count()
-    configs = [c for c in CONFIGS if c[0] in args.labels]
+    available = CONFIGS + SERIAL_CONFIGS if args.with_serial else CONFIGS
+    configs = [c for c in available if c[0] in args.labels]
     print(f"Output directory: {output_dir}")
     print(f"Allocated CPUs (PBS_NCPUS etc.)={allocated}; process affinity CPUs={affinity}; os.cpu_count()={os.cpu_count()}")
 
@@ -503,13 +576,13 @@ def run_benchmark(args) -> int:
     (output_dir / "config.json").write_text(json.dumps(vars(args), default=str, indent=2), encoding="utf-8")
     failures = 0
     for name, split, temperatures, pt_workers in prepared:
-        cfg = DATASET_CONFIGS[name]
-        tag = cfg["dataset_tag"]
+        tag = SOURCES[name].tag
         per_chain_path = output_dir / f"{tag}_run{args.run_id:03d}_per_chain.csv"
         summary_path = output_dir / f"{tag}_run{args.run_id:03d}_summary.csv"
         rows: list[dict[str, Any]] = []
         print(f"\n=== {tag}: {len(temperatures)} temperatures, parallel PT workers={pt_workers} ===", flush=True)
-        run_numba_warmup(args, split["X_train"], split["y_train"], temperatures)
+        run_numba_warmup(args, split["X_train"], split["y_train"], temperatures,
+                         SOURCES[name].cfg)
 
         for chain in range(args.n_chains):
             seed = args.chain_seed + chain
@@ -517,7 +590,8 @@ def run_benchmark(args) -> int:
                 gc.collect()
                 model = None
                 try:
-                    model = make_model(method, backend, args, temperatures, pt_workers, seed, cfg)
+                    model = make_model(method, backend, args, temperatures, pt_workers,
+                                       seed, SOURCES[name].cfg)
                     data = model.preprocessor.fit_transform(split["X_train"], split["y_train"])
                     measured = timed_fit(model, data, quietly=not args.show_progress)
                 except Exception:

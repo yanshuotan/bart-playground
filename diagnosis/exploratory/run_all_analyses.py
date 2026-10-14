@@ -29,10 +29,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from matplotlib.lines import Line2D
 from scipy.linalg import eigh
 from scipy.stats import gaussian_kde
-from sklearn.decomposition import PCA
 
 
 LONG_METHOD = "default_long"
@@ -51,17 +49,12 @@ METHOD_COLORS = {
     "mtmh_pt": "#e7298a",
     "default_long": "#222222",
 }
-METHOD_MARKERS = {"default": "o", "default_pt": "s", "mtmh": "^", "mtmh_pt": "D"}
 CHAIN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728")
-CHAIN_LINESTYLES = ("-", "--", ":", "-.")
-PAIRWISE_COMPARISONS = (("default", "default_pt"), ("default", "mtmh"), ("mtmh", "mtmh_pt"))
 
 ALL_GROUPS = (
     "long",
-    "pca",
     "separation",
     "predictive",
-    "energy_ref",
     "rhat",
     "ess",
 )
@@ -80,7 +73,6 @@ class Config:
     segment_length: int = 1000
     n_segments: int = 4
     plot_draws: int = 1000
-    energy_ref_draws: int = 2000
     separation_draws_per_chain: int = 1500
     separation_seed: int = 2028
     eigen_projection_start: int = 3000
@@ -255,23 +247,6 @@ def crps_from_samples(samples: np.ndarray, y_true: np.ndarray) -> np.ndarray:
     return term1 - term2
 
 
-def euclidean_dists(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    a2 = np.sum(a * a, axis=1, keepdims=True)
-    b2 = np.sum(b * b, axis=1, keepdims=True).T
-    return np.sqrt(np.maximum(a2 + b2 - 2.0 * (a @ b.T), 0.0))
-
-
-def energy_distance(x: np.ndarray, y: np.ndarray) -> float:
-    if x.shape[0] < 2 or y.shape[0] < 2:
-        return np.nan
-    dxy = euclidean_dists(x, y).mean()
-    dxx = euclidean_dists(x, x)
-    dyy = euclidean_dists(y, y)
-    within_x = (dxx.sum() - np.trace(dxx)) / (x.shape[0] * (x.shape[0] - 1))
-    within_y = (dyy.sum() - np.trace(dyy)) / (y.shape[0] * (y.shape[0] - 1))
-    return float(2.0 * dxy - within_x - within_y)
-
-
 def chain_separation_metrics(
     draws: np.ndarray,
     max_draws_per_chain: int,
@@ -355,48 +330,15 @@ def panel_axes(count: int, width: float = 6.2, height: float = 4.8) -> tuple[plt
 
 
 def analyze_long_behavior(store: Store, cfg: Config, long_runs: list[int]) -> None:
-    print_metric("long-chain PCA, densities, and traces")
-    centroid_rows = []
+    print_metric("long-chain scalar traces")
     for run_id in long_runs:
         print(f"  run {run_id:03d}", flush=True)
-        preds = store.predictions(run_id, LONG_METHOD, cfg.long_burn)
-        n_chains, n_draws, _ = preds.shape
-        vectors = preds.reshape(n_chains * n_draws, -1)
-        pca = PCA(n_components=2, random_state=0).fit(vectors)
-        coords = pca.transform(vectors).reshape(n_chains, n_draws, 2)
-
-        fig, ax = plt.subplots(figsize=(7, 6))
-        for chain_id in range(n_chains):
-            idx = np.linspace(0, n_draws - 1, min(cfg.plot_draws, n_draws), dtype=int)
-            ax.scatter(coords[chain_id, idx, 0], coords[chain_id, idx, 1], s=12, alpha=0.3,
-                       color=CHAIN_COLORS[chain_id % len(CHAIN_COLORS)], label=f"chain {chain_id}")
-            center = coords[chain_id].mean(axis=0)
-            centroid_rows.append({"run": run_id, "chain": chain_id, "pc1": center[0], "pc2": center[1]})
-            ax.scatter(*center, s=120, marker="X", color=CHAIN_COLORS[chain_id % len(CHAIN_COLORS)],
-                       edgecolor="black", linewidth=0.6)
-        ax.set(title=f"Run {run_id:03d}: long-chain PCA", xlabel="PC1", ylabel="PC2")
-        ax.legend()
-        fig.tight_layout()
-        save_figure(fig, cfg, f"r{run_id:03d}_long_pca.png")
-
-        fig, ax = plt.subplots(figsize=(8, 5))
-        for chain_id in range(n_chains):
-            values = coords[chain_id, :, 0]
-            color = CHAIN_COLORS[chain_id % len(CHAIN_COLORS)]
-            ax.hist(values, bins=30, density=True, alpha=0.18, color=color)
-            if np.ptp(values) > 0:
-                density = gaussian_kde(values)
-                grid = np.linspace(values.min(), values.max(), 200)
-                ax.plot(grid, density(grid), color=color, linewidth=2, label=f"chain {chain_id}")
-        ax.set(title=f"Run {run_id:03d}: long-chain PC1 density", xlabel="PC1", ylabel="density")
-        ax.legend()
-        fig.tight_layout()
-        save_figure(fig, cfg, f"r{run_id:03d}_long_pc1.png")
-
-        traces: list[tuple[str, np.ndarray]] = [("PC1", coords[:, :, 0])]
+        traces: list[tuple[str, np.ndarray]] = []
         for metric, label in (("sigmas", "sigma^2"), ("rmses", "RMSE")):
             if store.has(metric, run_id, LONG_METHOD):
-                traces.insert(0 if metric == "sigmas" else 1, (label, store.scalar_metric(metric, run_id, LONG_METHOD, cfg.long_burn)))
+                traces.append((label, store.scalar_metric(metric, run_id, LONG_METHOD, cfg.long_burn)))
+        if not traces:
+            continue
         fig, axes = plt.subplots(len(traces), 1, figsize=(9, 3.2 * len(traces)), sharex=True, squeeze=False)
         for ax, (label, values) in zip(axes[:, 0], traces):
             for chain_id in range(values.shape[0]):
@@ -406,85 +348,9 @@ def analyze_long_behavior(store: Store, cfg: Config, long_runs: list[int]) -> No
             ax.grid(alpha=0.2)
             ax.legend(ncol=min(4, values.shape[0]), fontsize=8)
         axes[-1, 0].set_xlabel("sample index")
-        fig.suptitle(f"Run {run_id:03d}: long-chain traces")
+        fig.suptitle(f"Run {run_id:03d}: long-chain scalar traces")
         fig.tight_layout(rect=[0, 0, 1, 0.97])
         save_figure(fig, cfg, f"r{run_id:03d}_long_trace.png")
-    save_table(centroid_rows, cfg, "long_pca_centroids.csv")
-
-
-def scatter_method(ax: plt.Axes, pca: PCA, draws: np.ndarray, method: str) -> None:
-    shades = method_shades(method, draws.shape[0])
-    for chain_id in range(draws.shape[0]):
-        coords = pca.transform(draws[chain_id])
-        idx = np.linspace(0, coords.shape[0] - 1, min(1000, coords.shape[0]), dtype=int)
-        ax.scatter(coords[idx, 0], coords[idx, 1], s=12, alpha=0.28,
-                   marker=METHOD_MARKERS.get(method, "o"), color=shades[chain_id])
-        center = coords.mean(axis=0)
-        ax.scatter(*center, s=110, marker=METHOD_MARKERS.get(method, "o"), color=shades[chain_id],
-                   edgecolor="black", linewidth=0.7)
-
-
-def density_method(ax: plt.Axes, pca: PCA, draws: np.ndarray, method: str) -> None:
-    shades = method_shades(method, draws.shape[0])
-    for chain_id in range(draws.shape[0]):
-        values = pca.transform(draws[chain_id])[:, 0]
-        if np.ptp(values) <= 0:
-            continue
-        density = gaussian_kde(values)
-        grid = np.linspace(values.min(), values.max(), 200)
-        ax.plot(grid, density(grid), color=shades[chain_id], linewidth=1.5,
-                linestyle=CHAIN_LINESTYLES[chain_id % len(CHAIN_LINESTYLES)],
-                label=method_name(method) if chain_id == 0 else "_nolegend_")
-
-
-def analyze_pca_comparisons(store: Store, cfg: Config, short_methods: list[str], short_runs: list[int], long_runs: list[int]) -> None:
-    print_metric("pairwise PCA comparisons")
-    long_set = set(long_runs)
-    for method_a, method_b in PAIRWISE_COMPARISONS:
-        if method_a not in short_methods or method_b not in short_methods:
-            continue
-        paired = sorted(set(store.runs(method_a)) & set(store.runs(method_b)))
-        for run_id in paired:
-            draws_a = store.predictions(run_id, method_a, cfg.short_burn)
-            draws_b = store.predictions(run_id, method_b, cfg.short_burn)
-
-            joint = np.vstack([*draws_a, *draws_b])
-            pca = PCA(n_components=2, random_state=0).fit(joint)
-            fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-            for method, draws in ((method_a, draws_a), (method_b, draws_b)):
-                scatter_method(axes[0], pca, draws, method)
-                density_method(axes[1], pca, draws, method)
-            axes[0].set(title="Joint short-chain PCA", xlabel="PC1", ylabel="PC2")
-            axes[1].set(title="PC1 densities", xlabel="PC1", ylabel="density")
-            handles = [Line2D([0], [0], marker=METHOD_MARKERS[m], color="w", markerfacecolor=method_color(m),
-                              markersize=9, label=method_name(m)) for m in (method_a, method_b)]
-            fig.legend(handles=handles, loc="lower center", ncol=2, frameon=False)
-            fig.suptitle(f"Run {run_id:03d}: {method_name(method_a)} vs {method_name(method_b)}")
-            fig.tight_layout(rect=[0, 0.08, 1, 0.94])
-            save_figure(fig, cfg, f"r{run_id:03d}_pca_{method_a}-{method_b}.png")
-
-            if run_id not in long_set:
-                continue
-            long_draws = store.predictions(run_id, LONG_METHOD, 0)
-            long_pca = PCA(n_components=2, random_state=0).fit(long_draws.reshape(-1, long_draws.shape[-1]))
-            fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-            for method, draws in ((method_a, draws_a), (method_b, draws_b)):
-                scatter_method(axes[0], long_pca, draws, method)
-                density_method(axes[1], long_pca, draws, method)
-            for chain_id in range(long_draws.shape[0]):
-                values = long_pca.transform(long_draws[chain_id])[:, 0]
-                if np.ptp(values) > 0:
-                    density = gaussian_kde(values)
-                    grid = np.linspace(values.min(), values.max(), 200)
-                    axes[1].plot(grid, density(grid), color="black", linewidth=1.5,
-                                 linestyle=CHAIN_LINESTYLES[chain_id % len(CHAIN_LINESTYLES)])
-            axes[0].set(title="Long-chain PCA axes", xlabel="PC1", ylabel="PC2")
-            axes[1].set(title="PC1 densities with long reference", xlabel="PC1", ylabel="density")
-            handles.append(Line2D([0], [0], color="black", linewidth=2, label="Default long"))
-            fig.legend(handles=handles, loc="lower center", ncol=3, frameon=False)
-            fig.suptitle(f"Run {run_id:03d}: {method_name(method_a)} vs {method_name(method_b)} on long axes")
-            fig.tight_layout(rect=[0, 0.08, 1, 0.94])
-            save_figure(fig, cfg, f"r{run_id:03d}_pca_long_{method_a}-{method_b}.png")
 
 
 def analyze_chain_separation(
@@ -539,38 +405,6 @@ def analyze_predictive(store: Store, cfg: Config, short_methods: list[str], shor
         summary = frame.groupby(["run", "method"], as_index=False)[["rmse", "crps"]].agg(["mean", "std"])
         summary.columns = ["_".join(col).strip("_") for col in summary.columns.to_flat_index()]
         save_table(summary.reset_index(drop=True), cfg, "predictive_metrics.csv")
-
-
-def analyze_reference_energy(store: Store, cfg: Config, short_methods: list[str], long_runs: list[int]) -> None:
-    print_metric("short-chain versus long-chain energy distance")
-    rows = []
-    rng = np.random.default_rng(2028)
-    for method in short_methods:
-        for run_id in sorted(set(store.runs(method)) & set(long_runs)):
-            short = store.predictions(run_id, method, cfg.short_burn)
-            long = store.predictions(run_id, LONG_METHOD, cfg.long_burn)
-            pair_values = []
-            for short_chain in short:
-                for long_chain in long:
-                    n_use = min(len(short_chain), len(long_chain), cfg.energy_ref_draws)
-                    short_idx = rng.choice(len(short_chain), n_use, replace=False)
-                    long_idx = rng.choice(len(long_chain), n_use, replace=False)
-                    pair_values.append(energy_distance(short_chain[short_idx], long_chain[long_idx]))
-            values = np.asarray(pair_values, dtype=float)
-            mean = float(np.nanmean(values)) if values.size else np.nan
-            std = float(np.nanstd(values, ddof=1)) if values.size > 1 else 0.0
-            rows.append({
-                "run": f"Run {run_id:03d}",
-                "method": method_name(method),
-                "display": f"{mean:.6f} ({std:.6f})",
-            })
-    frame = pd.DataFrame(rows)
-    if not frame.empty:
-        wide = frame.pivot(index="run", columns="method", values="display")
-        ordered_methods = [method_name(method) for method in short_methods]
-        wide = wide.reindex(columns=ordered_methods)
-        save_table(wide.reset_index(), cfg, "energy_vs_long.csv")
-        print(wide.to_string())
 
 
 def plot_method_panels(frame: pd.DataFrame, metrics: dict[str, str], cfg: Config, filename_key: str,
@@ -762,24 +596,32 @@ def worst_direction_projection(draws: np.ndarray, ridge_fraction: float = 1e-8) 
     within_regularized = within + max(float(ridge), ridge_fraction) * np.eye(p)
 
     eigenvalues, eigenvectors = eigh(between_over_n, within_regularized, check_finite=True)
-    direction = eigenvectors[:, -1]
-    anchor = int(np.argmax(np.abs(direction)))
-    if direction[anchor] < 0:
-        direction = -direction
+    directions = eigenvectors[:, -2:][:, ::-1].copy()
+    for column in range(directions.shape[1]):
+        directions[:, column] /= np.linalg.norm(directions[:, column])
+        anchor = int(np.argmax(np.abs(directions[:, column])))
+        if directions[anchor, column] < 0:
+            directions[:, column] *= -1
 
     lambda_max = max(0.0, float(eigenvalues[-1]))
     lambda_second = max(0.0, float(eigenvalues[-2])) if p > 1 else np.nan
-    projected = (draws - grand_mean) @ direction
-    projected_data = xr.DataArray(projected, dims=("chain", "draw"), name="projection")
-    projected_rhat = float(az.rhat(projected_data, method="rank")["projection"].values)
+    projected_2d = np.einsum("mnp,pk->mnk", draws - grand_mean, directions)
+    projected_rhats = []
+    for column in range(projected_2d.shape[2]):
+        projected_data = xr.DataArray(projected_2d[:, :, column], dims=("chain", "draw"), name="projection")
+        projected_rhats.append(float(az.rhat(projected_data, method="rank")["projection"].values))
     mpsrf = np.sqrt((n - 1) / n + ((m + 1) / m) * lambda_max)
     return {
-        "direction": direction,
-        "projected": projected,
+        "direction": directions[:, 0],
+        "directions": directions,
+        "projected": projected_2d[:, :, 0],
+        "projected_2d": projected_2d,
         "lambda_max": lambda_max,
+        "lambda_second": lambda_second,
         "eigen_gap": lambda_max - lambda_second,
         "mpsrf": float(mpsrf),
-        "projected_rhat": projected_rhat,
+        "projected_rhat": projected_rhats[0],
+        "second_projected_rhat": projected_rhats[1],
     }
 
 
@@ -805,17 +647,21 @@ def analyze_worst_direction(store: Store, cfg: Config, short_methods: list[str],
                 "run": run_id,
                 "method": method_name(method),
                 "lambda_max": result["lambda_max"],
+                "lambda_second": result["lambda_second"],
                 "eigen_gap": result["eigen_gap"],
                 "mpsrf": result["mpsrf"],
                 "projected_rhat": result["projected_rhat"],
+                "second_projected_rhat": result["second_projected_rhat"],
             })
-            for point_id, coefficient in enumerate(result["direction"]):
-                direction_rows.append({
-                    "run": run_id,
-                    "method": method_name(method),
-                    "test_point": point_id,
-                    "coefficient": coefficient,
-                })
+            for direction_id in range(result["directions"].shape[1]):
+                for point_id, coefficient in enumerate(result["directions"][:, direction_id]):
+                    direction_rows.append({
+                        "run": run_id,
+                        "method": method_name(method),
+                        "direction": direction_id + 1,
+                        "test_point": point_id,
+                        "coefficient": coefficient,
+                    })
 
             trace_ax, density_ax = axes[row_id]
             projected = result["projected"]
@@ -975,16 +821,10 @@ def main() -> int:
 
     if long_runs and "long" in groups:
         analyze_long_behavior(store, cfg, long_runs)
-    if short_runs and "pca" in groups:
-        analyze_pca_comparisons(store, cfg, short_methods, short_runs, long_runs)
     if short_runs and "separation" in groups:
         analyze_chain_separation(store, cfg, short_methods, short_runs)
     if (short_runs or long_runs) and "predictive" in groups:
         analyze_predictive(store, cfg, short_methods, short_runs, long_runs)
-    if short_runs and long_runs and "energy_ref" in groups:
-        analyze_reference_energy(store, cfg, short_methods, long_runs)
-    elif short_runs and "energy_ref" in groups and not long_runs:
-        print("\n[metric] short-chain versus long-chain energy distance: skipped (no long-chain data)")
     if (short_runs or long_runs) and "rhat" in groups:
         analyze_rhat(store, cfg, short_methods, short_runs, long_runs)
         if short_runs:

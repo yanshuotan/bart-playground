@@ -301,113 +301,21 @@ def run_short_chain(
     *,
     chain_id,
     chain_seed,
-    X_train,
-    y_train,
-    X_test_fixed,
-    y_test_fixed,
-    ndpost,
-    nskip,
-    n_trees,
-    tree_alpha,
-    tree_beta,
-    proposal_probs_default,
-    proposal_probs_mtmh,
-    temperatures,
-    swap_interval,
-    post_swap_repair_steps,
-    multi_tries,
-    dirichlet_prior: bool = False,
-    s_alpha: float = 1.0,
-    store_preds=True,
+    methods=None,
+    **method_kwargs,
 ):
-    """Run the original four methods sequentially inside one chain worker.
+    """Run the requested methods sequentially inside one chain worker.
 
-    This preserves pt+mtmh_2000's method definitions but uses the fixed 100 test
-    points and does not do train_test_split internally.
+    Delegates to run_short_method so the sequential and per-method paths build
+    identical models. Each model is seeded from chain_seed alone, so asking for
+    a subset leaves those methods bit-identical to a full run.
     """
     out = {"chain_id": chain_id, "chain_seed": chain_seed}
-
-    model = DefaultBART(
-        ndpost=ndpost,
-        nskip=nskip,
-        n_trees=n_trees,
-        tol=1,
-        proposal_probs=proposal_probs_default,
-        random_state=chain_seed,
-        dirichlet_prior=dirichlet_prior,
-        s_alpha=s_alpha,
-    )
-    model.fit(X_train, y_train)
-    out["default"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
-    del model
-    gc.collect()
-
-    model = ParallelTemperingBART(
-        ndpost=ndpost,
-        nskip=nskip,
-        n_trees=n_trees,
-        tree_alpha=tree_alpha,
-        tree_beta=tree_beta,
-        tol=1,
-        proposal_probs=proposal_probs_default,
-        random_state=chain_seed,
-        temperatures=temperatures,
-        swap_interval=swap_interval,
-        post_swap_repair_steps=post_swap_repair_steps,
-        store_chain_traces=False,
-        store_swap_diagnostics=False,
-        print_swap_diagnostics=False,
-        dirichlet_prior=dirichlet_prior,
-        s_alpha=s_alpha,
-    )
-    model.fit(X_train, y_train)
-    out["default_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
-    del model
-    gc.collect()
-
-    model = MultiBART(
-        ndpost=ndpost,
-        nskip=nskip,
-        n_trees=n_trees,
-        tree_alpha=tree_alpha,
-        tree_beta=tree_beta,
-        tol=1,
-        proposal_probs=proposal_probs_mtmh,
-        random_state=chain_seed,
-        multi_tries=multi_tries,
-        dirichlet_prior=dirichlet_prior,
-        s_alpha=s_alpha,
-    )
-    model.fit(X_train, y_train)
-    out["mtmh"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
-    del model
-    gc.collect()
-
-    model = ParallelTemperingBART(
-        ndpost=ndpost,
-        nskip=nskip,
-        n_trees=n_trees,
-        tree_alpha=tree_alpha,
-        tree_beta=tree_beta,
-        tol=1,
-        proposal_probs=proposal_probs_mtmh,
-        random_state=chain_seed,
-        temperatures=temperatures,
-        swap_interval=swap_interval,
-        post_swap_repair_steps=post_swap_repair_steps,
-        store_chain_traces=False,
-        store_swap_diagnostics=False,
-        print_swap_diagnostics=False,
-        sampler_kind="multi",
-        multi_tries=multi_tries,
-        dirichlet_prior=dirichlet_prior,
-        s_alpha=s_alpha,
-    )
-    model.fit(X_train, y_train)
-    out["mtmh_pt"] = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
-    del model
-    gc.collect()
-
+    for method in (METHODS_SHORT if methods is None else methods):
+        result = run_short_method(
+            method=method, chain_id=chain_id, chain_seed=chain_seed, **method_kwargs
+        )
+        out[method] = result["result"]
     return out
 
 
@@ -496,8 +404,9 @@ def save_short_run(
     split_info: dict[str, Any],
     chain_results: list[dict[str, Any]],
     metadata: dict[str, Any],
+    methods=None,
 ):
-    for method in METHODS_SHORT:
+    for method in (METHODS_SHORT if methods is None else methods):
         arrays = {
             "sigmas": np.array([r[method]["sigmas"] for r in chain_results]),
             "rmses": np.array([r[method]["rmses"] for r in chain_results]),
@@ -590,11 +499,14 @@ def run_long_default_chain_streaming(
     store_preds=True,
     dirichlet_prior: bool = False,
     s_alpha: float = 1.0,
+    tail_ndpost: int = 0,
 ):
     if ndpost % store_every != 0:
         raise ValueError("ndpost must be divisible by store_every")
     if chunk_size % store_every != 0:
         raise ValueError("chunk_size must be divisible by store_every")
+    if tail_ndpost < 0 or tail_ndpost > chunk_size:
+        raise ValueError("tail_ndpost must be between 0 and chunk_size")
 
     chain_dir = Path(tmp_dir) / f"run{run_id:03d}_chain{chain_id:03d}"
     if chain_dir.exists():
@@ -603,6 +515,9 @@ def run_long_default_chain_streaming(
     sigmas_file = chain_dir / "sigmas_rows.csv"
     rmses_file = chain_dir / "rmses_rows.csv"
     preds_file = chain_dir / "preds_rows.csv"
+    tail_sigmas_file = chain_dir / "tail_sigmas_rows.csv"
+    tail_rmses_file = chain_dir / "tail_rmses_rows.csv"
+    tail_preds_file = chain_dir / "tail_preds_rows.csv"
 
     first_chunk = min(chunk_size, ndpost)
     model = DefaultBART(
@@ -643,10 +558,29 @@ def run_long_default_chain_streaming(
         if store_preds:
             _append_numeric_rows(preds_file, np.asarray(chunk_result["preds"]).T)
 
+        # The closing chunk is also kept at stride 1, so the stored draws
+        # include one stretch of consecutive iterations.
+        tail = []
+        if tail_ndpost and remaining - chunk_post == 0:
+            tail = _thin_trace(
+                chunk_trace, ndpost=chunk_post, nskip=current_nskip, store_every=1
+            )[-tail_ndpost:]
+            model.trace = tail
+            model.ndpost = len(tail)
+            tail_result = summarize_thinned_default(
+                model, X_test_fixed, y_test_fixed, store_preds=store_preds
+            )
+            _append_numeric_rows(tail_sigmas_file, np.asarray(tail_result["sigmas"]).reshape(-1, 1))
+            _append_numeric_rows(tail_rmses_file, np.asarray(tail_result["rmses"]).reshape(-1, 1))
+            if store_preds:
+                _append_numeric_rows(tail_preds_file, np.asarray(tail_result["preds"]).T)
+            del tail_result
+
         last_state = chunk_trace[-1]
         _cleanup_sampler_after_long_chunk(model, thinned=thinned, last_state=last_state)
+        _cleanup_sampler_after_long_chunk(model, thinned=tail, last_state=last_state)
         model.trace = [last_state]
-        del chunk_trace, thinned, chunk_result
+        del chunk_trace, thinned, chunk_result, tail
         gc.collect()
         remaining -= chunk_post
         chunks_done += 1
@@ -661,6 +595,50 @@ def run_long_default_chain_streaming(
     }
 
 
+def _assemble_long_tail(
+    *,
+    store_root: Path,
+    dataset_tag: str,
+    run_id: int,
+    split_info: dict[str, Any],
+    chain_results: list[dict[str, Any]],
+    metadata: dict[str, Any],
+    store_preds: bool,
+    tail_ndpost: int,
+):
+    """Save the consecutive closing stretch under its own method name."""
+    method = "default_long_tail"
+    sigmas_by_chain = []
+    rmses_by_chain = []
+    preds_by_chain = []
+    for cr in chain_results:
+        chain_dir = Path(cr["tmp_dir"])
+        sigmas_by_chain.append(_load_2d_or_empty(chain_dir / "tail_sigmas_rows.csv", 1).reshape(-1, 1))
+        rmses_by_chain.append(_load_2d_or_empty(chain_dir / "tail_rmses_rows.csv", 1).reshape(-1))
+        if store_preds:
+            rows = _load_2d_or_empty(chain_dir / "tail_preds_rows.csv", split_info["X_test_fixed"].shape[0])
+            preds_by_chain.append(rows.T)
+
+    sigmas = np.asarray(sigmas_by_chain)
+    rmses = np.asarray(rmses_by_chain)
+    base = store_root / dataset_tag
+    _save_numeric_csv(base / "sigmas" / f"{dataset_tag}__run{run_id:03d}__{method}__sigmas.csv", sigmas)
+    _save_numeric_csv(base / "rmses" / f"{dataset_tag}__run{run_id:03d}__{method}__rmses.csv", rmses)
+    tail_metadata = dict(metadata)
+    tail_metadata["phase"] = method
+    tail_metadata["tail_ndpost"] = tail_ndpost
+    tail_metadata["tail_store_every"] = 1
+    tail_metadata[f"{method}_sigmas_shape"] = str(sigmas.shape)
+    tail_metadata[f"{method}_rmses_shape"] = str(rmses.shape)
+    if store_preds:
+        preds = np.asarray(preds_by_chain)
+        _save_numeric_csv(base / "preds" / f"{dataset_tag}__run{run_id:03d}__{method}__preds.csv", preds)
+        tail_metadata[f"{method}_preds_shape"] = str(preds.shape)
+    _write_key_value_csv(
+        base / "metadata" / f"{dataset_tag}__run{run_id:03d}__{method}_metadata.csv", tail_metadata
+    )
+
+
 def assemble_long_default(
     *,
     store_root: Path,
@@ -670,6 +648,7 @@ def assemble_long_default(
     chain_results: list[dict[str, Any]],
     metadata: dict[str, Any],
     store_preds=True,
+    tail_ndpost: int = 0,
 ):
     sigmas_by_chain = []
     rmses_by_chain = []
@@ -684,6 +663,18 @@ def assemble_long_default(
         if store_preds:
             preds_rows = _load_2d_or_empty(chain_dir / "preds_rows.csv", split_info["X_test_fixed"].shape[0])
             preds_by_chain.append(preds_rows.T)
+
+    if tail_ndpost:
+        _assemble_long_tail(
+            store_root=store_root,
+            dataset_tag=dataset_tag,
+            run_id=run_id,
+            split_info=split_info,
+            chain_results=chain_results,
+            metadata=metadata,
+            store_preds=store_preds,
+            tail_ndpost=tail_ndpost,
+        )
 
     sigmas = np.asarray(sigmas_by_chain)
     rmses = np.asarray(rmses_by_chain)
@@ -724,6 +715,7 @@ def run_fixed100_dataset(
     long_nskip: int = 0,
     long_store_every: int = 100,
     long_chunk_size: int = 10_000,
+    long_tail_ndpost: int = 0,
     n_fixed_test_points: int = 100,
     train_fraction: float = 0.75,
     fixed_test_seed: int = GLOBAL_FIXED_TEST_SEED,
@@ -751,7 +743,12 @@ def run_fixed100_dataset(
     dirichlet_prior: bool = False,
     s_alpha: float = 1.0,
     parallel_methods: bool = False,
+    short_methods=None,
 ):
+    short_methods = list(METHODS_SHORT if short_methods is None else short_methods)
+    unknown = [m for m in short_methods if m not in METHODS_SHORT]
+    if unknown:
+        raise ValueError(f"Unknown short methods {unknown}; choices={METHODS_SHORT}")
     if not run_short and not run_long:
         raise ValueError("At least one of run_short or run_long must be True.")
     if proposal_probs_default is None:
@@ -886,7 +883,7 @@ def run_fixed100_dataset(
                         **short_kwargs,
                     )
                     for chain_id in range(n_chains)
-                    for method in METHODS_SHORT
+                    for method in short_methods
                 )
                 short_results = []
                 for chain_id in range(n_chains):
@@ -901,6 +898,7 @@ def run_fixed100_dataset(
                     delayed(run_short_chain)(
                         chain_id=chain_id,
                         chain_seed=base_chain_seed + run_id * 1000 + chain_id,
+                        methods=short_methods,
                         **short_kwargs,
                     )
                     for chain_id in range(n_chains)
@@ -911,6 +909,7 @@ def run_fixed100_dataset(
                 run_id=run_id,
                 split_info=split_info,
                 chain_results=short_results,
+                methods=short_methods,
                 metadata={
                     "phase": "short_methods",
                     "run_id": run_id,
@@ -919,7 +918,7 @@ def run_fixed100_dataset(
                     "short_nskip": short_nskip,
                     "n_chains": n_chains,
                     "n_jobs": n_jobs,
-                    "methods": METHODS_SHORT,
+                    "methods": short_methods,
                     "temperatures": run_temperatures,
                     "ladder_mean_rates": ladder_mean_rates,
                     "ladder_history": ladder_history,
@@ -964,6 +963,7 @@ def run_fixed100_dataset(
                 store_preds=store_preds,
                 dirichlet_prior=dirichlet_prior,
                 s_alpha=s_alpha,
+                tail_ndpost=long_tail_ndpost,
             )
             for chain_id in range(n_chains)
         )
@@ -981,12 +981,14 @@ def run_fixed100_dataset(
                 "long_nskip": long_nskip,
                 "long_store_every": long_store_every,
                 "long_chunk_size": long_chunk_size,
+                "long_tail_ndpost": long_tail_ndpost,
                 "n_chains": n_chains,
                 "n_jobs": n_jobs,
                 "dirichlet_prior": dirichlet_prior,
                 "s_alpha": s_alpha,
             },
             store_preds=store_preds,
+            tail_ndpost=long_tail_ndpost,
         )
         shutil.rmtree(tmp_root, ignore_errors=True)
         try:

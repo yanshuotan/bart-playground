@@ -31,4 +31,4 @@ All values summarize five runs per dataset.
 | fixed100_FriedmanSparseDir_p200 | 2.4533 | 1.4909 | 1.3422 | 3.9360 | 1.0004 |
 | fixed100_SeoulBike | 2.5936 | 1.6351 | 1.3119 | 1166.5787 | 1.2146 |
 
-The long chains are empirical references; their own R-hat summaries qualify PCA-based interpretation.
+The long chains are empirical references; their own R-hat summaries qualify the production-length diagnostics.

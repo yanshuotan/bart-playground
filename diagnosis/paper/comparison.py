@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Paper-facing four-method comparison for the three fixed-100 datasets.
+"""Paper-facing four-method comparison for the current fixed-100 study.
 
 This file is intentionally self-contained. It does not import code from
 ``diagnosis/exploratory``.
@@ -25,7 +25,19 @@ from scipy.linalg import eigh
 from scipy.stats import gaussian_kde
 
 
-DATASETS = ("fixed100_Abalone", "fixed100_Concrete", "fixed100_Friedman")
+DATASETS = (
+    "fixed100_Abalone",
+    "fixed100_Airfoil",
+    "fixed100_CCPP",
+    "fixed100_CalHousing_subsample5000",
+    "fixed100_Concrete",
+    "fixed100_CPUAct",
+    "fixed100_Friedman",
+    "fixed100_FriedmanSparseDir_p20",
+    "fixed100_FriedmanSparseDir_p100",
+    "fixed100_FriedmanSparseDir_p200",
+    "fixed100_SeoulBike",
+)
 RUNS = tuple(range(5))
 METHODS = ("default", "default_pt", "mtmh", "mtmh_pt")
 METHOD_NAMES = {
@@ -173,7 +185,6 @@ def summarize_rhat(values: np.ndarray) -> dict[str, float]:
         "q75": float(np.nanquantile(values, 0.75)),
         "q90": float(np.nanquantile(values, 0.90)),
         "maximum": float(np.nanmax(values)),
-        "fraction_above_1_01": float(np.nanmean(values > 1.01)),
     }
 
 
@@ -228,157 +239,52 @@ def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.nd
     eigenvalues, eigenvectors = eigh(between / n, within + ridge * np.eye(p))
     order = np.argsort(eigenvalues)[::-1]
     eigenvalues = np.maximum(eigenvalues[order], 0.0)
-    direction = eigenvectors[:, order[0]]
-    direction /= np.linalg.norm(direction)
-    projected = np.einsum("mnp,p->mn", draws, direction)
-    data = xr.DataArray(projected, dims=("chain", "draw"), name="projection")
+    directions = eigenvectors[:, order[:2]].copy()
+    for column in range(directions.shape[1]):
+        directions[:, column] /= np.linalg.norm(directions[:, column])
+        anchor = int(np.argmax(np.abs(directions[:, column])))
+        if directions[anchor, column] < 0:
+            directions[:, column] *= -1
+    projected_2d = np.einsum("mnp,pk->mnk", draws - grand[None, None, :], directions)
+    projected_rhats = []
+    for column in range(projected_2d.shape[2]):
+        data = xr.DataArray(projected_2d[:, :, column], dims=("chain", "draw"), name="projection")
+        projected_rhats.append(float(az.rhat(data, method="rank")["projection"].values))
     return {
         "lambda_max": float(eigenvalues[0]),
+        "lambda_second": float(eigenvalues[1]),
         "eigen_gap": float(eigenvalues[0] - eigenvalues[1]),
-        "projected_rhat": float(az.rhat(data, method="rank")["projection"].values),
-        "projected": projected,
+        "projected_rhat": projected_rhats[0],
+        "second_projected_rhat": projected_rhats[1],
+        "directions": directions,
+        "projected": projected_2d[:, :, 0],
+        "projected_2d": projected_2d,
     }
 
 
-def chain_separation(draws: np.ndarray, max_draws: int, seed: int) -> dict[str, float | int]:
-    rng = np.random.default_rng(seed)
-    n_use = min(max_draws, draws.shape[1])
-    sampled = []
-    for chain in draws:
-        indices = np.sort(rng.choice(len(chain), n_use, replace=False)) if n_use < len(chain) else np.arange(len(chain))
-        sampled.append(chain[indices])
-    sampled = np.stack(sampled)
-    centers = sampled.mean(axis=1)
+def chain_geometry(draws: np.ndarray) -> dict[str, float | int]:
+    """Compute original-space chain geometry from every supplied draw."""
+    draws = np.asarray(draws, dtype=float)
+    if draws.ndim != 3:
+        raise ValueError(f"Expected (chain, draw, test_point); got {draws.shape}")
+    centers = draws.mean(axis=1)
     centroid_distances = [
         np.linalg.norm(centers[left] - centers[right])
         for left in range(len(centers))
         for right in range(left + 1, len(centers))
     ]
-    grand = sampled.reshape(-1, sampled.shape[-1]).mean(axis=0)
+    grand = draws.reshape(-1, draws.shape[-1]).mean(axis=0)
     between = np.mean(np.sum((centers - grand) ** 2, axis=1))
     within = np.mean([
         np.mean(np.sum((chain - center) ** 2, axis=1))
-        for chain, center in zip(sampled, centers)
+        for chain, center in zip(draws, centers)
     ])
-    # The ratio has no scale of its own, so divide it by the same statistic
-    # computed on four consecutive blocks of a single chain and multiply by the
-    # block count. A block holds a quarter of a chain's draws, so its centroid
-    # scatters four times as far, and the correction puts perfect mixing at 1
-    # whatever the autocorrelation.
-    blocks = 4
-    length = sampled.shape[1] // blocks
-    nulls = []
-    for chain in sampled:
-        pieces = chain[: blocks * length].reshape(blocks, length, chain.shape[-1])
-        piece_centers = pieces.mean(axis=1)
-        piece_between = np.mean(np.sum((piece_centers - piece_centers.mean(axis=0)) ** 2, axis=1))
-        piece_within = np.mean([
-            np.mean(np.sum((piece - center) ** 2, axis=1))
-            for piece, center in zip(pieces, piece_centers)
-        ])
-        nulls.append(piece_between / piece_within if piece_within > 0 else np.nan)
-    null = float(np.nanmean(nulls))
     ratio = float(between / within)
     return {
         "centroid_distance": float(np.mean(centroid_distances)),
         "between_within_ratio": ratio,
-        "separation_within_null": null,
-        "separation_index": float(blocks * ratio / null) if null > 0 else float("nan"),
-        "separation_blocks": blocks,
-        "separation_draws_per_chain": n_use,
+        "geometry_draws_per_chain": draws.shape[1],
     }
-
-
-def euclidean_distances(left: np.ndarray, right: np.ndarray) -> np.ndarray:
-    left_sq = np.sum(left * left, axis=1, keepdims=True)
-    right_sq = np.sum(right * right, axis=1, keepdims=True).T
-    return np.sqrt(np.maximum(left_sq + right_sq - 2.0 * (left @ right.T), 0.0))
-
-
-def energy_distance(left: np.ndarray, right: np.ndarray) -> float:
-    cross = euclidean_distances(left, right).mean()
-    left_dist = euclidean_distances(left, left)
-    right_dist = euclidean_distances(right, right)
-    left_within = (left_dist.sum() - np.trace(left_dist)) / (len(left) * (len(left) - 1))
-    right_within = (right_dist.sum() - np.trace(right_dist)) / (len(right) * (len(right) - 1))
-    return float(2.0 * cross - left_within - right_within)
-
-
-def chain_pair_energy(
-    short: np.ndarray,
-    long: np.ndarray,
-    draws_per_chain: int,
-    seed: int,
-) -> tuple[float, float, np.ndarray]:
-    """Average energy distance over all short-chain/long-chain pairs.
-
-    Each chain is sampled independently and without replacement before forming
-    the Cartesian product. With four short and four long chains, the run-level
-    estimand is therefore the mean of 16 chain-pair energy distances.
-    """
-    if short.shape[0] != 4 or long.shape[0] != 4:
-        raise ValueError(
-            "Chain-pair energy distance requires four short and four long chains; "
-            f"received {short.shape[0]} and {long.shape[0]}."
-        )
-    if short.shape[1] < draws_per_chain or long.shape[1] < draws_per_chain:
-        raise ValueError(
-            f"Energy distance requested {draws_per_chain} draws per chain, but the "
-            f"available post-burn lengths are {short.shape[1]} and {long.shape[1]}."
-        )
-
-    rng = np.random.default_rng(seed)
-    short_sample = np.stack([
-        chain[rng.choice(len(chain), draws_per_chain, replace=False)]
-        for chain in short
-    ])
-    long_sample = np.stack([
-        chain[rng.choice(len(chain), draws_per_chain, replace=False)]
-        for chain in long
-    ])
-    pair_values = np.asarray([
-        energy_distance(short_sample[short_chain], long_sample[long_chain])
-        for short_chain in range(short_sample.shape[0])
-        for long_chain in range(long_sample.shape[0])
-    ])
-    return float(pair_values.mean()), float(pair_values.std(ddof=1)), pair_values
-
-
-def reference_self_energy(
-    long: np.ndarray,
-    draws_per_chain: int,
-    seed: int,
-) -> tuple[float, float, np.ndarray]:
-    """Energy distance among the long reference chains themselves.
-
-    Scored exactly like the short/long pairs, so it is the resolution floor of
-    the comparison: the distance the metric reports when both sides come from
-    the same sampler at the same length. A method cannot be shown to be closer
-    to the reference than the reference is to itself.
-
-    The estimator is close to unbiased, so where the long chains mix this sits
-    near the statistic's fluctuation scale and is small. Where they do not, it
-    is their real disagreement, and a floor of that size says the dataset has no
-    single reference posterior to measure against.
-    """
-    if long.shape[0] != 4:
-        raise ValueError(f"Requires four long chains; received {long.shape[0]}.")
-    if long.shape[1] < draws_per_chain:
-        raise ValueError(
-            f"Energy floor requested {draws_per_chain} draws per chain, but the "
-            f"available post-burn length is {long.shape[1]}."
-        )
-    rng = np.random.default_rng(seed)
-    sample = np.stack([
-        chain[rng.choice(len(chain), draws_per_chain, replace=False)]
-        for chain in long
-    ])
-    pair_values = np.asarray([
-        energy_distance(sample[left], sample[right])
-        for left in range(sample.shape[0])
-        for right in range(left + 1, sample.shape[0])
-    ])
-    return float(pair_values.mean()), float(pair_values.std(ddof=1)), pair_values
 
 
 def crps_from_samples(samples: np.ndarray, truth: np.ndarray) -> np.ndarray:
@@ -491,44 +397,10 @@ def dataset_summary(run_frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def energy_resolution(summary: pd.DataFrame) -> pd.DataFrame:
-    """Dataset-level rho: mean scaled energy over mean floor, per method.
-
-    Deliberately not the mean of per-run ratios. The floor estimates a quantity
-    close to zero wherever the reference chains are nearly exchangeable, so an
-    individual run's floor can be negative and its ratio meaningless; dividing
-    the two five-run means keeps the quantity stable. `floor_resolved` reports
-    whether the mean floor exceeds twice its across-run standard deviation, and
-    a ratio is reported only when it does.
-    """
-    rows = []
-    for dataset, frame in summary.groupby("dataset", sort=False):
-        floor = float(frame["scaled_energy_floor_mean"].iloc[0])
-        floor_sd = float(frame["scaled_energy_floor_sd"].iloc[0])
-        resolved = bool(floor > 2 * floor_sd)
-        for _, row in frame.iterrows():
-            rows.append({
-                "dataset": dataset,
-                "method": row["method"],
-                "scaled_energy_floor": floor,
-                "scaled_energy_floor_sd": floor_sd,
-                "floor_resolved": resolved,
-                "rho": row["scaled_energy_distance_mean"] / floor if resolved else np.nan,
-            })
-    return pd.DataFrame(rows)
-
-
-def format_rho(frame: pd.DataFrame, dataset: str, method: str) -> str:
-    row = frame[(frame["dataset"] == dataset) & (frame["method"] == method)]
-    if row.empty or not bool(row.iloc[0]["floor_resolved"]):
-        return "floor unresolved"
-    return f"{row.iloc[0]['rho']:.1f}x"
-
-
 def paired_ratios(run_frame: pd.DataFrame) -> pd.DataFrame:
     metrics = [
         "worst_projected_rhat", "cross_rhat_median", "within_rhat_median",
-        "centroid_distance", "between_within_ratio", "energy_distance",
+        "centroid_distance", "between_within_ratio",
         "rmse", "crps",
     ]
     rows = []
@@ -599,9 +471,8 @@ def write_summary(
     lines.extend(f"- `{key}`: {value}" for key, value in settings.items())
     lines.extend([
         "",
-        "`short_burn` is also the start of the worst-direction calculation. `long_burn` counts stored long-chain draws; because the long chains were saved after downsampling, its effective burn-in in original iterations is `long_burn × long_store_every`.",
+        "`short_burn` is also the start of the worst-direction calculation.",
     ])
-    resolution = energy_resolution(summary)
     for dataset in summary["dataset"].drop_duplicates():
         lines.extend(["", f"## {dataset}", ""])
         frame = summary[summary["dataset"] == dataset].copy()
@@ -611,28 +482,10 @@ def write_summary(
             "cross R-hat": [format_mean_sd(row, "cross_rhat_median") for _, row in frame.iterrows()],
             "within R-hat": [format_mean_sd(row, "within_rhat_median") for _, row in frame.iterrows()],
             "B/W ratio": [format_mean_sd(row, "between_within_ratio") for _, row in frame.iterrows()],
-            "scaled energy": [format_mean_sd(row, "scaled_energy_distance") for _, row in frame.iterrows()],
-            "energy / floor": [format_rho(resolution, dataset, row["method"]) for _, row in frame.iterrows()],
             "relative RMSE": [format_mean_sd(row, "relative_rmse") for _, row in frame.iterrows()],
             "relative CRPS": [format_mean_sd(row, "relative_crps") for _, row in frame.iterrows()],
         })
         lines.append(markdown_table(table))
-        floor = frame["scaled_energy_floor_mean"].iloc[0]
-        floor_sd = frame["scaled_energy_floor_sd"].iloc[0]
-        if floor <= 2 * floor_sd:
-            note = ("the reference chains are not distinguishable from each other at this "
-                    "sample size, so the floor is below detection and the ratios are omitted")
-        else:
-            worst = resolution[resolution["dataset"] == dataset]["rho"].min()
-            note = ("the smallest ratio above is {:.1f}, so the reference disagrees with itself "
-                    "by as much as the closest method differs from it and no ordering should be "
-                    "read from this dataset".format(worst) if worst < 2 else
-                    "the smallest ratio above is {:.1f}, so the comparison is resolved".format(worst))
-        lines.extend([
-            "",
-            f"Reference floor (scaled energy among the six pairs of long chains): "
-            f"{floor:.5f} (SD {floor_sd:.5f} across runs); {note}.",
-        ])
         timing_frame = timing[timing["dataset"] == dataset]
         if not timing_frame.empty:
             timing_display = timing_frame.copy()
@@ -643,10 +496,7 @@ def write_summary(
     lines.extend(["", "## Interpretation guardrails", "",
                   "- Relative RMSE uses the training-mean predictor as 1; relative CRPS uses the empirical training-target climatology as 1. Lower is better.",
                   "- Segment R-hat uses temporally dependent pseudo-chains and is a stability diagnostic, not a formal convergence certificate.",
-                  f"- Energy distance is averaged over all {settings['energy_chain_pairs']} short-chain/long-chain pairs, using {settings['energy_draws_per_chain']:,} randomly sampled draws from each chain.",
-                  "- The chain-pair mean is divided by training-target SD times sqrt(number of test points); the within-run SD across the 16 pairs is retained in the numerical tables.",
-                  "- The reference floor is the mean energy distance over the six pairs of long reference chains, scored with the same draw count and scale. `energy / floor` below about two is not a resolvable difference.",
-                  "- Raw RMSE, CRPS, and energy distance remain available in the CSV tables.",
+                  "- Raw RMSE and CRPS remain available in the CSV tables.",
                   "- Timing reports the actual parallel PT implementation and omits serial PT speed-up.", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -663,7 +513,6 @@ def write_root_summary(
     timing: pd.DataFrame,
 ) -> None:
     rows = []
-    resolution = energy_resolution(summary)
     for dataset in summary["dataset"].drop_duplicates():
         dataset_frame = summary[summary["dataset"] == dataset].set_index("method")
         default = dataset_frame.loc["Default"]
@@ -676,9 +525,6 @@ def write_root_summary(
             "cross R-hat": transition(default["cross_rhat_median_mean"], combined["cross_rhat_median_mean"]),
             "within R-hat": transition(default["within_rhat_median_mean"], combined["within_rhat_median_mean"]),
             "B/W ratio": transition(default["between_within_ratio_mean"], combined["between_within_ratio_mean"]),
-            "scaled energy": transition(default["scaled_energy_distance_mean"], combined["scaled_energy_distance_mean"]),
-            "energy floor": f"{default['scaled_energy_floor_mean']:.5f}",
-            "MTMH+PT / floor": format_rho(resolution, dataset, "MTMH+PT"),
             "relative RMSE": transition(default["relative_rmse_mean"], combined["relative_rmse_mean"]),
             "relative CRPS": transition(default["relative_crps_mean"], combined["relative_crps_mean"]),
             "time / Default": f"{cost:.2f}x" if np.isfinite(cost) else "not measured",
@@ -687,7 +533,7 @@ def write_root_summary(
     compact = pd.DataFrame(rows)
     mixing_metrics = [
         "worst_projected_rhat_mean", "cross_rhat_median_mean", "within_rhat_median_mean",
-        "between_within_ratio_mean", "scaled_energy_distance_mean",
+        "between_within_ratio_mean",
     ]
     combined_wins = all(
         frame.set_index("method")[metric].idxmin() == "MTMH+PT"
@@ -703,7 +549,7 @@ def write_root_summary(
              f"This directory contains standalone paper-facing analyses for five paired runs of {n_datasets} datasets.", "",
              "## Main result", ""]
     if combined_wins:
-        lines.append(f"MTMH+PT has the lowest five-run mean for all five reported mixing diagnostics in all {n_datasets} datasets.")
+        lines.append(f"MTMH+PT has the lowest five-run mean for all four reported mixing diagnostics in all {n_datasets} datasets.")
     lines.extend([
         "Predictive changes are reported relative to training-only baselines.",
         f"The measured MTMH+PT cost is {cost_min:.2f}x to {cost_max:.2f}x the Default runtime per chain "
@@ -715,7 +561,7 @@ def write_root_summary(
         "## Four-method comparison", "",
         f"See [{comparison_summary.name}]({comparison_summary.name}).", "",
         "## Interpretation", "",
-        "The results support improved mixing through agreement across worst-direction, pointwise cross-chain, within-chain segment, original-space separation, and scaled energy-distance diagnostics. Relative RMSE and CRPS make predictive performance comparable across datasets. The timing values quantify the associated computational cost. Segment R-hat is a stability diagnostic based on dependent pseudo-chains, and the long Default run is an empirical reference for energy distance.", "",
+        "The results support improved mixing through agreement across worst-direction, pointwise cross-chain, within-chain segment, and original-space separation diagnostics. Relative RMSE and CRPS make predictive performance comparable across datasets. The timing values quantify the associated computational cost. Segment R-hat is a stability diagnostic based on dependent pseudo-chains.", "",
     ])
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -736,13 +582,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--segment-length", type=int, default=1000)
     parser.add_argument("--n-segments", type=int, default=4)
     parser.add_argument("--short-burn", type=int, default=3000)
-    parser.add_argument("--long-burn", type=int, default=3000)
-    parser.add_argument("--separation-draws", type=int, default=1500)
-    parser.add_argument("--energy-draws", type=int, default=1000)
     parser.add_argument(
-        "--energy-only",
+        "--geometry-only",
         action="store_true",
-        help="Recompute chain-pair energy metrics and dependent summaries from existing tables.",
+        help="Recompute original-space chain geometry and dependent tables from existing summaries.",
     )
     parser.add_argument("--ridge-fraction", type=float, default=1e-8)
     parser.add_argument("--dpi", type=int, default=150)
@@ -765,97 +608,39 @@ def main() -> int:
         "segment_length": args.segment_length,
         "segments_per_block": args.n_segments,
         "short_burn": args.short_burn,
-        "long_burn": args.long_burn,
-        "chain_separation_draws_per_chain": args.separation_draws,
-        "energy_chain_pairs": "4 x 4",
-        "energy_draws_per_chain": args.energy_draws,
+        "chain_geometry_draws_per_chain": "all post-burn draws",
     }
 
-    if args.energy_only:
+    if args.geometry_only:
         run_path = table_dir / "comparison_run_summary.csv"
-        baseline_path = table_dir / "predictive_and_energy_baselines.csv"
-        if not run_path.exists() or not baseline_path.exists():
-            raise FileNotFoundError(
-                "--energy-only requires existing comparison_run_summary.csv and "
-                "predictive_and_energy_baselines.csv tables."
-            )
+        if not run_path.exists():
+            raise FileNotFoundError(f"Geometry-only update requires {run_path}")
         run_frame = pd.read_csv(run_path)
-        baseline_frame = pd.read_csv(baseline_path)
-        pair_rows = []
-        for dataset_index, dataset in enumerate(args.datasets):
+        for dataset in args.datasets:
             for run in args.runs:
-                print(f"[energy] {dataset} run {run:03d}", flush=True)
-                baseline_match = baseline_frame[
-                    (baseline_frame["dataset"] == dataset) & (baseline_frame["run"] == run)
-                ]
-                if len(baseline_match) != 1:
-                    raise ValueError(f"Missing unique energy scale for {dataset} run {run:03d}")
-                energy_scale = float(baseline_match.iloc[0]["energy_scale_train_sd_sqrt_p"])
-                long_draws = predictions(args.store_root, dataset, run, "default_long", args.long_burn)
-                floor, floor_pair_sd, floor_values = reference_self_energy(
-                    long_draws, args.energy_draws, seed=9090 + 10000 * dataset_index + 100 * run,
-                )
-                scaled_floor = floor / energy_scale
-                baseline_mask = (
-                    (baseline_frame["dataset"] == dataset) & (baseline_frame["run"] == run)
-                )
-                baseline_frame.loc[baseline_mask, "energy_floor"] = floor
-                baseline_frame.loc[baseline_mask, "energy_floor_pair_sd"] = floor_pair_sd
-                baseline_frame.loc[baseline_mask, "scaled_energy_floor"] = scaled_floor
-                for pair_index, value in enumerate(floor_values):
-                    pair_rows.append({
-                        "dataset": dataset, "run": run, "method": "Reference floor",
-                        "short_chain": -1, "long_chain": pair_index,
-                        "energy_distance": value,
-                        "scaled_energy_distance": value / energy_scale,
-                        "draws_per_chain": args.energy_draws,
-                    })
-                for method_index, method in enumerate(METHODS):
-                    post_burn = predictions(
-                        args.store_root, dataset, run, method, args.short_burn
-                    )
-                    energy, pair_sd, pair_values = chain_pair_energy(
-                        post_burn,
-                        long_draws,
-                        args.energy_draws,
-                        seed=4040 + 10000 * dataset_index + 100 * run + method_index,
-                    )
-                    method_label = METHOD_NAMES[method]
+                print(f"[comparison:geometry] {dataset} run {run:03d}", flush=True)
+                for method in METHODS:
+                    post_burn = predictions(args.store_root, dataset, run, method, args.short_burn)
+                    geometry = chain_geometry(post_burn)
                     mask = (
                         (run_frame["dataset"] == dataset)
                         & (run_frame["run"] == run)
-                        & (run_frame["method"] == method_label)
+                        & (run_frame["method"] == METHOD_NAMES[method])
                     )
-                    if mask.sum() != 1:
+                    if int(mask.sum()) != 1:
                         raise ValueError(
-                            f"Missing unique run-summary row for {dataset} run {run:03d} {method_label}"
+                            f"Expected one summary row for {dataset}, run {run:03d}, {METHOD_NAMES[method]}"
                         )
-                    run_frame.loc[mask, "energy_distance"] = energy
-                    run_frame.loc[mask, "energy_pair_sd"] = pair_sd
-                    run_frame.loc[mask, "scaled_energy_distance"] = energy / energy_scale
-                    run_frame.loc[mask, "scaled_energy_pair_sd"] = pair_sd / energy_scale
-                    run_frame.loc[mask, "scaled_energy_floor"] = scaled_floor
-                    for pair_index, value in enumerate(pair_values):
-                        pair_rows.append({
-                            "dataset": dataset,
-                            "run": run,
-                            "method": method_label,
-                            "short_chain": pair_index // 4,
-                            "long_chain": pair_index % 4,
-                            "energy_distance": value,
-                            "scaled_energy_distance": value / energy_scale,
-                            "draws_per_chain": args.energy_draws,
-                        })
+                    for key, value in geometry.items():
+                        run_frame.loc[mask, key] = value
 
         summary_frame = dataset_summary(run_frame)
         ratio_frame = paired_ratios(run_frame)
         timing_frame = parse_timing_summary(args.timing_summary)
         paper_table = summary_frame.merge(timing_frame, on=["dataset", "method"], how="left")
         run_frame.to_csv(run_path, index=False)
-        baseline_frame.to_csv(baseline_path, index=False)
         summary_frame.to_csv(table_dir / "comparison_dataset_summary.csv", index=False)
         ratio_frame.to_csv(table_dir / "paired_ratios_to_default.csv", index=False)
-        pd.DataFrame(pair_rows).to_csv(table_dir / "comparison_energy_chain_pairs.csv", index=False)
         paper_table.to_csv(table_dir / "paper_table_summary.csv", index=False)
         write_summary(summary_path, settings, summary_frame, timing_frame)
         diagnosis_summary = Path(__file__).resolve().parent / "diagnosis_summary.md"
@@ -866,11 +651,11 @@ def main() -> int:
             summary_frame,
             timing_frame,
         )
-        print(f"[energy] updated tables: {table_dir}", flush=True)
+        print(f"[comparison:geometry] updated tables: {table_dir}", flush=True)
         return 0
 
-    run_rows, baseline_rows, pair_rows, cross_all, within_all = [], [], [], [], []
-    for dataset_index, dataset in enumerate(args.datasets):
+    run_rows, baseline_rows, cross_all, within_all = [], [], [], []
+    for dataset in args.datasets:
         full_targets = full_target_vector(args.store_root, dataset)
         for run in args.runs:
             print(f"[comparison] {dataset} run {run:03d}", flush=True)
@@ -879,49 +664,23 @@ def main() -> int:
                 args.store_root, dataset, run, full_targets, truth
             )
             baseline = predictive_baselines(train_targets, truth)
-            energy_scale = baseline["train_sd"] * np.sqrt(len(truth))
-            long_draws = predictions(args.store_root, dataset, run, "default_long", args.long_burn)
-            floor, floor_pair_sd, floor_values = reference_self_energy(
-                long_draws, args.energy_draws, seed=9090 + 10000 * dataset_index + 100 * run,
-            )
-            scaled_floor = floor / energy_scale
             baseline_rows.append({
                 "dataset": dataset,
                 "run": run,
                 "test_points": len(truth),
                 "training_points": len(train_targets),
                 **baseline,
-                "energy_scale_train_sd_sqrt_p": energy_scale,
-                "energy_floor": floor,
-                "energy_floor_pair_sd": floor_pair_sd,
-                "scaled_energy_floor": scaled_floor,
             })
-            for pair_index, value in enumerate(floor_values):
-                pair_rows.append({
-                    "dataset": dataset, "run": run, "method": "Reference floor",
-                    "short_chain": -1, "long_chain": pair_index,
-                    "energy_distance": value,
-                    "scaled_energy_distance": value / energy_scale,
-                    "draws_per_chain": args.energy_draws,
-                })
 
             cross_by_method, within_by_method, worst_by_method = {}, {}, {}
-            for method_index, method in enumerate(METHODS):
+            for method in METHODS:
                 all_draws = predictions(args.store_root, dataset, run, method, 0)
                 post_burn = all_draws[:, args.short_burn:, :]
                 worst = worst_direction(all_draws[:, args.short_burn:, :], args.ridge_fraction)
                 cross = rolling_cross_rhat(all_draws, args.window, args.step)
                 within = rolling_within_rhat(all_draws, args.segment_length, args.n_segments, args.step)
-                separation = chain_separation(
-                    post_burn, args.separation_draws,
-                    seed=2028 + 1000 * dataset_index + run,
-                )
-                energy, energy_pair_sd, energy_pair_values = chain_pair_energy(
-                    post_burn, long_draws, args.energy_draws,
-                    seed=4040 + 10000 * dataset_index + 100 * run + method_index,
-                )
+                geometry = chain_geometry(post_burn)
                 rmse, crps = predictive_metrics(post_burn, truth)
-                scaled_energy = energy / energy_scale
                 relative_rmse = rmse / baseline["naive_rmse"]
                 relative_crps = crps / baseline["climatology_crps"]
 
@@ -935,41 +694,23 @@ def main() -> int:
                     "dataset": dataset,
                     "run": run,
                     "method": method_label,
-                    "separation_index": separation["separation_index"],
-                    "separation_within_null": separation["separation_within_null"],
                     "worst_lambda_max": worst["lambda_max"],
+                    "worst_lambda_second": worst["lambda_second"],
                     "worst_eigen_gap": worst["eigen_gap"],
                     "worst_projected_rhat": worst["projected_rhat"],
+                    "second_projected_rhat": worst["second_projected_rhat"],
                     "cross_rhat_median": cross["median"].median(),
                     "cross_rhat_q90": cross["q90"].median(),
-                    "cross_fraction_above_1_01": cross["fraction_above_1_01"].median(),
                     "within_rhat_median": within["median"].median(),
                     "within_rhat_q90": within["q90"].median(),
-                    "within_fraction_above_1_01": within["fraction_above_1_01"].median(),
-                    "centroid_distance": separation["centroid_distance"],
-                    "between_within_ratio": separation["between_within_ratio"],
-                    "energy_distance": energy,
-                    "energy_pair_sd": energy_pair_sd,
-                    "scaled_energy_distance": scaled_energy,
-                    "scaled_energy_floor": scaled_floor,
-                    "scaled_energy_pair_sd": energy_pair_sd / energy_scale,
+                    "centroid_distance": geometry["centroid_distance"],
+                    "between_within_ratio": geometry["between_within_ratio"],
+                    "geometry_draws_per_chain": geometry["geometry_draws_per_chain"],
                     "rmse": rmse,
                     "crps": crps,
                     "relative_rmse": relative_rmse,
                     "relative_crps": relative_crps,
                 })
-                for pair_index, value in enumerate(energy_pair_values):
-                    pair_rows.append({
-                        "dataset": dataset,
-                        "run": run,
-                        "method": method_label,
-                        "short_chain": pair_index // 4,
-                        "long_chain": pair_index % 4,
-                        "energy_distance": value,
-                        "scaled_energy_distance": value / energy_scale,
-                        "draws_per_chain": args.energy_draws,
-                    })
-
             rhat_fig = plot_rhat_comparison(
                 cross_by_method, within_by_method,
                 f"{dataset} | run {run:03d} | pointwise R-hat comparison",
@@ -995,8 +736,7 @@ def main() -> int:
     run_frame.to_csv(table_dir / "comparison_run_summary.csv", index=False)
     summary_frame.to_csv(table_dir / "comparison_dataset_summary.csv", index=False)
     ratio_frame.to_csv(table_dir / "paired_ratios_to_default.csv", index=False)
-    baseline_frame.to_csv(table_dir / "predictive_and_energy_baselines.csv", index=False)
-    pd.DataFrame(pair_rows).to_csv(table_dir / "comparison_energy_chain_pairs.csv", index=False)
+    baseline_frame.to_csv(table_dir / "predictive_baselines.csv", index=False)
     timing_frame.to_csv(table_dir / "timing_parallel.csv", index=False)
     paper_table.to_csv(table_dir / "paper_table_summary.csv", index=False)
     pd.concat(cross_all, ignore_index=True).to_csv(table_dir / "comparison_cross_chain_rhat_windows.csv", index=False)

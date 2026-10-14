@@ -31,6 +31,7 @@ def test_parallel_swap_matches_serial(sampler_kind, swap_sweeps, post_swap_repai
     X = rng.normal(size=(40, 3))
     y = rng.normal(size=40)
     common = dict(
+        collect_all_samplers=True,
         ndpost=12,
         nskip=3,
         n_trees=6,
@@ -172,6 +173,7 @@ def test_cached_leaf_basis_refresh_is_bitwise_identical_to_uncached():
 
     X, y = _toy_data()
     model = ParallelTemperingBART(
+        collect_all_samplers=True,
         ndpost=5, nskip=0, n_trees=6, temperatures=[1.0, 1.4, 2.0],
         swap_interval=5, random_state=42,
     ).fit(X, y, quietly=True)
@@ -213,6 +215,7 @@ def test_parallel_matches_serial_with_many_accepted_swaps():
     moved back at the end of each swap step."""
     X, y = _toy_data()
     common = dict(
+        collect_all_samplers=True,
         ndpost=15, nskip=5, n_trees=6,
         temperatures=list(np.geomspace(1.0, 1.6, 7)),
         swap_interval=4, random_state=7, store_chain_traces=True,
@@ -276,6 +279,7 @@ def test_worker_count_does_not_change_results(n_jobs):
     """
     X, y = _toy_data()
     common = dict(
+        collect_all_samplers=True,
         ndpost=15, nskip=5, n_trees=6,
         temperatures=list(np.geomspace(1.0, 1.6, 7)),
         swap_interval=4, random_state=7, store_chain_traces=True,

@@ -1,8 +1,7 @@
 # Paper analysis
 
-This directory contains the paper-facing diagnosis and comparison analyses for
-`fixed100_Abalone`, `fixed100_Concrete`, and `fixed100_Friedman`. Each dataset
-uses runs `000` through `004`.
+This directory contains the paper-facing diagnosis and comparison analyses.
+Each configured dataset uses runs `000` through `004`.
 
 The two scripts are self-contained and do not import scripts from
 `diagnosis/exploratory`.
@@ -44,14 +43,11 @@ Both Python scripts accept command-line options. Use `--help` to list them.
   and pooled within-chain covariance in the original 100-test-point prediction
   space, calculated after the same 3,000-draw short-chain burn-in used for the
   post-burn comparisons.
-- `long_burn=30` counts stored long-chain draws. Since the long chains were
+- In the diagnosis analysis, `long_burn=3000` counts stored long-chain draws.
+  Since the long chains were
   saved after downsampling, its effective burn-in is
-  `30 × long_store_every` original iterations. The stored metadata gives
-  `long_store_every=100` for Abalone and `1000` for Concrete and Friedman.
+  `3000 × long_store_every` original iterations.
 - The original-space between/within statistic is the mean squared distance
   between chain centroids divided by the mean within-chain squared radius.
-- Energy distance compares deterministic pooled subsamples of 500 short-run
-  and 500 long-run predictive draws. The long Default run is an empirical
-  reference.
 - RMSE and CRPS use post-burn predictive draws. Only measured parallel PT
   timing rows are included in the paper tables.

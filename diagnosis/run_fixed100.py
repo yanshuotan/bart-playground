@@ -54,7 +54,14 @@ def _common_arguments(parser):
     parser.add_argument("--short-nskip", type=int, default=0)
     parser.add_argument("--n-trees", type=int, default=100)
     parser.add_argument("--swap-interval", type=int, default=50)
+    parser.add_argument("--long-tail-ndpost", type=int, default=0,
+                        help="Also store the closing N long-chain iterations at stride 1 (0 = off).")
     parser.add_argument("--multi-tries", type=int, default=10)
+    parser.add_argument(
+        "--short-methods", nargs="+",
+        choices=("default", "default_pt", "mtmh", "mtmh_pt"), default=None,
+        help="Short-chain methods to fit; each is seeded on its own, so a subset "
+             "matches what a full run would have produced for those methods.")
     parser.add_argument("--ladder-tmax", type=float, default=100.0)
     parser.add_argument("--ladder-init-size", type=int, default=10)
     parser.add_argument("--ladder-max-temperatures", type=int, default=0)
@@ -130,6 +137,10 @@ def parse_args(argv=None):
         parser.error("--short-ndpost and --n-trees must be positive.")
     if args.skip_short and args.skip_long:
         parser.error("--skip-short and --skip-long cannot be used together.")
+    if args.long_tail_ndpost < 0:
+        parser.error("--long-tail-ndpost cannot be negative.")
+    if args.long_tail_ndpost > getattr(args, "long_chunk_size", 10_000):
+        parser.error("--long-tail-ndpost cannot exceed --long-chunk-size.")
     if args.experiment == "sparse":
         if args.s_alpha <= 0:
             parser.error("--s-alpha must be positive.")
@@ -155,6 +166,7 @@ def _fit_arguments(args, X, y, dataset_tag, store_root, *, long_ndpost, long_sto
         short_nskip=args.short_nskip, long_ndpost=long_ndpost,
         long_store_every=long_store_every,
         long_chunk_size=getattr(args, "long_chunk_size", 10_000),
+        long_tail_ndpost=args.long_tail_ndpost,
         n_fixed_test_points=args.n_fixed_test_points,
         train_fraction=args.train_fraction, fixed_test_seed=args.fixed_test_seed,
         base_train_seed=args.base_train_seed, base_chain_seed=args.base_chain_seed,
@@ -168,6 +180,7 @@ def _fit_arguments(args, X, y, dataset_tag, store_root, *, long_ndpost, long_sto
         store_preds=True, progress_print=True, run_short=run_short,
         run_long=run_long, dirichlet_prior=dirichlet_prior,
         s_alpha=float(s_alpha), parallel_methods=args.parallel_methods,
+        short_methods=args.short_methods,
     )
 
 

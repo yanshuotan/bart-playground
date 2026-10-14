@@ -1,4 +1,4 @@
-"""Loading and separation statistics for the stored long Default chains.
+"""Loading and prediction-space diagnostics for stored long Default chains.
 
 Shared by `budget_comparison.py`, which builds the two-budget table, and
 `long_chain_figure.py`, which draws the paper figure.
@@ -10,7 +10,9 @@ import ast
 import re
 from pathlib import Path
 
+import arviz as az
 import numpy as np
+import xarray as xr
 from scipy.linalg import eigh
 
 
@@ -59,36 +61,26 @@ def long_runs(store_root: Path, dataset: str) -> list[int]:
                   for p in (store_root / dataset / "preds").glob(f"{tag}__run*__default_long__preds.csv"))
 
 
-def between_within_ratio(draws: np.ndarray) -> float:
-    """Mean squared centroid displacement over mean within-chain squared radius."""
-    centers = draws.mean(axis=1)
-    between = float(np.mean(np.sum((centers - centers.mean(axis=0)) ** 2, axis=1)))
-    within = np.mean([np.mean(np.sum((chain - chain.mean(axis=0)) ** 2, axis=1)) for chain in draws])
-    return float(between / within) if within > 0 else float("nan")
+def pointwise_rhat_summary(draws: np.ndarray) -> dict[str, float]:
+    """Median and upper-tail modern rank-split R-hat over prediction coordinates."""
+    data = xr.DataArray(draws, dims=("chain", "draw", "test_point"), name="prediction")
+    values = np.asarray(az.rhat(data, method="rank")["prediction"].values, dtype=float)
+    return {
+        "median": float(np.nanmedian(values)),
+        "q90": float(np.nanquantile(values, 0.90)),
+        "maximum": float(np.nanmax(values)),
+    }
 
 
-def separation_index(draws: np.ndarray, n_blocks: int = 4) -> tuple[float, float]:
-    """Chain separation measured against what one chain's own time blocks produce.
-
-    `between_within_ratio` has no scale of its own, so divide it by the same
-    statistic computed on `n_blocks` consecutive blocks of a single chain,
-    averaged over chains. Because a block holds 1/n_blocks of a chain's draws,
-    its centroid scatters n_blocks times as far, so the raw ratio is 1/n_blocks
-    under perfect mixing whatever the autocorrelation; multiplying by `n_blocks`
-    puts the null at one. Returns the index and the null denominator behind it.
-    """
-    across = between_within_ratio(draws)
-    length = draws.shape[1] // n_blocks
-    within = float(np.mean([
-        between_within_ratio(chain[: n_blocks * length].reshape(n_blocks, length, draws.shape[2]))
-        for chain in draws
-    ]))
-    return (float(n_blocks * across / within) if within > 0 else float("nan")), within
-
-
-def worst_direction(draws: np.ndarray, ridge_fraction: float = 1e-8) -> np.ndarray:
-    """Draws projected onto the leading between/within generalized eigenvector."""
+def worst_directions(
+    draws: np.ndarray,
+    n_directions: int = 2,
+    ridge_fraction: float = 1e-8,
+) -> dict[str, np.ndarray]:
+    """Leading between/within directions and the draws projected onto them."""
     m, n, p = draws.shape
+    if n_directions < 1 or n_directions > p:
+        raise ValueError(f"n_directions must be between 1 and {p}; got {n_directions}")
     means = draws.mean(axis=1)
     grand = means.mean(axis=0)
     within = np.zeros((p, p), dtype=float)
@@ -100,6 +92,27 @@ def worst_direction(draws: np.ndarray, ridge_fraction: float = 1e-8) -> np.ndarr
     between = n * offsets.T @ offsets / (m - 1)
     ridge = max(ridge_fraction * np.trace(within) / p, ridge_fraction)
     eigenvalues, eigenvectors = eigh(between / n, within + ridge * np.eye(p))
-    direction = eigenvectors[:, int(np.argmax(eigenvalues))]
-    direction /= np.linalg.norm(direction)
-    return np.einsum("mnp,p->mn", draws, direction)
+    order = np.argsort(eigenvalues)[::-1][:n_directions]
+    values = np.maximum(eigenvalues[order], 0.0)
+    directions = eigenvectors[:, order].copy()
+    for column in range(directions.shape[1]):
+        directions[:, column] /= np.linalg.norm(directions[:, column])
+        anchor = int(np.argmax(np.abs(directions[:, column])))
+        if directions[anchor, column] < 0:
+            directions[:, column] *= -1
+    projected = np.einsum("mnp,pk->mnk", draws - grand[None, None, :], directions)
+    rhats = []
+    for column in range(projected.shape[2]):
+        data = xr.DataArray(projected[:, :, column], dims=("chain", "draw"), name="projection")
+        rhats.append(float(az.rhat(data, method="rank")["projection"].values))
+    return {
+        "eigenvalues": values,
+        "directions": directions,
+        "projected": projected,
+        "rhats": np.asarray(rhats),
+    }
+
+
+def worst_direction(draws: np.ndarray, ridge_fraction: float = 1e-8) -> np.ndarray:
+    """Compatibility wrapper returning the leading-direction projection."""
+    return worst_directions(draws, n_directions=1, ridge_fraction=ridge_fraction)["projected"][:, :, 0]

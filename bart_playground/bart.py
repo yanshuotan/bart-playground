@@ -327,6 +327,7 @@ class _PTWorkerProcess:
         self.process.start()
         child_conn.close()
         self._payloads = list(payloads)
+        self._close_requested = False
 
     def send_payloads(self):
         """Hand the chains over to the process; blocks until the child is up."""
@@ -334,16 +335,31 @@ class _PTWorkerProcess:
             payloads, self._payloads = self._payloads, None
             self.conn.send(payloads)
 
-    def close(self):
+    def request_close(self):
+        """Ask the process to exit, without waiting for it to go.
+
+        Split from `finish_close` so a pool of workers can be told to stop
+        before any of them is waited on; closing them one at a time serializes
+        one process exit per worker.
+        """
         if self.process.is_alive():
             if self._payloads is not None:
                 # Still waiting for its payloads, so it cannot answer commands.
                 self.process.terminate()
             else:
                 self.conn.send((0, "close"))
-                self.conn.recv()
+                self._close_requested = True
+
+    def finish_close(self):
+        if self._close_requested:
+            self._close_requested = False
+            self.conn.recv()
         self.conn.close()
         self.process.join()
+
+    def close(self):
+        self.request_close()
+        self.finish_close()
 
 
 class _PTChainWorker:
@@ -398,6 +414,23 @@ def _split_chains_across_workers(n_chains: int, n_workers: int) -> list[list[int
     return groups
 
 
+def _close_pt_chain_workers(worker_processes) -> None:
+    """Stop every worker, asking them all before waiting on any of them."""
+    first_error = None
+    for worker_process in worker_processes:
+        try:
+            worker_process.request_close()
+        except BaseException as error:  # keep stopping the rest
+            first_error = first_error or error
+    for worker_process in worker_processes:
+        try:
+            worker_process.finish_close()
+        except BaseException as error:
+            first_error = first_error or error
+    if first_error is not None:
+        raise first_error
+
+
 def _start_pt_chain_workers(samplers, states, temps, n_workers: int):
     """Start every worker process, then send the payloads.
 
@@ -419,8 +452,7 @@ def _start_pt_chain_workers(samplers, states, temps, n_workers: int):
         for worker_process in processes:
             worker_process.send_payloads()
     except BaseException:
-        for worker_process in processes:
-            worker_process.close()
+        _close_pt_chain_workers(processes)
         raise
     return workers, processes
 
@@ -884,6 +916,7 @@ class ParallelTemperingBART(BART):
         local_move_backend: str = "multiprocessing-pipe",
         sampler_kind: str = "default",
         multi_tries: Optional[int] = None,
+        collect_all_samplers: bool = False,
     ):
         if max_bins is None:
             max_bins = 100
@@ -974,6 +1007,12 @@ class ParallelTemperingBART(BART):
         self.swap_diagnostics = []
         self.sampler_kind = str(sampler_kind).lower()
         self.multi_tries = None if multi_tries is None else int(multi_tries)
+        # After a parallel fit the chains live in the workers. Only the cold
+        # chain's sampler is needed for prediction, and each one pulled back
+        # costs a pickled copy of its data and trees over a pipe. The hotter
+        # ones come back only when asked for, which the equivalence tests do;
+        # otherwise `chain_samplers[1:]` keep their pre-fit state.
+        self.collect_all_samplers = bool(collect_all_samplers)
 
     def _effective_parallel_workers(self) -> int:
         """Number of worker processes; each hosts one or more temperature chains."""
@@ -1325,12 +1364,12 @@ class ParallelTemperingBART(BART):
                     self.temperatures,
                     self._effective_parallel_workers(),
                 )
-                for worker_process in worker_processes:
-                    stack.callback(worker_process.close)
+                stack.callback(_close_pt_chain_workers, worker_processes)
                 del current_states  # the workers own the states from here on
                 self._fit_loop_workers(workers, total_iters, progress)
-                for chain_id, worker in enumerate(workers):
-                    self.chain_samplers[chain_id] = worker.get_sampler()
+                collected = range(len(workers)) if self.collect_all_samplers else (0,)
+                for chain_id in collected:
+                    self.chain_samplers[chain_id] = workers[chain_id].get_sampler()
         else:
             self._fit_loop_serial(current_states, total_iters, progress)
         if progress is not None:
