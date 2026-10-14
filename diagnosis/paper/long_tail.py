@@ -112,14 +112,15 @@ def autocorrelation(block: np.ndarray, max_lag: int) -> np.ndarray:
 
 
 def draw(args, summary: pd.DataFrame, acf: dict) -> None:
+    """Agreement at two summaries, and the decay only the tail can show."""
     order = [LABEL[m] for m in [TAIL, SPARSE] + SHORT]
     colours = dict(zip(order, ["#d62728", "#7f3f9f", "#1f77b4", "#2ca02c",
                                "#ff7f0e", "#8c564b"]))
     fig, axes = plt.subplots(1, 3, figsize=(13.4, 4.1), layout="constrained")
 
-    for ax, (column, title, logy) in zip(axes[:2], (
-            ("tau_iterations_median", "(a) Autocorrelation time, sampler iterations", True),
-            ("rhat_median", r"(b) Pointwise rank-split $\widehat{R}$, median", False))):
+    panels = (("rhat_median", r"(a) Pointwise $\widehat{R}$, median over inputs"),
+              ("rhat_q90", r"(b) Pointwise $\widehat{R}$, 90th percentile"))
+    for ax, (column, title) in zip(axes[:2], panels):
         wide = summary.pivot(index="dataset", columns="method", values=column)
         names = [DISPLAY[d] for d in wide.index]
         width, offsets = 0.13, np.arange(len(order)) - (len(order) - 1) / 2
@@ -128,15 +129,10 @@ def draw(args, summary: pd.DataFrame, acf: dict) -> None:
                 continue
             ax.bar(np.arange(len(names)) + offsets[k] * width, wide[method],
                    width=width, color=colours[method], label=method)
+        ax.axhline(1.0, color="0.5", linewidth=0.8)
         ax.set_xticks(np.arange(len(names)))
         ax.set_xticklabels(names)
         ax.set_title(title, fontsize=10)
-        if logy:
-            ax.set_yscale("log")
-            ax.axhline(STORAGE_STRIDE, color="0.35", linestyle=(0, (4, 2)),
-                       linewidth=1.1)
-            ax.annotate("storage stride", (1.02, STORAGE_STRIDE), xycoords=("axes fraction", "data"),
-                        fontsize=7.5, color="0.35", rotation=90, va="center")
         ax.grid(alpha=0.25, linewidth=0.5, axis="y")
     axes[0].legend(fontsize=7, frameon=False, ncol=2)
 
@@ -149,7 +145,7 @@ def draw(args, summary: pd.DataFrame, acf: dict) -> None:
                     label=f"{DISPLAY[dataset]}, {LABEL[method]}")
     ax.axhline(0, color="0.5", linewidth=0.8)
     ax.set(xlabel="lag, iterations", ylabel="autocorrelation",
-           title="(c) Measured at stride 1")
+           title="(c) Decay at stride 1")
     ax.legend(fontsize=6.6, frameon=False)
     ax.grid(alpha=0.25, linewidth=0.5)
 
