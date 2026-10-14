@@ -22,7 +22,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from scipy.linalg import eigh
-from scipy.stats import gaussian_kde
 
 
 DATASETS = (
@@ -397,33 +396,37 @@ def plot_rhat_comparison(cross_frames: dict[str, pd.DataFrame], within_frames: d
     return fig
 
 
-def plot_worst_comparison(results: dict[str, dict[str, np.ndarray | float]], start: int, title: str) -> plt.Figure:
+def plot_worst_comparison(results: dict[str, dict[str, np.ndarray | float]], start: int,
+                          title: str, plot_draws: int = 750) -> plt.Figure:
+    """A row per method: trace along direction 1, then the two-direction scatter."""
     fig, axes = plt.subplots(4, 2, figsize=(13.0, 13.0), layout="constrained")
     for row, method in enumerate(METHODS):
         result = results[method]
         projected = np.asarray(result["projected"])
+        coords = np.asarray(result["projected_2d"])
         x = np.arange(start, start + projected.shape[1])
+        index = np.linspace(0, coords.shape[1] - 1,
+                            min(coords.shape[1], plot_draws)).round().astype(int)
         for chain_id in range(projected.shape[0]):
-            axes[row, 0].plot(x, projected[chain_id], color=CHAIN_COLORS[chain_id],
-                              linewidth=0.55, alpha=0.75,
+            colour = CHAIN_COLORS[chain_id]
+            axes[row, 0].plot(x, projected[chain_id], color=colour, linewidth=0.55,
+                              alpha=0.75,
                               label=f"chain {chain_id + 1}" if row == 0 else "_nolegend_")
-            values = projected[chain_id]
-            try:
-                density = gaussian_kde(values)
-                grid = np.linspace(values.min(), values.max(), 250)
-                axes[row, 1].plot(grid, density(grid), color=CHAIN_COLORS[chain_id], linewidth=1.5)
-            except np.linalg.LinAlgError:
-                pass
+            axes[row, 1].scatter(coords[chain_id, index, 0], coords[chain_id, index, 1],
+                                 s=7, alpha=0.18, color=colour, edgecolors="none")
+            centre = coords[chain_id].mean(axis=0)
+            axes[row, 1].scatter(*centre, marker="X", s=90, color=colour,
+                                 edgecolor="black", linewidth=0.6, zorder=3)
+        name = METHOD_NAMES[method]
         axes[row, 0].set_title(
-            f"{METHOD_NAMES[method]} trace | lambda={result['lambda_max']:.3f}, R-hat={result['projected_rhat']:.3f}"
-        )
-        axes[row, 1].set_title(f"{METHOD_NAMES[method]} density")
-        axes[row, 0].set_ylabel("projection")
-        axes[row, 1].set_ylabel("density")
+            rf"{name}, direction 1 ($\widehat R$={result['projected_rhat']:.3f})")
+        axes[row, 1].set_title(f"{name}, top two between/within directions")
+        axes[row, 0].set_ylabel("projected prediction")
+        axes[row, 1].set_xlabel(rf"direction 1 ($\lambda_1$={result['lambda_max']:.3g})")
+        axes[row, 1].set_ylabel(rf"direction 2 ($\lambda_2$={result['lambda_second']:.3g})")
         axes[row, 0].grid(alpha=0.2)
         axes[row, 1].grid(alpha=0.2)
     axes[-1, 0].set_xlabel("iteration")
-    axes[-1, 1].set_xlabel("worst-direction projection")
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", ncol=4, frameon=False)
     fig.suptitle(title)
