@@ -91,6 +91,16 @@ def predictions(store_root: Path, dataset: str, run: int, method: str, burn: int
     return draws[:, burn:, :] if burn else draws
 
 
+def residual_variances(store_root: Path, dataset: str, run: int, method: str,
+                       burn: int = 0) -> np.ndarray:
+    """Stored eps_sigma2 per draw, shaped (chain, draw)."""
+    raw = load_with_shape(
+        stored_path(store_root, dataset, "sigmas", run, f"{method}__sigmas")
+    )
+    values = np.asarray(raw, dtype=float).reshape(raw.shape[0], -1)
+    return values[:, burn:] if burn else values
+
+
 def y_test(store_root: Path, dataset: str, run: int) -> np.ndarray:
     path = stored_path(store_root, dataset, "subsample_y_test", run, "subsample_y_test")
     return load_with_shape(path).reshape(-1)
@@ -226,17 +236,23 @@ def rolling_within_rhat(
 
 def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.ndarray | float]:
     m, n, p = draws.shape
-    means = draws.mean(axis=1)
+    half = n // 2
+    if half < 2 or n - half < 2:
+        raise ValueError(f"Need at least four draws per chain to cross-fit; got {n}")
+    fit = draws[:, :half, :]
+    held = draws[:, half:, :]
+    means = fit.mean(axis=1)
     grand = means.mean(axis=0)
     within = np.zeros((p, p), dtype=float)
-    for chain in draws:
+    for chain in fit:
         centered = chain - chain.mean(axis=0)
-        within += centered.T @ centered / (n - 1)
+        within += centered.T @ centered / (half - 1)
     within /= m
     offsets = means - grand
-    between = n * offsets.T @ offsets / (m - 1)
     ridge = max(ridge_fraction * np.trace(within) / p, ridge_fraction)
-    eigenvalues, eigenvectors = eigh(between / n, within + ridge * np.eye(p))
+    eigenvalues, eigenvectors = eigh(
+        offsets.T @ offsets / (m - 1), within + ridge * np.eye(p)
+    )
     order = np.argsort(eigenvalues)[::-1]
     eigenvalues = np.maximum(eigenvalues[order], 0.0)
     directions = eigenvectors[:, order[:2]].copy()
@@ -246,9 +262,10 @@ def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.nd
         if directions[anchor, column] < 0:
             directions[:, column] *= -1
     projected_2d = np.einsum("mnp,pk->mnk", draws - grand[None, None, :], directions)
+    scored_2d = np.einsum("mnp,pk->mnk", held - grand[None, None, :], directions)
     projected_rhats = []
-    for column in range(projected_2d.shape[2]):
-        data = xr.DataArray(projected_2d[:, :, column], dims=("chain", "draw"), name="projection")
+    for column in range(scored_2d.shape[2]):
+        data = xr.DataArray(scored_2d[:, :, column], dims=("chain", "draw"), name="projection")
         projected_rhats.append(float(az.rhat(data, method="rank")["projection"].values))
     return {
         "lambda_max": float(eigenvalues[0]),
@@ -287,6 +304,10 @@ def chain_geometry(draws: np.ndarray) -> dict[str, float | int]:
     }
 
 
+# Fixed so a rerun reproduces the same predictive draws.
+PREDICTIVE_NOISE_SEED = 20261012
+
+
 def crps_from_samples(samples: np.ndarray, truth: np.ndarray) -> np.ndarray:
     n_points, n_samples = samples.shape
     first = np.mean(np.abs(samples - truth[:, None]), axis=1)
@@ -296,12 +317,37 @@ def crps_from_samples(samples: np.ndarray, truth: np.ndarray) -> np.ndarray:
     return first - second
 
 
-def predictive_metrics(draws: np.ndarray, truth: np.ndarray) -> tuple[float, float]:
+def predictive_metrics(
+    draws: np.ndarray,
+    variances: np.ndarray,
+    truth: np.ndarray,
+    y_scale: float,
+    seed: int,
+) -> tuple[float, float]:
+    """RMSE of the posterior mean of f, and CRPS of the posterior predictive.
+
+    `draws` holds posterior draws of f with no observation noise, so scoring
+    them against the noisy targets would not be a CRPS of the predictive
+    distribution, and would not be comparable with the climatology
+    denominator, which is a distribution over y. One noise draw is added per
+    posterior draw. `variances` is the stored eps_sigma2, which lives on
+    DefaultPreprocessor's internal min-max scale; `y_scale` is the training
+    range that scale was built from, so sigma on the original scale is
+    sqrt(eps_sigma2) * y_scale. RMSE is unchanged: the noise has mean zero, so
+    it does not move the posterior mean.
+    """
+    if draws.shape[:2] != variances.shape[:2]:
+        raise ValueError(
+            f"draws {draws.shape[:2]} and variances {variances.shape[:2]} disagree"
+        )
+    rng = np.random.default_rng(seed)
     rmse_values, crps_values = [], []
-    for chain in draws:
+    for chain, chain_variances in zip(draws, variances):
         samples = chain.T
         rmse_values.append(np.sqrt(np.mean((samples.mean(axis=1) - truth) ** 2)))
-        crps_values.append(np.mean(crps_from_samples(samples, truth)))
+        sd = np.sqrt(chain_variances) * float(y_scale)
+        predictive = samples + rng.standard_normal(samples.shape) * sd[None, :]
+        crps_values.append(np.mean(crps_from_samples(predictive, truth)))
     return float(np.mean(rmse_values)), float(np.mean(crps_values))
 
 
@@ -664,6 +710,9 @@ def main() -> int:
                 args.store_root, dataset, run, full_targets, truth
             )
             baseline = predictive_baselines(train_targets, truth)
+            # DefaultPreprocessor min-max scales y on the training targets, so
+            # this is the factor that takes a stored sigma back to y's scale.
+            y_scale = float(np.max(train_targets) - np.min(train_targets))
             baseline_rows.append({
                 "dataset": dataset,
                 "run": run,
@@ -680,7 +729,14 @@ def main() -> int:
                 cross = rolling_cross_rhat(all_draws, args.window, args.step)
                 within = rolling_within_rhat(all_draws, args.segment_length, args.n_segments, args.step)
                 geometry = chain_geometry(post_burn)
-                rmse, crps = predictive_metrics(post_burn, truth)
+                rmse, crps = predictive_metrics(
+                    post_burn,
+                    residual_variances(args.store_root, dataset, run, method,
+                                       args.short_burn),
+                    truth,
+                    y_scale,
+                    PREDICTIVE_NOISE_SEED + run,
+                )
                 relative_rmse = rmse / baseline["naive_rmse"]
                 relative_crps = crps / baseline["climatology_crps"]
 

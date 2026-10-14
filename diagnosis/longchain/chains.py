@@ -77,21 +77,32 @@ def worst_directions(
     n_directions: int = 2,
     ridge_fraction: float = 1e-8,
 ) -> dict[str, np.ndarray]:
-    """Leading between/within directions and the draws projected onto them."""
+    """Leading between/within directions and the draws projected onto them.
+
+    Directions are fitted on the first half of every chain and the reported
+    R-hat comes from the second half. Fitting and scoring on the same draws
+    biases the R-hat upward, by a different amount for each method.
+    """
     m, n, p = draws.shape
     if n_directions < 1 or n_directions > p:
         raise ValueError(f"n_directions must be between 1 and {p}; got {n_directions}")
-    means = draws.mean(axis=1)
+    half = n // 2
+    if half < 2 or n - half < 2:
+        raise ValueError(f"Need at least four draws per chain to cross-fit; got {n}")
+    fit = draws[:, :half, :]
+    held = draws[:, half:, :]
+    means = fit.mean(axis=1)
     grand = means.mean(axis=0)
     within = np.zeros((p, p), dtype=float)
-    for chain in draws:
+    for chain in fit:
         centered = chain - chain.mean(axis=0)
-        within += centered.T @ centered / (n - 1)
+        within += centered.T @ centered / (half - 1)
     within /= m
     offsets = means - grand
-    between = n * offsets.T @ offsets / (m - 1)
     ridge = max(ridge_fraction * np.trace(within) / p, ridge_fraction)
-    eigenvalues, eigenvectors = eigh(between / n, within + ridge * np.eye(p))
+    eigenvalues, eigenvectors = eigh(
+        offsets.T @ offsets / (m - 1), within + ridge * np.eye(p)
+    )
     order = np.argsort(eigenvalues)[::-1][:n_directions]
     values = np.maximum(eigenvalues[order], 0.0)
     directions = eigenvectors[:, order].copy()
@@ -101,9 +112,10 @@ def worst_directions(
         if directions[anchor, column] < 0:
             directions[:, column] *= -1
     projected = np.einsum("mnp,pk->mnk", draws - grand[None, None, :], directions)
+    scored = np.einsum("mnp,pk->mnk", held - grand[None, None, :], directions)
     rhats = []
-    for column in range(projected.shape[2]):
-        data = xr.DataArray(projected[:, :, column], dims=("chain", "draw"), name="projection")
+    for column in range(scored.shape[2]):
+        data = xr.DataArray(scored[:, :, column], dims=("chain", "draw"), name="projection")
         rhats.append(float(az.rhat(data, method="rank")["projection"].values))
     return {
         "eigenvalues": values,

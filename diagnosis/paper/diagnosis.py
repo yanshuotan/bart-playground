@@ -113,17 +113,23 @@ def rolling_within_rhat(
 
 def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.ndarray | float]:
     m, n, p = draws.shape
-    means = draws.mean(axis=1)
+    half = n // 2
+    if half < 2 or n - half < 2:
+        raise ValueError(f"Need at least four draws per chain to cross-fit; got {n}")
+    fit = draws[:, :half, :]
+    held = draws[:, half:, :]
+    means = fit.mean(axis=1)
     grand = means.mean(axis=0)
     within = np.zeros((p, p), dtype=float)
-    for chain in draws:
+    for chain in fit:
         centered = chain - chain.mean(axis=0)
-        within += centered.T @ centered / (n - 1)
+        within += centered.T @ centered / (half - 1)
     within /= m
     offsets = means - grand
-    between = n * offsets.T @ offsets / (m - 1)
     ridge = max(ridge_fraction * np.trace(within) / p, ridge_fraction)
-    eigenvalues, eigenvectors = eigh(between / n, within + ridge * np.eye(p))
+    eigenvalues, eigenvectors = eigh(
+        offsets.T @ offsets / (m - 1), within + ridge * np.eye(p)
+    )
     order = np.argsort(eigenvalues)[::-1]
     eigenvalues = np.maximum(eigenvalues[order], 0.0)
     directions = eigenvectors[:, order[:2]].copy()
@@ -133,9 +139,10 @@ def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.nd
         if directions[anchor, column] < 0:
             directions[:, column] *= -1
     projected_2d = np.einsum("mnp,pk->mnk", draws - grand[None, None, :], directions)
+    scored_2d = np.einsum("mnp,pk->mnk", held - grand[None, None, :], directions)
     projected_rhats = []
-    for column in range(projected_2d.shape[2]):
-        data = xr.DataArray(projected_2d[:, :, column], dims=("chain", "draw"), name="projection")
+    for column in range(scored_2d.shape[2]):
+        data = xr.DataArray(scored_2d[:, :, column], dims=("chain", "draw"), name="projection")
         projected_rhats.append(float(az.rhat(data, method="rank")["projection"].values))
     return {
         "lambda_max": float(eigenvalues[0]),
