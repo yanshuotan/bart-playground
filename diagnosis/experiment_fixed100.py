@@ -341,6 +341,7 @@ def run_short_method(
     multi_tries,
     dirichlet_prior: bool = False,
     s_alpha: float = 1.0,
+    pt_n_jobs: int | None = 1,
     store_preds=True,
 ):
     """Run one of the four short methods for one chain.
@@ -360,6 +361,7 @@ def run_short_method(
     pt = dict(
         tree_alpha=tree_alpha,
         tree_beta=tree_beta,
+        n_jobs=pt_n_jobs,
         temperatures=temperatures,
         swap_interval=swap_interval,
         post_swap_repair_steps=post_swap_repair_steps,
@@ -726,6 +728,7 @@ def run_fixed100_dataset(
     temperatures=(1.0, 2.0, 3.0, 5.0),
     ladder_target_rate: float = 0.4,
     ladder_max_rounds: int = 10,
+    pt_n_jobs: int | None = 1,
     ladder_ndpost: int = 500,
     ladder_nskip: int = 500,
     ladder_repeats: int = 3,
@@ -869,6 +872,7 @@ def run_fixed100_dataset(
                 swap_interval=swap_interval,
                 post_swap_repair_steps=post_swap_repair_steps,
                 multi_tries=multi_tries,
+                pt_n_jobs=pt_n_jobs,
                 dirichlet_prior=dirichlet_prior,
                 s_alpha=s_alpha,
                 store_preds=store_preds,
@@ -923,6 +927,16 @@ def run_fixed100_dataset(
                     "ladder_mean_rates": ladder_mean_rates,
                     "ladder_history": ladder_history,
                     "ladder_search_points": int(X_search.shape[0]),
+                    # the settings that produced the ladder and the fits, which
+                    # earlier runs did not record and cannot now be recovered
+                    "ladder_ndpost": ladder_ndpost,
+                    "ladder_nskip": ladder_nskip,
+                    "ladder_repeats": ladder_repeats,
+                    "ladder_target_rate": ladder_target_rate,
+                    "swap_interval": swap_interval,
+                    "pt_n_jobs": pt_n_jobs,
+                    "multi_tries": multi_tries,
+                    "n_trees": n_trees,
                     "dirichlet_prior": dirichlet_prior,
                     "s_alpha": s_alpha,
                 },

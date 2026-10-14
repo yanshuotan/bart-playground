@@ -57,6 +57,12 @@ def _common_arguments(parser):
     parser.add_argument("--long-tail-ndpost", type=int, default=0,
                         help="Also store the closing N long-chain iterations at stride 1 (0 = off).")
     parser.add_argument("--multi-tries", type=int, default=10)
+    parser.add_argument("--pt-n-jobs", type=int, default=1,
+                        help="Worker processes per PT fit. 1 advances every "
+                             "temperature in one process, which is the sampler's "
+                             "default and what every stored run used; a larger "
+                             "value splits the ladder across processes and gives "
+                             "the same draws.")
     parser.add_argument(
         "--short-methods", nargs="+",
         choices=("default", "default_pt", "mtmh", "mtmh_pt"), default=None,
@@ -88,7 +94,7 @@ def parse_args(argv=None):
     sub = parser.add_subparsers(dest="experiment", required=True)
     fixed = sub.add_parser("fixed", help="Run the retained named datasets")
     _common_arguments(fixed)
-    fixed.add_argument("--datasets", nargs="+", choices=("abalone", "airfoil", "calhousing", "ccpp", "concrete", "cpu_act", "friedman", "friedman_sparse_dir", "seoul_bike"), default=["abalone", "concrete", "friedman"])
+    fixed.add_argument("--datasets", nargs="+", choices=("abalone", "airfoil", "calhousing", "ccpp", "concrete", "cpu_act", "friedman", "friedman_sparse_dir", "seoul_bike", "superconduct"), default=["abalone", "concrete", "friedman"])
     fixed.add_argument("--run-ids", nargs="+", help="Only these run IDs, e.g. 2 3 4 or 2-4")
     fixed.add_argument("--ladder", choices=("harmonic", "original"), default="harmonic")
     fixed.add_argument("--temperatures", type=float, nargs="+", default=[1.0, 100.0], help="Initial temperatures when --ladder=original")
@@ -173,6 +179,7 @@ def _fit_arguments(args, X, y, dataset_tag, store_root, *, long_ndpost, long_sto
         temperatures=_initial_temperatures(args),
         ladder_target_rate=args.ladder_target_rate,
         ladder_max_rounds=args.ladder_max_rounds,
+        pt_n_jobs=args.pt_n_jobs,
         ladder_ndpost=args.ladder_ndpost, ladder_nskip=args.ladder_nskip,
         ladder_repeats=args.ladder_repeats,
         ladder_search_points=args.ladder_search_points,

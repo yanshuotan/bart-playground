@@ -123,6 +123,22 @@ DATASET_CONFIGS = {
         "long_ndpost": 10_000_000,
         "long_store_every": 1000,
     },
+
+    "superconduct": {
+        # 21,263 rows and 81 numeric predictors of critical temperature, with
+        # no missing values and no categorical columns. Subsampled to the same
+        # 5,000 rows as CalHousing so that the two differ in predictor count
+        # and not in sample size.
+        "dataset_tag": "fixed100_Superconduct_subsample5000",
+        "uci_id": 464,
+        "subsample_n": 5000,
+        "subsample_seed": 42,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
+        "drop_columns": [],
+        "categorical_columns": [],
+        "target_column": None,
+    },
 }
 
 
@@ -329,6 +345,7 @@ def load_dataset(name: str):
         datetime_columns=cfg.get("datetime_columns", []),
     )
     X, y, n_removed = _clean_finite_rows(X, y)
+    X, y = _apply_subsample(name, cfg, X, y)
     print(
         f"[LOAD] {name}: X={X.shape}, y={y.shape}, "
         f"removed_nonfinite_rows={n_removed}, "
@@ -338,6 +355,23 @@ def load_dataset(name: str):
     )
 
     return X, y
+
+
+def _apply_subsample(name: str, cfg: dict, X, y):
+    """Keep a fixed random subset of the rows when the config asks for one.
+
+    Rows are sorted after selection so the subset, and therefore the fixed test
+    indices drawn from it, depend only on the seed and not on draw order.
+    """
+    size = cfg.get("subsample_n")
+    if size is None:
+        return X, y
+    if size > X.shape[0]:
+        raise ValueError(
+            f"{name}: subsample_n={size} exceeds the {X.shape[0]} available rows")
+    rng = np.random.default_rng(cfg["subsample_seed"])
+    idx = np.sort(rng.choice(X.shape[0], size=size, replace=False))
+    return X[idx], y[idx]
 
 
 def get_python_memory_gb():
