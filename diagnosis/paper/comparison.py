@@ -273,6 +273,7 @@ def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.nd
         "projected_rhat": projected_rhats[0],
         "second_projected_rhat": projected_rhats[1],
         "directions": directions,
+        "fit_draws": half,
         "projected": projected_2d[:, :, 0],
         "projected_2d": projected_2d,
     }
@@ -418,6 +419,8 @@ def plot_worst_comparison(results: dict[str, dict[str, np.ndarray | float]], sta
             axes[row, 1].scatter(*centre, marker="X", s=90, color=colour,
                                  edgecolor="black", linewidth=0.6, zorder=3)
         name = METHOD_NAMES[method]
+        axes[row, 0].axvline(start + int(result["fit_draws"]), color="0.35",
+                             linestyle=(0, (4, 2)), linewidth=1.0)
         axes[row, 0].set_title(
             rf"{name}, direction 1 ($\widehat R$={result['projected_rhat']:.3f})")
         axes[row, 1].set_title(f"{name}, top two between/within directions")

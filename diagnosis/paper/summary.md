@@ -20,7 +20,7 @@ See [diagnosis_summary.md](diagnosis_summary.md).
 
 ## Four-method comparison
 
-See [ksummary.md](ksummary.md).
+See [s2.md](s2.md).
 
 ## Interpretation
 

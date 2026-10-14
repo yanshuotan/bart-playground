@@ -59,6 +59,8 @@ def draw(args, pairs: list[tuple[str, str]], output: Path, first_panel: int = 0)
         for chain in range(projected.shape[0]):
             trace_ax.plot(iterations, projected[chain, :, 0], color=CHAIN_COLORS[chain],
                           linewidth=0.5, alpha=0.8, label=f"chain {chain + 1}")
+        trace_ax.axvline(args.burn + int(result["fit_draws"]), color="0.35",
+                         linestyle=(0, (4, 2)), linewidth=1.0)
         letter = PANELS[first_panel + 2 * row]
         trace_ax.set(title=(f"({letter}) {label}, worst direction "
                             f"($\\widehat R$={rhats[0]:.3f})"),

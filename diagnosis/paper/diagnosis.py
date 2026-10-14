@@ -151,6 +151,7 @@ def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.nd
         "projected_rhat": projected_rhats[0],
         "second_projected_rhat": projected_rhats[1],
         "directions": directions,
+        "fit_draws": half,
         "projected": projected_2d[:, :, 0],
         "projected_2d": projected_2d,
     }
@@ -187,6 +188,8 @@ def plot_diagnosis(
     for chain_id in range(projected.shape[0]):
         trace_ax.plot(iterations, projected[chain_id], color=CHAIN_COLORS[chain_id],
                       linewidth=0.65, alpha=0.8, label=f"chain {chain_id + 1}")
+    trace_ax.axvline(short_burn + int(worst["fit_draws"]), color="0.35",
+                     linestyle=(0, (4, 2)), linewidth=1.0)
     trace_ax.set(title="(a) Maximum between/within direction", xlabel="iteration",
                  ylabel="projected prediction")
     trace_ax.legend(ncol=2, fontsize=8)

@@ -120,6 +120,7 @@ def worst_directions(
     return {
         "eigenvalues": values,
         "directions": directions,
+        "fit_draws": half,
         "projected": projected,
         "rhats": np.asarray(rhats),
     }
