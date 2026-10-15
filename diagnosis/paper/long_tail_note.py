@@ -1,26 +1,12 @@
 #!/usr/bin/env python3
-"""What the contiguous tail of the long chains shows that the stored trace cannot.
+"""Late-window and long-span prediction diagnostics for Abalone and SeoulBike.
 
-The long Default runs are stored at stride 1,000, so every diagnostic computed
-from them describes a sequence whose neighbouring draws are already a thousand
-iterations apart. The closing 10,000 iterations of the same runs were also kept
-at stride 1, and that is the only record here of how a BART chain moves from one
-iteration to the next after a long warm-up.
-
-Three comparisons are drawn, all on 7,000 draws from four chains so that the
-draw count never explains a difference:
-
-* the contiguous tail, which is Default at stride 1 after :math:`10^7`
-  iterations;
-* the stored long trace, the same runs at stride 1,000; and
-* the four production arms, which are also stride 1 but start cold and run for
-  :math:`10^4` iterations.
-
-The tail and the production runs therefore differ only in how long the sampler
-had already been running, and the tail and the stored trace differ only in
-thinning. Comparing the integrated autocorrelation time measured on the tail
-with the storage stride says whether that stride was long enough to have
-produced near-independent draws.
+Each sequence contributes 7,000 draws from four chains. The contiguous Default
+tail covers 7,000 iterations near the end of a 10^7-iteration run; the stride-
+1,000 trace covers approximately seven million iterations of that run. The
+production arms cover iterations 3,001--10,000 under their respective kernels.
+ESS describes each recorded sequence; S/ESS is a bulk-ESS-implied inefficiency
+in stored draws. Figure panels (a,b) average five runs; panel (c) uses run 0.
 """
 from __future__ import annotations
 
@@ -38,8 +24,7 @@ import xarray as xr
 
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
-sys.path.insert(0, str(DIAG / "longchain"))
-from chains import load_with_shape, pointwise_rhat_summary  # noqa: E402
+from core import load_with_shape, pointwise_rhat_summary  # noqa: E402
 
 TAIL = "default_long_tail"
 SPARSE = "default_long"
@@ -55,7 +40,7 @@ def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--store-root", type=Path, default=DIAG / "store")
     parser.add_argument("--out-dir", type=Path,
-                        default=Path(r"C:\Users\ztykk\Phd\BART\paper\long_tail"))
+                        default=HERE / "figures" / "long_tail")
     parser.add_argument("--datasets", nargs="+", default=list(DISPLAY))
     parser.add_argument("--runs", nargs="+", type=int, default=list(range(5)))
     parser.add_argument("--draws", type=int, default=7000,
@@ -82,11 +67,14 @@ def efficiency(block: np.ndarray) -> dict[str, float]:
     chains, retained, points = block.shape
     alone = xr.DataArray(block.transpose(1, 0, 2).reshape(1, -1, chains * points),
                          dims=("chain", "draw", "point"), name="prediction")
+    # Each chain is measured on its own and the four are then averaged, giving
+    # one value per input before any summary across inputs. That is the
+    # convention the outline's relative-ESS table uses, so the two agree.
     single = az.ess(alone, method="bulk")["prediction"].values.reshape(chains, points)
+    single = single.mean(axis=0)
     relative = single / retained
     summary = pointwise_rhat_summary(block)
-    # the integrated autocorrelation time in units of stored draws; one stored
-    # draw is one iteration in the tail and a thousand in the stored trace
+    # Bulk-ESS-implied inefficiency for this recorded window, in stored draws.
     tau = retained / np.clip(single, 1e-9, None)
     return {
         "rhat_median": summary["median"],
@@ -95,6 +83,8 @@ def efficiency(block: np.ndarray) -> dict[str, float]:
         "rel_ess_q10": float(np.quantile(relative, 0.1)),
         "tau_draws_median": float(np.median(tau)),
         "tau_draws_q90": float(np.quantile(tau, 0.9)),
+        "within_variance_median": float(np.median(block.var(axis=1).mean(axis=0))),
+        "between_variance_median": float(np.median(block.mean(axis=1).var(axis=0))),
     }
 
 
@@ -145,7 +135,7 @@ def draw(args, summary: pd.DataFrame, acf: dict) -> None:
                     label=f"{DISPLAY[dataset]}, {LABEL[method]}")
     ax.axhline(0, color="0.5", linewidth=0.8)
     ax.set(xlabel="lag, iterations", ylabel="autocorrelation",
-           title="(c) Decay at stride 1")
+           title=f"(c) Decay at stride 1, run {args.runs[0]}")
     ax.legend(fontsize=6.6, frameon=False)
     ax.grid(alpha=0.25, linewidth=0.5)
 
@@ -172,9 +162,9 @@ def main(supplied: list[str] | None = None) -> int:
                        "stride": STORAGE_STRIDE if method == SPARSE else 1,
                        "draws": block.shape[1]}
                 row.update(efficiency(block))
-                # one stored draw is `stride` iterations, so this is the
-                # autocorrelation time on the sampler's own clock
-                row["tau_iterations_median"] = row["tau_draws_median"] * row["stride"]
+                # Iteration-equivalent cost per effective retained draw;
+                # this is not an estimate of unthinned integrated correlation.
+                row["iterations_per_effective_draw_median"] = row["tau_draws_median"] * row["stride"]
                 rows.append(row)
                 del block
             print(f"[long-tail] {dataset} run {run:03d}", flush=True)
@@ -198,7 +188,7 @@ def main(supplied: list[str] | None = None) -> int:
     pd.set_option("display.width", 220)
     order = [LABEL[m] for m in [TAIL, SPARSE] + SHORT]
     for column in ("rhat_median", "rel_ess_median", "tau_draws_median",
-                   "tau_iterations_median"):
+                   "iterations_per_effective_draw_median"):
         wide = summary.pivot(index="dataset", columns="method", values=column)
         wide.index = [DISPLAY[d] for d in wide.index]
         print()

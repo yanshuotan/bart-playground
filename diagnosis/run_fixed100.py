@@ -54,8 +54,12 @@ def _common_arguments(parser):
     parser.add_argument("--short-nskip", type=int, default=0)
     parser.add_argument("--n-trees", type=int, default=100)
     parser.add_argument("--swap-interval", type=int, default=50)
-    parser.add_argument("--long-tail-ndpost", type=int, default=0,
-                        help="Also store the closing N long-chain iterations at stride 1 (0 = off).")
+    parser.add_argument("--long-tail-ndpost", type=int, default=10_000,
+                        help="Also store the closing N long-chain iterations at stride 1 "
+                             "(0 = off). The stored trace is thinned to every 1,000th "
+                             "iteration and cannot show step-to-step behaviour, so the "
+                             "tail is kept by default; it is written only after the final "
+                             "chunk, so a run that stops early leaves none.")
     parser.add_argument("--multi-tries", type=int, default=10)
     parser.add_argument("--pt-n-jobs", type=int, default=1,
                         help="Worker processes per PT fit. 1 advances every "
@@ -294,8 +298,8 @@ def main(argv=None):
     args = parse_args(argv)
     store_root = _store_root(args)
     print(f"Writing outputs to: {store_root}", flush=True)
-    # Echo the seeds: base_chain_seed is not saved into short_metadata.csv, so
-    # the run log is the only place it is recorded.
+    # Echo the seeds. All three are also written into the run metadata, so the
+    # stored output pins the chains without reference to this log.
     print(
         f"Seeds: fixed_test={args.fixed_test_seed} base_train={args.base_train_seed} "
         f"base_chain={args.base_chain_seed}"

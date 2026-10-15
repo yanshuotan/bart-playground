@@ -17,14 +17,14 @@ import arviz as az
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import NullLocator
 import numpy as np
 import pandas as pd
 import xarray as xr
 
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
-sys.path.insert(0, str(DIAG / "longchain"))
-from chains import load_with_shape, pointwise_rhat_summary  # noqa: E402
+from core import load_with_shape, pointwise_rhat_summary  # noqa: E402
 
 TAG = re.compile(r"^scal_(?P<source>[A-Za-z]+)_n(?P<n>\d+)(?:_sd(?P<sd>\d+))?$")
 
@@ -80,34 +80,36 @@ def draw(args: argparse.Namespace, frame: pd.DataFrame) -> None:
             continue
         top_left.plot(part.n_train, part.rhat_median, marker="o", color=colour,
                       linewidth=1.5, markersize=4.5, label=source)
-        first = part.iloc[0]
-        low_left.plot(part.n_train, part.within_median / first.within_median,
+        low_left.plot(part.n_train, part.within_median,
                       marker="o", color=colour, linewidth=1.5, markersize=4)
-        low_left.plot(part.n_train, part.between_median / first.between_median,
+        low_left.plot(part.n_train, part.between_median,
                       marker="s", color=colour, linewidth=1.5, markersize=4,
                       linestyle=(0, (4, 2)))
     top_left.set(xscale="log", xlabel="training rows", ylabel=r"median $\widehat{R}$",
                  title="(a) Agreement against training-set size")
     top_left.legend(fontsize=8.5, frameon=False)
     low_left.set(xscale="log", yscale="log", xlabel="training rows",
-                 ylabel="relative to the smallest size",
-                 title="(c) Within (solid) and between (dashed) terms")
+                 ylabel="prediction variance (response units squared)",
+                 title="(c) Within (solid) and between (dashed), original scale")
 
     top_right.plot(noise.noise, noise.rhat_median, marker="o", color="#7f3f9f",
                    linewidth=1.5, markersize=4.5)
     top_right.set(xscale="log", xlabel="noise standard deviation",
                   ylabel=r"median $\widehat{R}$",
                   title="(b) Agreement against noise, Friedman at $n=2000$")
-    first = noise.iloc[0]
-    low_right.plot(noise.noise, noise.within_median / first.within_median, marker="o",
+    low_right.plot(noise.noise, noise.within_median, marker="o",
                    color="#7f3f9f", linewidth=1.5, markersize=4, label="within")
-    low_right.plot(noise.noise, noise.between_median / first.between_median, marker="s",
+    low_right.plot(noise.noise, noise.between_median, marker="s",
                    color="#7f3f9f", linewidth=1.5, markersize=4,
                    linestyle=(0, (4, 2)), label="between")
     low_right.set(xscale="log", yscale="log", xlabel="noise standard deviation",
-                  ylabel="relative to the smallest noise",
-                  title="(d) The same two terms")
+                  ylabel="prediction variance (response units squared)",
+                  title="(d) Within and between variance, original scale")
     low_right.legend(fontsize=8.5, frameon=False)
+    for ax in (top_right, low_right):
+        ax.set_xticks([0.5, 1, 2, 5])
+        ax.set_xticklabels(["0.5", "1", "2", "5"])
+        ax.xaxis.set_minor_locator(NullLocator())
     for ax in axes.flat:
         ax.grid(alpha=0.25, linewidth=0.5)
     args.figure_dir.mkdir(parents=True, exist_ok=True)

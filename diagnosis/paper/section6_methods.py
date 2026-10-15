@@ -18,10 +18,12 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+from core import (dataset_tag, load_with_shape, markdown_table,
+                  pointwise_rhat, summarize_rhat, worst_direction_summary)
 import numpy as np
 import pandas as pd
 import xarray as xr
-from scipy.linalg import eigh
 
 
 DATASETS = (
@@ -52,27 +54,6 @@ METHOD_COLORS = {
     "mtmh_pt": "#e7298a",
 }
 CHAIN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728")
-
-
-def load_with_shape(path: Path) -> np.ndarray:
-    with path.open("r", encoding="utf-8") as stream:
-        header = stream.readline().strip()
-    if "original_shape=" not in header:
-        raise ValueError(f"Missing original_shape header: {path}")
-    shape = ast.literal_eval(header.split("original_shape=")[-1])
-    return np.loadtxt(path, delimiter=",", comments="#").reshape(shape)
-
-
-def dataset_tag(store_root: Path, dataset: str) -> str:
-    """File-name prefix inside a store directory.
-
-    Usually the directory name, but the sparse variants differ: files in
-    fixed100_FriedmanSparseDir_p20 are named fixed100_FriedmanSparseDirP20K5__*.
-    """
-    preds = sorted((store_root / dataset / "preds").glob("*__preds.csv"))
-    if not preds:
-        raise FileNotFoundError(f"No predictions in {store_root / dataset / 'preds'}")
-    return preds[0].name.split("__run")[0]
 
 
 def stored_path(store_root: Path, dataset: str, folder: str, run: int, suffix: str) -> Path:
@@ -181,19 +162,25 @@ def training_targets(
     return full_targets[train_index]
 
 
-def pointwise_rhat(draws: np.ndarray) -> np.ndarray:
-    data = xr.DataArray(draws, dims=("chain", "draw", "test_point"), name="prediction")
-    return np.asarray(az.rhat(data, method="rank")["prediction"].values)
-
-
-def summarize_rhat(values: np.ndarray) -> dict[str, float]:
-    values = np.asarray(values, dtype=float)
+def full_draw_rhat(draws: np.ndarray, n_segments: int = 4) -> dict[str, float | int]:
+    """Table summaries from all retained draws; rolling windows are graphical only."""
+    chains, retained, points = draws.shape
+    if n_segments < 2 or retained < 4 * n_segments:
+        raise ValueError("Need at least two segments with four draws each")
+    if retained % n_segments:
+        raise ValueError("Retained draw count must be divisible by the segment count")
+    segment_length = retained // n_segments
+    cross = summarize_rhat(pointwise_rhat(draws))
+    pseudo = draws.reshape(chains, n_segments, segment_length, points).transpose(1, 2, 0, 3)
+    data = xr.DataArray(pseudo, dims=("chain", "draw", "original_chain", "test_point"), name="prediction")
+    within = summarize_rhat(np.asarray(az.rhat(data, method="rank")["prediction"].values))
     return {
-        "median": float(np.nanmedian(values)),
-        "q25": float(np.nanquantile(values, 0.25)),
-        "q75": float(np.nanquantile(values, 0.75)),
-        "q90": float(np.nanquantile(values, 0.90)),
-        "maximum": float(np.nanmax(values)),
+        "cross_rhat_median": cross["median"],
+        "cross_rhat_q90": cross["q90"],
+        "within_rhat_median": within["median"],
+        "within_rhat_q90": within["q90"],
+        "rhat_draws_per_chain": retained,
+        "rhat_segment_length": segment_length,
     }
 
 
@@ -231,52 +218,6 @@ def rolling_within_rhat(
                 **summarize_rhat(chain_values),
             })
     return pd.DataFrame(rows)
-
-
-def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.ndarray | float]:
-    m, n, p = draws.shape
-    half = n // 2
-    if half < 2 or n - half < 2:
-        raise ValueError(f"Need at least four draws per chain to cross-fit; got {n}")
-    fit = draws[:, :half, :]
-    held = draws[:, half:, :]
-    means = fit.mean(axis=1)
-    grand = means.mean(axis=0)
-    within = np.zeros((p, p), dtype=float)
-    for chain in fit:
-        centered = chain - chain.mean(axis=0)
-        within += centered.T @ centered / (half - 1)
-    within /= m
-    offsets = means - grand
-    ridge = max(ridge_fraction * np.trace(within) / p, ridge_fraction)
-    eigenvalues, eigenvectors = eigh(
-        offsets.T @ offsets / (m - 1), within + ridge * np.eye(p)
-    )
-    order = np.argsort(eigenvalues)[::-1]
-    eigenvalues = np.maximum(eigenvalues[order], 0.0)
-    directions = eigenvectors[:, order[:2]].copy()
-    for column in range(directions.shape[1]):
-        directions[:, column] /= np.linalg.norm(directions[:, column])
-        anchor = int(np.argmax(np.abs(directions[:, column])))
-        if directions[anchor, column] < 0:
-            directions[:, column] *= -1
-    projected_2d = np.einsum("mnp,pk->mnk", draws - grand[None, None, :], directions)
-    scored_2d = np.einsum("mnp,pk->mnk", held - grand[None, None, :], directions)
-    projected_rhats = []
-    for column in range(scored_2d.shape[2]):
-        data = xr.DataArray(scored_2d[:, :, column], dims=("chain", "draw"), name="projection")
-        projected_rhats.append(float(az.rhat(data, method="rank")["projection"].values))
-    return {
-        "lambda_max": float(eigenvalues[0]),
-        "lambda_second": float(eigenvalues[1]),
-        "eigen_gap": float(eigenvalues[0] - eigenvalues[1]),
-        "projected_rhat": projected_rhats[0],
-        "second_projected_rhat": projected_rhats[1],
-        "directions": directions,
-        "fit_draws": half,
-        "projected": projected_2d[:, :, 0],
-        "projected_2d": projected_2d,
-    }
 
 
 def chain_geometry(draws: np.ndarray) -> dict[str, float | int]:
@@ -368,31 +309,30 @@ def predictive_baselines(train_targets: np.ndarray, truth: np.ndarray) -> dict[s
     }
 
 
-def plot_rhat_comparison(cross_frames: dict[str, pd.DataFrame], within_frames: dict[str, pd.DataFrame], title: str) -> plt.Figure:
-    fig, axes = plt.subplots(1, 2, figsize=(13.0, 4.8), layout="constrained")
-    for method in METHODS:
-        cross = cross_frames[method].sort_values("window_end")
-        axes[0].plot(cross["window_end"], cross["median"], color=METHOD_COLORS[method],
-                     linewidth=1.8, label=METHOD_NAMES[method])
-        axes[0].fill_between(cross["window_end"], cross["q25"], cross["q75"],
-                             color=METHOD_COLORS[method], alpha=0.10)
+def plot_rhat_comparison(within_frames: dict[str, pd.DataFrame], title: str) -> plt.Figure:
+    """Within-chain segment R-hat through the run, one line per method.
 
+    The cross-chain panel that used to sit beside this is dropped: the
+    factorial table already ranks the methods on cross-chain agreement using
+    every retained draw, and placing the two side by side invited reading one
+    against the other even though they answer different questions.
+    """
+    fig, ax = plt.subplots(1, 1, figsize=(7.2, 4.8), layout="constrained")
+    for method in METHODS:
         within = within_frames[method]
+        # the band spans the four chains, the line is their median
         reduced = within.groupby("window_end")["median"].agg(
             center="median", low="min", high="max"
         ).reset_index()
-        axes[1].plot(reduced["window_end"], reduced["center"], color=METHOD_COLORS[method],
-                     linewidth=1.8, label=METHOD_NAMES[method])
-        axes[1].fill_between(reduced["window_end"], reduced["low"], reduced["high"],
-                             color=METHOD_COLORS[method], alpha=0.10)
-    axes[0].set_title("Cross-chain pointwise R-hat: median and test-point IQR")
-    axes[1].set_title("Within-chain segment R-hat: median and chain range")
-    for ax in axes:
-        ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1)
-        ax.set_xlabel("window end")
-        ax.set_ylabel("rank-split R-hat")
-        ax.grid(alpha=0.2)
-        ax.legend(fontsize=8)
+        ax.plot(reduced["window_end"], reduced["center"], color=METHOD_COLORS[method],
+                linewidth=1.8, label=METHOD_NAMES[method])
+        ax.fill_between(reduced["window_end"], reduced["low"], reduced["high"],
+                        color=METHOD_COLORS[method], alpha=0.10)
+    ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1)
+    ax.set_xlabel("window end")
+    ax.set_ylabel("rank-split R-hat")
+    ax.grid(alpha=0.2)
+    ax.legend(fontsize=8)
     fig.suptitle(title)
     return fig
 
@@ -472,7 +412,11 @@ def parse_timing_summary(path: Path) -> pd.DataFrame:
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         heading = re.match(r"^##\s+(fixed100_[^(\s]+)", raw_line)
         if heading:
-            current_dataset = heading.group(1)
+            current_dataset = {
+                'fixed100_FriedmanSparseDirP20K5': 'fixed100_FriedmanSparseDir_p20',
+                'fixed100_FriedmanSparseDir': 'fixed100_FriedmanSparseDir_p100',
+                'fixed100_FriedmanSparseDirP200K5': 'fixed100_FriedmanSparseDir_p200',
+            }.get(heading.group(1), heading.group(1))
             continue
         if current_dataset is None or not raw_line.startswith("|"):
             continue
@@ -497,19 +441,27 @@ def parse_timing_summary(path: Path) -> pd.DataFrame:
             "sd_seconds_per_chain": float(parts[4].replace("**", "")),
             "relative_to_default": float(parts[5].replace("**", "")),
         })
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows)
+    # Use current measured ratios rather than rounded/stale Markdown values.
+    for dataset in frame['dataset'].unique():
+        tag = {
+            'fixed100_FriedmanSparseDir_p20': 'fixed100_FriedmanSparseDirP20K5',
+            'fixed100_FriedmanSparseDir_p100': 'fixed100_FriedmanSparseDir',
+            'fixed100_FriedmanSparseDir_p200': 'fixed100_FriedmanSparseDirP200K5',
+        }.get(dataset, dataset)
+        source = path.parent / f'{tag}_run000_summary.csv'
+        if source.exists():
+            measured = pd.read_csv(source).set_index('label')
+            for label, method in mapping.items():
+                mask = frame.dataset.eq(dataset) & frame.method.eq(method)
+                frame.loc[mask, 'relative_to_default'] = measured.loc[label, 'relative_to_default']
+                frame.loc[mask, 'mean_seconds_per_chain'] = measured.loc[label, 'mean_seconds_per_chain']
+                frame.loc[mask, 'sd_seconds_per_chain'] = measured.loc[label, 'std_seconds_per_chain']
+    return frame
 
 
 def format_mean_sd(row: pd.Series, metric: str, digits: int = 4) -> str:
     return f"{row[f'{metric}_mean']:.{digits}f} ({row[f'{metric}_sd']:.{digits}f})"
-
-
-def markdown_table(frame: pd.DataFrame) -> str:
-    headers = [str(column) for column in frame.columns]
-    rows = [[str(value) for value in row] for row in frame.itertuples(index=False, name=None)]
-    lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
-    lines.extend("| " + " | ".join(row) + " |" for row in rows)
-    return "\n".join(lines)
 
 
 def write_summary(
@@ -524,6 +476,11 @@ def write_summary(
     lines.extend([
         "",
         "`short_burn` is also the start of the worst-direction calculation.",
+        "Table cross R-hat uses every retained draw, with the median and q90 taken across test inputs. "
+        "Table within R-hat splits each retained original chain into equal consecutive segments "
+        "(four segments of 1,750 draws for 7,000 retained draws), then summarizes across original "
+        "chains and test inputs. Both use the rank-normalized split-and-folded estimator. "
+        "Rolling-window R-hat is used only in the temporal figures, not in these table columns.",
     ])
     for dataset in summary["dataset"].drop_duplicates():
         lines.extend(["", f"## {dataset}", ""])
@@ -573,7 +530,6 @@ def write_root_summary(
         cost = float(timing_row.iloc[0]["relative_to_default"]) if not timing_row.empty else np.nan
         rows.append({
             "dataset": dataset.removeprefix("fixed100_"),
-            "projected R-hat": transition(default["worst_projected_rhat_mean"], combined["worst_projected_rhat_mean"]),
             "cross R-hat": transition(default["cross_rhat_median_mean"], combined["cross_rhat_median_mean"]),
             "within R-hat": transition(default["within_rhat_median_mean"], combined["within_rhat_median_mean"]),
             "B/W ratio": transition(default["between_within_ratio_mean"], combined["between_within_ratio_mean"]),
@@ -584,7 +540,7 @@ def write_root_summary(
 
     compact = pd.DataFrame(rows)
     mixing_metrics = [
-        "worst_projected_rhat_mean", "cross_rhat_median_mean", "within_rhat_median_mean",
+        "cross_rhat_median_mean", "within_rhat_median_mean",
         "between_within_ratio_mean",
     ]
     combined_wins = all(
@@ -601,7 +557,12 @@ def write_root_summary(
              f"This directory contains standalone paper-facing analyses for five paired runs of {n_datasets} datasets.", "",
              "## Main result", ""]
     if combined_wins:
-        lines.append(f"MTMH+PT has the lowest five-run mean for all four reported mixing diagnostics in all {n_datasets} datasets.")
+        lines.append(f"MTMH+PT has the lowest five-run mean for all three comparison diagnostics in all {n_datasets} settings.")
+    else:
+        standard = summary[~summary['dataset'].str.contains('FriedmanSparseDir')]
+        wins = sum(frame.set_index('method')[metric].idxmin() == 'MTMH+PT'
+                   for _, frame in standard.groupby('dataset') for metric in mixing_metrics)
+        lines.append(f"Across the {standard.dataset.nunique()} standard-BART datasets, MTMH+PT has the smallest five-run mean in {wins} of {len(mixing_metrics) * standard.dataset.nunique()} diagnostic cells. DART dimensions form a separate controlled extension.")
     lines.extend([
         "Predictive changes are reported relative to training-only baselines.",
         f"The measured MTMH+PT cost is {cost_min:.2f}x to {cost_max:.2f}x the Default runtime per chain "
@@ -634,6 +595,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--segment-length", type=int, default=1000)
     parser.add_argument("--n-segments", type=int, default=4)
     parser.add_argument("--short-burn", type=int, default=3000)
+    parser.add_argument("--rhat-only", action="store_true",
+                        help="Refresh full post-burn R-hat table summaries without regenerating rolling figures.")
     parser.add_argument(
         "--geometry-only",
         action="store_true",
@@ -646,6 +609,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.geometry_only and args.rhat_only:
+        raise ValueError("Choose either --geometry-only or --rhat-only")
     table_dir = args.table_dir.resolve()
     figure_dir = args.figure_dir.resolve()
     summary_path = args.summary_path.resolve()
@@ -661,19 +626,22 @@ def main() -> int:
         "segments_per_block": args.n_segments,
         "short_burn": args.short_burn,
         "chain_geometry_draws_per_chain": "all post-burn draws",
+        "table_rhat_draws": "all post-burn draws; within-chain uses equal consecutive segments",
     }
 
-    if args.geometry_only:
+    if args.geometry_only or args.rhat_only:
+        update_kind = "rhat" if args.rhat_only else "geometry"
         run_path = table_dir / "comparison_run_summary.csv"
         if not run_path.exists():
-            raise FileNotFoundError(f"Geometry-only update requires {run_path}")
+            raise FileNotFoundError(f"Partial table update requires {run_path}")
         run_frame = pd.read_csv(run_path)
         for dataset in args.datasets:
             for run in args.runs:
-                print(f"[comparison:geometry] {dataset} run {run:03d}", flush=True)
+                print(f"[comparison:{update_kind}] {dataset} run {run:03d}", flush=True)
                 for method in METHODS:
                     post_burn = predictions(args.store_root, dataset, run, method, args.short_burn)
-                    geometry = chain_geometry(post_burn)
+                    geometry = (full_draw_rhat(post_burn, args.n_segments)
+                                if args.rhat_only else chain_geometry(post_burn))
                     mask = (
                         (run_frame["dataset"] == dataset)
                         & (run_frame["run"] == run)
@@ -703,7 +671,7 @@ def main() -> int:
             summary_frame,
             timing_frame,
         )
-        print(f"[comparison:geometry] updated tables: {table_dir}", flush=True)
+        print(f"[comparison:{update_kind}] updated tables: {table_dir}", flush=True)
         return 0
 
     run_rows, baseline_rows, cross_all, within_all = [], [], [], []
@@ -731,10 +699,11 @@ def main() -> int:
             for method in METHODS:
                 all_draws = predictions(args.store_root, dataset, run, method, 0)
                 post_burn = all_draws[:, args.short_burn:, :]
-                worst = worst_direction(all_draws[:, args.short_burn:, :], args.ridge_fraction)
+                worst = worst_direction_summary(all_draws[:, args.short_burn:, :], args.ridge_fraction)
                 cross = rolling_cross_rhat(all_draws, args.window, args.step)
                 within = rolling_within_rhat(all_draws, args.segment_length, args.n_segments, args.step)
                 geometry = chain_geometry(post_burn)
+                rhat_summary = full_draw_rhat(post_burn, args.n_segments)
                 rmse, crps = predictive_metrics(
                     post_burn,
                     residual_variances(args.store_root, dataset, run, method,
@@ -761,10 +730,7 @@ def main() -> int:
                     "worst_eigen_gap": worst["eigen_gap"],
                     "worst_projected_rhat": worst["projected_rhat"],
                     "second_projected_rhat": worst["second_projected_rhat"],
-                    "cross_rhat_median": cross["median"].median(),
-                    "cross_rhat_q90": cross["q90"].median(),
-                    "within_rhat_median": within["median"].median(),
-                    "within_rhat_q90": within["q90"].median(),
+                    **rhat_summary,
                     "centroid_distance": geometry["centroid_distance"],
                     "between_within_ratio": geometry["between_within_ratio"],
                     "geometry_draws_per_chain": geometry["geometry_draws_per_chain"],
@@ -774,8 +740,9 @@ def main() -> int:
                     "relative_crps": relative_crps,
                 })
             rhat_fig = plot_rhat_comparison(
-                cross_by_method, within_by_method,
-                f"{dataset} | run {run:03d} | pointwise R-hat comparison",
+                within_by_method,
+                f"{dataset} | run {run:03d} | within-chain segment R-hat: "
+                f"median and chain range",
             )
             rhat_fig.savefig(figure_dir / f"{dataset}_run{run:03d}_rhat_comparison.png",
                              dpi=args.dpi, bbox_inches="tight")

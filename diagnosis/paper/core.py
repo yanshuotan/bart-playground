@@ -1,7 +1,10 @@
-"""Loading and prediction-space diagnostics for stored long Default chains.
+"""Loading and prediction-space diagnostics shared by every paper analysis.
 
-Shared by `budget_comparison.py`, which builds the two-budget table, and
-`long_chain_figure.py`, which draws the paper figure.
+One copy of the pieces the section scripts all need: reading a stored run,
+pointwise R-hat, and the cross-fitted between/within directions behind every
+projection figure. That last one was previously duplicated verbatim in the
+section 3 and section 6 scripts, which meant the eigenproblem behind Figure 1
+and the one behind Figures 4-5 could drift apart without anything failing.
 """
 
 from __future__ import annotations
@@ -129,3 +132,52 @@ def worst_directions(
 def worst_direction(draws: np.ndarray, ridge_fraction: float = 1e-8) -> np.ndarray:
     """Compatibility wrapper returning the leading-direction projection."""
     return worst_directions(draws, n_directions=1, ridge_fraction=ridge_fraction)["projected"][:, :, 0]
+
+
+def pointwise_rhat(draws: np.ndarray) -> np.ndarray:
+    """Rank-normalized split R-hat at every test point."""
+    data = xr.DataArray(draws, dims=("chain", "draw", "test_point"), name="prediction")
+    return np.asarray(az.rhat(data, method="rank")["prediction"].values)
+
+
+def summarize_rhat(values: np.ndarray) -> dict[str, float]:
+    """Median, quartiles, upper tail and maximum across test points."""
+    values = np.asarray(values, dtype=float)
+    return {
+        "median": float(np.nanmedian(values)),
+        "q25": float(np.nanquantile(values, 0.25)),
+        "q75": float(np.nanquantile(values, 0.75)),
+        "q90": float(np.nanquantile(values, 0.90)),
+        "maximum": float(np.nanmax(values)),
+    }
+
+
+def worst_direction_summary(draws: np.ndarray,
+                            ridge_fraction: float) -> dict[str, np.ndarray | float]:
+    """The two leading directions, packaged as the section scripts expect.
+
+    A view of :func:`worst_directions`; the arithmetic lives there only.
+    """
+    found = worst_directions(draws, n_directions=2, ridge_fraction=ridge_fraction)
+    values, projected = found["eigenvalues"], found["projected"]
+    return {
+        "lambda_max": float(values[0]),
+        "lambda_second": float(values[1]),
+        "eigen_gap": float(values[0] - values[1]),
+        "projected_rhat": float(found["rhats"][0]),
+        "second_projected_rhat": float(found["rhats"][1]),
+        "directions": found["directions"],
+        "fit_draws": found["fit_draws"],
+        "projected": projected[:, :, 0],
+        "projected_2d": projected,
+    }
+
+
+def markdown_table(frame) -> str:
+    """A pipe table, for the summary markdown the scripts write beside the CSVs."""
+    headers = [str(column) for column in frame.columns]
+    rows = [[str(value) for value in row] for row in frame.itertuples(index=False, name=None)]
+    lines = ["| " + " | ".join(headers) + " |",
+             "| " + " | ".join("---" for _ in headers) + " |"]
+    lines.extend("| " + " | ".join(row) + " |" for row in rows)
+    return chr(10).join(lines)

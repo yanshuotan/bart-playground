@@ -39,6 +39,8 @@ tests/*.md
 /legacy/
 
 diagnosis/**/store/
+/diagnosis/store_default_ext/
+/diagnosis/store_default_ext_download/
 
 # Local archives created while reorganizing experiment results.
 /backup/

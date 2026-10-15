@@ -16,36 +16,17 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+from core import (dataset_tag, load_with_shape, markdown_table,
+                  pointwise_rhat, summarize_rhat, worst_direction_summary)
 import numpy as np
 import pandas as pd
 import xarray as xr
-from scipy.linalg import eigh
 
 
 DATASETS = ("fixed100_Abalone", "fixed100_Concrete", "fixed100_Friedman")
 RUNS = tuple(range(5))
 CHAIN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728")
-
-
-def load_with_shape(path: Path) -> np.ndarray:
-    with path.open("r", encoding="utf-8") as stream:
-        header = stream.readline().strip()
-    if "original_shape=" not in header:
-        raise ValueError(f"Missing original_shape header: {path}")
-    shape = ast.literal_eval(header.split("original_shape=")[-1])
-    return np.loadtxt(path, delimiter=",", comments="#").reshape(shape)
-
-
-def dataset_tag(store_root: Path, dataset: str) -> str:
-    """File-name prefix inside a store directory.
-
-    Usually the directory name, but the sparse variants differ: files in
-    fixed100_FriedmanSparseDir_p20 are named fixed100_FriedmanSparseDirP20K5__*.
-    """
-    preds = sorted((store_root / dataset / "preds").glob("*__preds.csv"))
-    if not preds:
-        raise FileNotFoundError(f"No predictions in {store_root / dataset / 'preds'}")
-    return preds[0].name.split("__run")[0]
 
 
 def prediction_path(store_root: Path, dataset: str, run: int, method: str) -> Path:
@@ -59,27 +40,11 @@ def predictions(store_root: Path, dataset: str, run: int, method: str, burn: int
     return draws[:, burn:, :] if burn else draws
 
 
-def pointwise_rhat(draws: np.ndarray) -> np.ndarray:
-    data = xr.DataArray(draws, dims=("chain", "draw", "test_point"), name="prediction")
-    return np.asarray(az.rhat(data, method="rank")["prediction"].values)
-
-
-def summarize(values: np.ndarray) -> dict[str, float]:
-    values = np.asarray(values, dtype=float)
-    return {
-        "median": float(np.nanmedian(values)),
-        "q25": float(np.nanquantile(values, 0.25)),
-        "q75": float(np.nanquantile(values, 0.75)),
-        "q90": float(np.nanquantile(values, 0.90)),
-        "maximum": float(np.nanmax(values)),
-    }
-
-
 def rolling_cross_rhat(draws: np.ndarray, window: int, step: int) -> pd.DataFrame:
     rows = []
     for start in range(0, draws.shape[1] - window + 1, step):
         rows.append({"window_start": start, "window_end": start + window,
-                     **summarize(pointwise_rhat(draws[:, start:start + window]))})
+                     **summarize_rhat(pointwise_rhat(draws[:, start:start + window]))})
     return pd.DataFrame(rows)
 
 
@@ -106,55 +71,9 @@ def rolling_within_rhat(
                 "original_chain": chain_id,
                 "window_start": start,
                 "window_end": start + block_length,
-                **summarize(chain_values),
+                **summarize_rhat(chain_values),
             })
     return pd.DataFrame(rows)
-
-
-def worst_direction(draws: np.ndarray, ridge_fraction: float) -> dict[str, np.ndarray | float]:
-    m, n, p = draws.shape
-    half = n // 2
-    if half < 2 or n - half < 2:
-        raise ValueError(f"Need at least four draws per chain to cross-fit; got {n}")
-    fit = draws[:, :half, :]
-    held = draws[:, half:, :]
-    means = fit.mean(axis=1)
-    grand = means.mean(axis=0)
-    within = np.zeros((p, p), dtype=float)
-    for chain in fit:
-        centered = chain - chain.mean(axis=0)
-        within += centered.T @ centered / (half - 1)
-    within /= m
-    offsets = means - grand
-    ridge = max(ridge_fraction * np.trace(within) / p, ridge_fraction)
-    eigenvalues, eigenvectors = eigh(
-        offsets.T @ offsets / (m - 1), within + ridge * np.eye(p)
-    )
-    order = np.argsort(eigenvalues)[::-1]
-    eigenvalues = np.maximum(eigenvalues[order], 0.0)
-    directions = eigenvectors[:, order[:2]].copy()
-    for column in range(directions.shape[1]):
-        directions[:, column] /= np.linalg.norm(directions[:, column])
-        anchor = int(np.argmax(np.abs(directions[:, column])))
-        if directions[anchor, column] < 0:
-            directions[:, column] *= -1
-    projected_2d = np.einsum("mnp,pk->mnk", draws - grand[None, None, :], directions)
-    scored_2d = np.einsum("mnp,pk->mnk", held - grand[None, None, :], directions)
-    projected_rhats = []
-    for column in range(scored_2d.shape[2]):
-        data = xr.DataArray(scored_2d[:, :, column], dims=("chain", "draw"), name="projection")
-        projected_rhats.append(float(az.rhat(data, method="rank")["projection"].values))
-    return {
-        "lambda_max": float(eigenvalues[0]),
-        "lambda_second": float(eigenvalues[1]),
-        "eigen_gap": float(eigenvalues[0] - eigenvalues[1]),
-        "projected_rhat": projected_rhats[0],
-        "second_projected_rhat": projected_rhats[1],
-        "directions": directions,
-        "fit_draws": half,
-        "projected": projected_2d[:, :, 0],
-        "projected_2d": projected_2d,
-    }
 
 
 def mean_pairwise_centroid_distance(draws: np.ndarray) -> float:
@@ -250,14 +169,6 @@ def aggregate_dataset_summary(run_frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def markdown_table(frame: pd.DataFrame) -> str:
-    headers = [str(column) for column in frame.columns]
-    rows = [[str(value) for value in row] for row in frame.itertuples(index=False, name=None)]
-    lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"]
-    lines.extend("| " + " | ".join(row) + " |" for row in rows)
-    return "\n".join(lines)
-
-
 def write_summary(path: Path, settings: dict[str, int | float], dataset_summary: pd.DataFrame) -> None:
     lines = ["# Default-sampler diagnosis summary", "", "All values summarize five runs per dataset.", "",
              "## Settings", ""]
@@ -321,11 +232,11 @@ def main() -> int:
             long_all = predictions(args.store_root, dataset, run, "default_long", 0)
             long_post_burn = long_all[:, args.long_burn:, :]
 
-            worst = worst_direction(short_all[:, args.short_burn:, :], args.ridge_fraction)
+            worst = worst_direction_summary(short_all[:, args.short_burn:, :], args.ridge_fraction)
             cross = rolling_cross_rhat(short_all, args.window, args.step)
             within = rolling_within_rhat(short_all, args.segment_length, args.n_segments, args.step)
             long_values = pointwise_rhat(long_post_burn)
-            long_summary = summarize(long_values)
+            long_summary = summarize_rhat(long_values)
 
             cross_frames.append(cross.assign(dataset=dataset, run=run))
             within_frames.append(within.assign(dataset=dataset, run=run))

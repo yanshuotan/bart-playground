@@ -41,13 +41,17 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import arviz as az
 import numpy as np
 import pandas as pd
+import xarray as xr
 
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
-sys.path.insert(0, str(DIAG / "longchain"))
-from chains import load_with_shape, pointwise_rhat_summary  # noqa: E402
+from core import load_with_shape, pointwise_rhat_summary  # noqa: E402
+from section6_methods import (full_target_vector, predictive_baselines,  # noqa: E402
+                              predictive_metrics, residual_variances, split_indices)
+from section7_costs import scalar_summary, targets  # noqa: E402
 
 METHODS = ["default", "default_pt", "mtmh", "mtmh_pt"]
 METHOD_NAMES = {"default": "Default", "default_pt": "Default+PT",
@@ -142,10 +146,15 @@ def extended_default(args, dataset: str, run: int, short: np.ndarray) -> np.ndar
     # the extension stores under the dataset tag, which for the DART variants
     # is not the folder name the main store uses
     folder = args.extended_store / TIMING_TAG[dataset] / "preds"
+    packed = folder / f"{TIMING_TAG[dataset]}__run{run:03d}__{args.extended_method}__preds.npz"
     hits = sorted(folder.glob(f"*__run{run:03d}__{args.extended_method}__preds.csv"))
-    if not hits:
+    if not hits and not packed.exists():
         return short
-    draws = load_with_shape(hits[0]).transpose(0, 2, 1)
+    if packed.exists():
+        with np.load(packed) as archive:
+            draws = archive['predictions'].transpose(0, 2, 1)
+    else:
+        draws = load_with_shape(hits[0]).transpose(0, 2, 1)
     overlap = min(short.shape[1], draws.shape[1])
     gap = float(np.max(np.abs(short[:, :overlap, :] - draws[:, :overlap, :])))
     if gap > 1e-9:
@@ -166,8 +175,7 @@ def thinned_tail(draws: np.ndarray, n_iters: int, warmup: float, keep: int) -> n
     return retained[:, index, :]
 
 
-def main(supplied: list[str] | None = None) -> int:
-    args = parse_args(supplied)
+def curves_main(args) -> int:
     args.table_dir.mkdir(parents=True, exist_ok=True)
     args.figure_dir.mkdir(parents=True, exist_ok=True)
 
@@ -309,6 +317,99 @@ def draw_curves(args: argparse.Namespace, frame: pd.DataFrame, order) -> None:
     fig.savefig(args.figure_dir / "equal_time_curves.png", dpi=args.dpi,
                 bbox_inches="tight")
     plt.close(fig)
+
+
+def budget_configurations(budget, ratios, chains=4):
+    if budget <= 0 or chains < 2 or any(v <= 0 for v in ratios.values()):
+        raise ValueError('Positive budget/cost ratios and at least two pooled chains required')
+    result=[(m,METHOD_NAMES[m],False,int(budget*10000/ratios[m])) for m in METHODS]
+    result.append(('default',f'Pooled Default ({chains} sequential)',True,int(budget*10000/chains)))
+    return result
+
+def evaluate(draws, y, truth, pooled):
+    means = draws.mean(axis=1)
+    distributions = [draws.reshape(-1, draws.shape[-1])] if pooled else list(draws)
+    estimates = [means.mean(axis=0)] if pooled else list(means)
+    mse = float(np.mean([np.mean((f-y)**2) for f in estimates]))
+    out = {'mse': mse, 'rmse_root_mean_mse': np.sqrt(mse),
+           'rmse_mean_chainwise': float(np.mean([np.sqrt(np.mean((f-y)**2)) for f in estimates]))}
+    intervals = [np.quantile(d, [.05,.95], axis=0) for d in distributions]
+    out['interval_width_median'] = float(np.mean([np.median(hi-lo) for lo,hi in intervals]))
+    if truth is not None:
+        out['latent_f_containment'] = float(np.mean([np.mean((lo<=truth)&(truth<=hi)) for lo,hi in intervals]))
+        out['rmse_f_root_mean_mse'] = float(np.sqrt(np.mean([np.mean((f-truth)**2) for f in estimates])))
+    data = xr.DataArray(draws, dims=('chain','draw','point'), name='f')
+    rhat = az.rhat(data, method='rank')['f'].values
+    out.update(rhat_median=float(np.median(rhat)), rhat_q90=float(np.quantile(rhat,.9)))
+    average = scalar_summary(draws.mean(axis=2))
+    out['panel_mean_rhat'] = average['rhat']
+    # These R-hats compare the four constituent chains / repeated realizations;
+    # pooling their draws does not itself improve their agreement.
+    return out
+
+def baselines_main(argv=None):
+    args = parse_args(argv)
+    if args.run != 0:
+        raise ValueError('Wall-time benchmark is available for run 0 only')
+    rows=[]
+    for dataset in args.datasets:
+        ratios=cost_ratios(args.timing_dir,dataset)
+        all_draws={m:stored_draws(args.store_root,dataset,0,m) for m in METHODS}
+        all_draws['default']=extended_default(args,dataset,0,all_draws['default'])
+        y,truth=targets(dataset,args.store_root,0)
+        full_y=full_target_vector(args.store_root,dataset)
+        train=full_y[split_indices(args.store_root,dataset,0,'train_idx')]
+        reference=predictive_baselines(train,y)
+        y_scale=float(np.ptp(train))
+        sigma={m:residual_variances(args.store_root,dataset,0,m) for m in METHODS}
+        extension=args.extended_store/TIMING_TAG[dataset]/'sigmas'/f'{TIMING_TAG[dataset]}__run000__{args.extended_method}__sigmas.csv'
+        if all_draws['default'].shape[1] > sigma['default'].shape[1]:
+            raw=load_with_shape(extension)
+            extended=raw.reshape(raw.shape[0],-1)
+            np.testing.assert_allclose(extended[:,:sigma['default'].shape[1]],sigma['default'],rtol=0,atol=1e-9)
+            sigma['default']=extended
+        for budget in args.budgets:
+            configurations=budget_configurations(budget,ratios)
+            if any(n>all_draws[m].shape[1] or n-int(round(args.warmup_fraction*n))<args.min_draws for m,_,_,n in configurations):
+                continue
+            for method,label,pooled,n in configurations:
+                start=int(round(args.warmup_fraction*n))
+                sample=all_draws[method][:,start:n,:]
+                scored=evaluate(sample,y,truth,pooled)
+                # Score posterior predictive y at the headline budget. Noise
+                # uses the matching draw's variance and training-only scale.
+                if budget == max(args.budgets):
+                    variance=sigma[method][:,start:n]
+                    f_for_score=sample.reshape(1,-1,sample.shape[-1]) if pooled else sample
+                    v_for_score=variance.reshape(1,-1) if pooled else variance
+                    _,crps=predictive_metrics(f_for_score,v_for_score,y,y_scale,20261014)
+                    scored.update(crps=crps,relative_crps=crps/reference['climatology_crps'])
+                scored['relative_rmse']=scored['rmse_root_mean_mse']/reference['naive_rmse']
+                rows.append({'dataset':dataset,'run':0,'method':label,'budget':budget,
+                             'estimator_chains':4 if pooled else 1,'repeated_single_estimators':1 if pooled else 4,
+                             'iterations_per_chain':n,'warmup_per_chain':start,
+                             'retained_per_chain':n-start,'charged_wall_units':n/10000*ratios[method]*(4 if pooled else 1),
+                             **scored})
+        print(f'[wall baseline] {dataset}',flush=True)
+    frame=pd.DataFrame(rows)
+    args.table_dir.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(args.table_dir/'wall_time_baselines.csv',index=False)
+    headline=max(set.intersection(*(set(g.budget) for _,g in frame.groupby('dataset'))))
+    frame[frame.budget.eq(headline)].to_csv(args.table_dir/'wall_time_baselines_summary.csv',index=False)
+
+
+
+def main(supplied: list[str] | None = None) -> int:
+    """`curves` draws the equal-wall-time figure; `baselines` scores the estimators."""
+    argv = list(sys.argv[1:] if supplied is None else supplied)
+    part = argv[0] if argv and not argv[0].startswith("-") else "curves"
+    rest = argv[1:] if argv and not argv[0].startswith("-") else argv
+    if part == "baselines":
+        baselines_main(rest)
+        return 0
+    if part != "curves":
+        raise SystemExit(f"unknown part {part!r}; expected 'curves' or 'baselines'")
+    return curves_main(parse_args(rest))
 
 
 if __name__ == "__main__":
