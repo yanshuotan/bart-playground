@@ -154,6 +154,25 @@ def make_fixed100_splits(
 # Model summaries on the fixed test points
 # ---------------------------------------------------------------------
 
+def vars_histograms(traces) -> np.ndarray:
+    """Per-draw split counts per feature, as (draw, feature).
+
+    The sampler keeps a `vars_histogram` on every trace state; it is dropped
+    with the state unless written out here. An empty result means the sampler
+    did not record one, which the callers treat as "nothing to store" rather
+    than as an error.
+    """
+    rows = [np.asarray(getattr(state, "vars_histogram", ()), dtype=float).ravel()
+            for state in traces]
+    rows = [row for row in rows if row.size]
+    if not rows:
+        return np.empty((0, 0), dtype=float)
+    width = rows[0].size
+    if any(row.size != width for row in rows):
+        raise ValueError("vars_histogram width changes between draws")
+    return np.asarray(rows, dtype=float)
+
+
 def summarize_model_outputs(model, X_test_fixed, y_test_fixed, *, store_preds: bool):
     f_preds = model.posterior_f(X_test_fixed, backtransform=True)
 
@@ -172,6 +191,9 @@ def summarize_model_outputs(model, X_test_fixed, y_test_fixed, *, store_preds: b
         result["swap_temperatures"] = np.asarray(model_params.get("temperatures", []), dtype=float)
     if store_preds:
         result["preds"] = np.asarray(f_preds)
+    histograms = vars_histograms(traces)
+    if histograms.size:
+        result["vars_histogram"] = histograms
     return result
 
 
@@ -430,6 +452,12 @@ def save_short_run(
                 store_root / dataset_tag / "preds" / f"{dataset_tag}__run{run_id:03d}__{method}__preds.csv",
                 preds_all_chains,
             )
+        if "vars_histogram" in chain_results[0][method]:
+            _save_numeric_csv(
+                store_root / dataset_tag / "vars_histogram"
+                / f"{dataset_tag}__run{run_id:03d}__{method}__vars_histogram.csv",
+                np.array([r[method]["vars_histogram"] for r in chain_results]),
+            )
     _save_numeric_csv(store_root / dataset_tag / "subsample_X_test" / f"{dataset_tag}__run{run_id:03d}__subsample_X_test.csv", split_info["X_test_fixed"])
     _save_numeric_csv(store_root / dataset_tag / "subsample_y_test" / f"{dataset_tag}__run{run_id:03d}__subsample_y_test.csv", split_info["y_test_fixed"])
     _save_numeric_csv(store_root / dataset_tag / "indices" / f"{dataset_tag}__run{run_id:03d}__train_idx.csv", split_info["train_idx"])
@@ -459,7 +487,9 @@ def summarize_thinned_default(model, X_test_fixed, y_test_fixed, *, store_preds:
     sigmas = np.array([trace.global_params["eps_sigma2"] for trace in model.trace])
     rmses = np.array([root_mean_squared_error(y_test_fixed, preds[:, k]) for k in range(preds.shape[1])])
     out = {"sigmas": sigmas, "rmses": rmses}
-
+    histograms = vars_histograms(model.trace)
+    if histograms.size:
+        out["vars_histogram"] = histograms
     if store_preds:
         out["preds"] = np.asarray(preds)
     return out
@@ -520,6 +550,13 @@ def run_long_default_chain_streaming(
     tail_sigmas_file = chain_dir / "tail_sigmas_rows.csv"
     tail_rmses_file = chain_dir / "tail_rmses_rows.csv"
     tail_preds_file = chain_dir / "tail_preds_rows.csv"
+    hist_file = chain_dir / "vars_histogram_rows.csv"
+    tail_hist_file = chain_dir / "tail_vars_histogram_rows.csv"
+    # Summed over every iteration the chain performs, thinned or not. The
+    # stored trace keeps one draw in `store_every`, so it is the only record
+    # that sees the whole run; it costs one vector per chain.
+    hist_total = None
+    hist_iterations = 0
 
     first_chunk = min(chunk_size, ndpost)
     model = DefaultBART(
@@ -547,6 +584,15 @@ def run_long_default_chain_streaming(
             chunk_trace = model.sampler.continue_run(chunk_post, last_state=last_state, quietly=True)
             current_nskip = 0
 
+        # run() seeds each chunk's trace with its starting state: the
+        # initialization for the first chunk, and the previous chunk's final
+        # state afterwards. Counting it would double the chunk boundaries.
+        every = vars_histograms(chunk_trace[1:])
+        if every.size:
+            hist_total = every.sum(axis=0) if hist_total is None else hist_total + every.sum(axis=0)
+            hist_iterations += every.shape[0]
+        del every
+
         thinned = _thin_trace(chunk_trace, ndpost=chunk_post, nskip=current_nskip, store_every=store_every)
         if len(thinned) == 0:
             raise RuntimeError("No thinned states collected from long-chain chunk")
@@ -559,6 +605,8 @@ def run_long_default_chain_streaming(
         _append_numeric_rows(rmses_file, np.asarray(chunk_result["rmses"]).reshape(-1, 1))
         if store_preds:
             _append_numeric_rows(preds_file, np.asarray(chunk_result["preds"]).T)
+        if "vars_histogram" in chunk_result:
+            _append_numeric_rows(hist_file, np.asarray(chunk_result["vars_histogram"]))
 
         # The closing chunk is also kept at stride 1, so the stored draws
         # include one stretch of consecutive iterations.
@@ -576,6 +624,8 @@ def run_long_default_chain_streaming(
             _append_numeric_rows(tail_rmses_file, np.asarray(tail_result["rmses"]).reshape(-1, 1))
             if store_preds:
                 _append_numeric_rows(tail_preds_file, np.asarray(tail_result["preds"]).T)
+            if "vars_histogram" in tail_result:
+                _append_numeric_rows(tail_hist_file, np.asarray(tail_result["vars_histogram"]))
             del tail_result
 
         last_state = chunk_trace[-1]
@@ -586,6 +636,14 @@ def run_long_default_chain_streaming(
         gc.collect()
         remaining -= chunk_post
         chunks_done += 1
+
+    if hist_total is not None:
+        # one row: the split counts summed over every iteration, with the
+        # iteration count appended so a proportion can be recovered later
+        _append_numeric_rows(
+            chain_dir / "vars_histogram_total.csv",
+            np.append(hist_total, float(hist_iterations)).reshape(1, -1),
+        )
 
     del model, last_state
     gc.collect()
@@ -613,6 +671,7 @@ def _assemble_long_tail(
     sigmas_by_chain = []
     rmses_by_chain = []
     preds_by_chain = []
+    hist_by_chain = []
     for cr in chain_results:
         chain_dir = Path(cr["tmp_dir"])
         sigmas_by_chain.append(_load_2d_or_empty(chain_dir / "tail_sigmas_rows.csv", 1).reshape(-1, 1))
@@ -620,6 +679,9 @@ def _assemble_long_tail(
         if store_preds:
             rows = _load_2d_or_empty(chain_dir / "tail_preds_rows.csv", split_info["X_test_fixed"].shape[0])
             preds_by_chain.append(rows.T)
+        hist_path = chain_dir / "tail_vars_histogram_rows.csv"
+        if hist_path.exists():
+            hist_by_chain.append(np.loadtxt(hist_path, delimiter=",", ndmin=2))
 
     sigmas = np.asarray(sigmas_by_chain)
     rmses = np.asarray(rmses_by_chain)
@@ -636,6 +698,13 @@ def _assemble_long_tail(
         preds = np.asarray(preds_by_chain)
         _save_numeric_csv(base / "preds" / f"{dataset_tag}__run{run_id:03d}__{method}__preds.csv", preds)
         tail_metadata[f"{method}_preds_shape"] = str(preds.shape)
+    if len(hist_by_chain) == len(chain_results):
+        histograms = np.asarray(hist_by_chain)
+        _save_numeric_csv(
+            base / "vars_histogram" / f"{dataset_tag}__run{run_id:03d}__{method}__vars_histogram.csv",
+            histograms,
+        )
+        tail_metadata[f"{method}_vars_histogram_shape"] = str(histograms.shape)
     _write_key_value_csv(
         base / "metadata" / f"{dataset_tag}__run{run_id:03d}__{method}_metadata.csv", tail_metadata
     )
@@ -655,6 +724,8 @@ def assemble_long_default(
     sigmas_by_chain = []
     rmses_by_chain = []
     preds_by_chain = []
+    hist_by_chain = []
+    hist_total_by_chain = []
     for cr in chain_results:
         chain_dir = Path(cr["tmp_dir"])
         sigmas_rows = _load_2d_or_empty(chain_dir / "sigmas_rows.csv", 1)
@@ -665,6 +736,12 @@ def assemble_long_default(
         if store_preds:
             preds_rows = _load_2d_or_empty(chain_dir / "preds_rows.csv", split_info["X_test_fixed"].shape[0])
             preds_by_chain.append(preds_rows.T)
+        hist_path = chain_dir / "vars_histogram_rows.csv"
+        if hist_path.exists():
+            hist_by_chain.append(np.loadtxt(hist_path, delimiter=",", ndmin=2))
+        total_path = chain_dir / "vars_histogram_total.csv"
+        if total_path.exists():
+            hist_total_by_chain.append(np.loadtxt(total_path, delimiter=",", ndmin=2).reshape(-1))
 
     if tail_ndpost:
         _assemble_long_tail(
@@ -687,6 +764,22 @@ def assemble_long_default(
         _save_numeric_csv(store_root / dataset_tag / "preds" / f"{dataset_tag}__run{run_id:03d}__default_long__preds.csv", preds)
         metadata = dict(metadata)
         metadata["default_long_preds_shape"] = str(preds.shape)
+    base = store_root / dataset_tag / "vars_histogram"
+    if len(hist_by_chain) == len(chain_results):
+        histograms = np.asarray(hist_by_chain)
+        _save_numeric_csv(
+            base / f"{dataset_tag}__run{run_id:03d}__default_long__vars_histogram.csv", histograms)
+        metadata = dict(metadata)
+        metadata["default_long_vars_histogram_shape"] = str(histograms.shape)
+    if len(hist_total_by_chain) == len(chain_results):
+        # per chain: the split counts over every iteration, then the iteration
+        # count, so the last column divides the rest into a proportion
+        totals = np.asarray(hist_total_by_chain)
+        _save_numeric_csv(
+            base / f"{dataset_tag}__run{run_id:03d}__default_long__vars_histogram_total.csv", totals)
+        metadata = dict(metadata)
+        metadata["default_long_vars_histogram_total_shape"] = str(totals.shape)
+        metadata["vars_histogram_total_last_column"] = "iterations summed"
     metadata = dict(metadata)
 
     metadata["default_long_sigmas_shape"] = str(sigmas.shape)
@@ -816,40 +909,53 @@ def run_fixed100_dataset(
         if progress_print:
             print(f"[{dataset_tag} RUN {run_id:03d}] fixed test n={X_test_fixed.shape[0]}, train n={X_train.shape[0]}", flush=True)
 
-        if run_short:
-            if ladder_search_points is not None and ladder_search_points < X_train.shape[0]:
-                rng = np.random.default_rng(split_info["train_seed"])
-                idx_search = rng.choice(X_train.shape[0], ladder_search_points, replace=False)
-                X_search = X_train[idx_search]
-                y_search = y_train[idx_search]
-            else:
-                X_search = X_train
-                y_search = y_train
+        # Only the tempered arms consume a ladder; searching for one when
+        # neither was asked for costs a pilot run and changes nothing. The
+        # search draws from its own generator, so skipping it leaves every
+        # chain seed, and therefore every draw, untouched.
+        wants_ladder = any(m in ("default_pt", "mtmh_pt") for m in short_methods)
 
-            run_temperatures, ladder_mean_rates, ladder_history = quick_ladder_search(
-                X_search,
-                y_search,
-                n_trees=n_trees,
-                tree_alpha=tree_alpha,
-                tree_beta=tree_beta,
-                proposal_probs=proposal_probs_default,
-                target_rate=ladder_target_rate,
-                max_rounds=ladder_max_rounds,
-                ndpost=ladder_ndpost,
-                nskip=ladder_nskip,
-                n_repeats=ladder_repeats,
-                random_state=ladder_random_state + 10000 * run_id,
-                swap_interval=swap_interval,
-                post_swap_repair_steps=post_swap_repair_steps,
-                initial_temperatures=temperatures,
-                dirichlet_prior=dirichlet_prior,
-                s_alpha=s_alpha,
-                progress_print=progress_print,
-                progress_prefix=f"[{dataset_tag} RUN {run_id:03d}] ",
-            )
+        if run_short:
+            if wants_ladder:
+                if ladder_search_points is not None and ladder_search_points < X_train.shape[0]:
+                    rng = np.random.default_rng(split_info["train_seed"])
+                    idx_search = rng.choice(X_train.shape[0], ladder_search_points, replace=False)
+                    X_search = X_train[idx_search]
+                    y_search = y_train[idx_search]
+                else:
+                    X_search = X_train
+                    y_search = y_train
+
+                run_temperatures, ladder_mean_rates, ladder_history = quick_ladder_search(
+                    X_search,
+                    y_search,
+                    n_trees=n_trees,
+                    tree_alpha=tree_alpha,
+                    tree_beta=tree_beta,
+                    proposal_probs=proposal_probs_default,
+                    target_rate=ladder_target_rate,
+                    max_rounds=ladder_max_rounds,
+                    ndpost=ladder_ndpost,
+                    nskip=ladder_nskip,
+                    n_repeats=ladder_repeats,
+                    random_state=ladder_random_state + 10000 * run_id,
+                    swap_interval=swap_interval,
+                    post_swap_repair_steps=post_swap_repair_steps,
+                    initial_temperatures=temperatures,
+                    dirichlet_prior=dirichlet_prior,
+                    s_alpha=s_alpha,
+                    progress_print=progress_print,
+                    progress_prefix=f"[{dataset_tag} RUN {run_id:03d}] ",
+                )
+                if progress_print:
+                    print(f"[{dataset_tag} RUN {run_id:03d}] ladder selected temps={np.round(run_temperatures, 4).tolist()}", flush=True)
+            else:
+                # no tempered arm requested, so the ladder is never read
+                run_temperatures = list(temperatures)
+                ladder_mean_rates, ladder_history = [], []
+                X_search = None
 
             if progress_print:
-                print(f"[{dataset_tag} RUN {run_id:03d}] ladder selected temps={np.round(run_temperatures, 4).tolist()}", flush=True)
                 print(
                     f"[{dataset_tag} RUN {run_id:03d}] short methods start: n_chains={n_chains}, n_jobs={n_jobs}, "
                     f"parallel_methods={parallel_methods}",
@@ -927,7 +1033,7 @@ def run_fixed100_dataset(
                     "temperatures": run_temperatures,
                     "ladder_mean_rates": ladder_mean_rates,
                     "ladder_history": ladder_history,
-                    "ladder_search_points": int(X_search.shape[0]),
+                    "ladder_search_points": 0 if X_search is None else int(X_search.shape[0]),
                     # the settings that produced the ladder and the fits, which
                     # earlier runs did not record and cannot now be recovered
                     "ladder_ndpost": ladder_ndpost,
