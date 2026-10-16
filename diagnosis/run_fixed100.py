@@ -23,7 +23,6 @@ from fixed100_support import (
     fail_fast_live_pipeline_check,
     generate_sparse_variant,
     load_dataset,
-    make_capped_harmonic_ladder_search,
     memory_logger,
     repo_nested_friedman1_generator,
     smoke_check,
@@ -74,12 +73,13 @@ def _common_arguments(parser):
              "matches what a full run would have produced for those methods.")
     parser.add_argument("--ladder-tmax", type=float, default=100.0)
     parser.add_argument("--ladder-init-size", type=int, default=10)
-    parser.add_argument("--ladder-max-temperatures", type=int, default=0)
+    parser.add_argument("--ladder-max-temperatures", type=int, default=0, help="Cap on the ladder size; 0 leaves it uncapped.")
     parser.add_argument("--ladder-target-rate", type=float, default=0.4)
     parser.add_argument("--ladder-max-rounds", type=int, default=10)
-    parser.add_argument("--ladder-ndpost", type=int, default=500)
-    parser.add_argument("--ladder-nskip", type=int, default=500)
-    parser.add_argument("--ladder-repeats", type=int, default=3)
+    parser.add_argument("--ladder-ndpost", type=int, default=200,
+                        help="Ladder-search iterations per round, after the burn-in; that round's swap rates come from them.")
+    parser.add_argument("--ladder-nskip", type=int, default=200,
+                        help="Ladder-search burn-in at the start of every round; its swaps are not counted.")
     parser.add_argument("--ladder-search-points", type=int, default=1000)
     parser.add_argument(
         "--parallel-methods",
@@ -100,8 +100,6 @@ def parse_args(argv=None):
     _common_arguments(fixed)
     fixed.add_argument("--datasets", nargs="+", choices=("abalone", "airfoil", "calhousing", "ccpp", "concrete", "cpu_act", "friedman", "friedman_sparse_dir", "seoul_bike", "superconduct"), default=["abalone", "concrete", "friedman"])
     fixed.add_argument("--run-ids", nargs="+", help="Only these run IDs, e.g. 2 3 4 or 2-4")
-    fixed.add_argument("--ladder", choices=("harmonic", "original"), default="harmonic")
-    fixed.add_argument("--temperatures", type=float, nargs="+", default=[1.0, 100.0], help="Initial temperatures when --ladder=original")
     fixed.add_argument("--skip-short", action="store_true")
     fixed.add_argument("--skip-long", action="store_true")
     fixed.add_argument(
@@ -126,19 +124,6 @@ def parse_args(argv=None):
     sparse.add_argument("--long-store-every", type=int, default=1000)
     sparse.add_argument("--long-chunk-size", type=int, default=10_000)
     args = parser.parse_args(supplied)
-    if args.experiment == "fixed" and args.ladder == "original":
-        if "--short-ndpost" not in supplied:
-            args.short_ndpost = 2000
-        if args.run_ids:
-            if "--n-chains" not in supplied:
-                args.n_chains = 1
-            if "--n-jobs" not in supplied:
-                args.n_jobs = 1
-        else:
-            if "--n-jobs" not in supplied:
-                args.n_jobs = 4
-            if "--temperatures" not in supplied:
-                args.temperatures = [1.0, 1_000_000.0]
     if args.ladder_init_size < 2 or args.ladder_tmax <= 1.0:
         parser.error("The ladder needs at least two temperatures and Tmax > 1.")
     if args.n_runs < 1 or args.n_chains < 1 or args.n_jobs < 1:
@@ -162,8 +147,6 @@ def _store_root(args):
 
 
 def _initial_temperatures(args):
-    if args.experiment == "fixed" and args.ladder == "original":
-        return tuple(args.temperatures)
     return tuple(np.geomspace(1.0, args.ladder_tmax, args.ladder_init_size).tolist())
 
 
@@ -183,9 +166,9 @@ def _fit_arguments(args, X, y, dataset_tag, store_root, *, long_ndpost, long_sto
         temperatures=_initial_temperatures(args),
         ladder_target_rate=args.ladder_target_rate,
         ladder_max_rounds=args.ladder_max_rounds,
+        ladder_max_temperatures=args.ladder_max_temperatures if args.ladder_max_temperatures > 0 else None,
         pt_n_jobs=args.pt_n_jobs,
         ladder_ndpost=args.ladder_ndpost, ladder_nskip=args.ladder_nskip,
-        ladder_repeats=args.ladder_repeats,
         ladder_search_points=args.ladder_search_points,
         swap_interval=args.swap_interval, multi_tries=args.multi_tries,
         store_preds=True, progress_print=True, run_short=run_short,
@@ -193,12 +176,6 @@ def _fit_arguments(args, X, y, dataset_tag, store_root, *, long_ndpost, long_sto
         s_alpha=float(s_alpha), parallel_methods=args.parallel_methods,
         short_methods=args.short_methods,
     )
-
-
-def _use_ladder(args):
-    if args.experiment == "sparse" or args.ladder == "harmonic":
-        cap = None if args.ladder_max_temperatures <= 0 else args.ladder_max_temperatures
-        exp.quick_ladder_search = make_capped_harmonic_ladder_search(cap)
 
 
 def _run_fixed(args, store_root):
@@ -306,7 +283,6 @@ def main(argv=None):
         f"{'' if args.base_chain_seed == GLOBAL_BASE_CHAIN_SEED else ' (overridden)'}",
         flush=True,
     )
-    _use_ladder(args)
     if args.experiment == "fixed":
         _run_fixed(args, store_root)
     else:

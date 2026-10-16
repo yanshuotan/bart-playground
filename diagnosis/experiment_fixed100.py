@@ -197,6 +197,25 @@ def summarize_model_outputs(model, X_test_fixed, y_test_fixed, *, store_preds: b
     return result
 
 
+def _warm_start_states(final_states, old_temps, new_temps):
+    """States for `new_temps`, continuing the chains that ran at `old_temps`.
+
+    A temperature already on the ladder keeps its own chain. An inserted one
+    starts from the state of the chain at the nearest old temperature; for the
+    harmonic midpoint that is always the colder neighbour. The fit copies the
+    states it is given, so a state may appear twice.
+    """
+    old = np.asarray(old_temps, dtype=float)
+    position = {float(t): i for i, t in enumerate(old_temps)}
+    states = []
+    for t in new_temps:
+        if float(t) in position:
+            states.append(final_states[position[float(t)]])
+        else:
+            states.append(final_states[int(np.argmin(np.abs(old - t)))])
+    return states
+
+
 def quick_ladder_search(
     X,
     y,
@@ -207,9 +226,9 @@ def quick_ladder_search(
     proposal_probs,
     target_rate=0.4,
     max_rounds=10,
-    ndpost=500,
-    nskip=500,
-    n_repeats=3,
+    max_temperatures: int | None = None,
+    ndpost=200,
+    nskip=200,
     random_state=123,
     swap_interval=5,
     post_swap_repair_steps=0,
@@ -219,100 +238,142 @@ def quick_ladder_search(
     progress_print: bool = False,
     progress_prefix: str = "",
 ):
-    """Adaptive temperature-ladder search with repeated fits per round."""
+    """Adaptive temperature-ladder search on one continuing pilot run.
+
+    The chains start at the root only once. Every round runs `nskip` burn-in
+    iterations and then `ndpost` iterations whose swaps give that round's
+    rates; the burn-in lets the chains settle on the new ladder, above all the
+    newly inserted ones. Each round inserts the harmonic mean (the
+    midpoint in beta = 1 / T) into every adjacent pair whose rate is below
+    `target_rate`, the lowest rates first, and the next round continues every
+    chain from where it stopped; an inserted temperature starts from the state
+    of the nearest one. `max_temperatures` caps the ladder size; None or a
+    non-positive value leaves it uncapped. The returned ladder includes the
+    last round's insertions.
+    """
+    if ndpost < swap_interval:
+        raise ValueError(
+            f"ndpost={ndpost} is shorter than swap_interval={swap_interval}, so a round would attempt no swap."
+        )
     temps = sorted({float(t) for t in initial_temperatures})
     if not temps:
         raise ValueError("initial_temperatures cannot be empty")
     if temps[0] != 1.0:
         temps = [1.0] + [t for t in temps if t != 1.0]
 
+    cap_value = int(max_temperatures) if max_temperatures is not None and int(max_temperatures) > 0 else None
+    if cap_value is not None and len(temps) > cap_value:
+        raise ValueError(
+            f"Initial ladder already has {len(temps)} temperatures, "
+            f"which exceeds max_temperatures={cap_value}."
+        )
+
     history = []
-    final_mean_rates = np.array([], dtype=float)
+    rates = np.array([], dtype=float)
+    states = None
 
     if progress_print:
         print(
             f"{progress_prefix}[LADDER] start: n_points={X.shape[0]}, rounds<={max_rounds}, "
-            f"repeats={n_repeats}, target_rate={target_rate}, init_temps={temps}",
+            f"iterations/round={nskip} burn-in + {ndpost} counted, target_rate={target_rate}, "
+            f"max_temperatures={cap_value if cap_value is not None else 'disabled'}, "
+            f"init_temps={np.round(temps, 6).tolist()}",
             flush=True,
         )
 
     for round_id in range(max_rounds):
-        round_rates = []
-
-        for rep in range(n_repeats):
-            model = ParallelTemperingBART(
-                ndpost=ndpost,
-                nskip=nskip,
-                n_trees=n_trees,
-                tree_alpha=tree_alpha,
-                tree_beta=tree_beta,
-                proposal_probs=proposal_probs,
-                random_state=random_state + 1000 * round_id + rep,
-                temperatures=temps,
-                swap_interval=swap_interval,
-                post_swap_repair_steps=post_swap_repair_steps,
-                store_chain_traces=False,
-                store_swap_diagnostics=False,
-                print_swap_diagnostics=False,
-                dirichlet_prior=dirichlet_prior,
-                s_alpha=s_alpha,
-            )
-            model.fit(X, y, quietly=True)
-            rates = np.asarray(model.get_params().get("swap_accept_rates", []), dtype=float)
-            if rates.size == len(temps) - 1:
-                round_rates.append(rates)
-            del model
-            gc.collect()
-
-        if round_rates:
-            mean_rates = np.mean(np.vstack(round_rates), axis=0)
-        else:
-            mean_rates = np.array([], dtype=float)
+        model = ParallelTemperingBART(
+            ndpost=ndpost,
+            nskip=nskip,
+            n_trees=n_trees,
+            tree_alpha=tree_alpha,
+            tree_beta=tree_beta,
+            proposal_probs=proposal_probs,
+            random_state=random_state + 1000 * round_id,
+            temperatures=temps,
+            swap_interval=swap_interval,
+            post_swap_repair_steps=post_swap_repair_steps,
+            store_chain_traces=False,
+            store_swap_diagnostics=False,
+            print_swap_diagnostics=False,
+            dirichlet_prior=dirichlet_prior,
+            s_alpha=s_alpha,
+        )
+        model.fit(X, y, quietly=True, init_states=states, keep_final_states=True)
+        rates = np.asarray(model.get_params().get("swap_accept_rates", []), dtype=float)
+        if rates.size != len(temps) - 1:
+            rates = np.array([], dtype=float)
+        final_states = model.final_states
+        del model
+        gc.collect()
 
         if progress_print:
-            rates_preview = np.round(mean_rates, 4).tolist() if mean_rates.size > 0 else []
             print(
                 f"{progress_prefix}[LADDER] round {round_id + 1}/{max_rounds}: "
-                f"n_temps={len(temps)}, mean_rates={rates_preview}",
+                f"n_temps={len(temps)}, rates={np.round(rates, 4).tolist()}",
                 flush=True,
             )
 
+        # Lowest swap rate first, so a cap keeps the worst bottlenecks.
+        candidate_insertions = sorted(
+            (
+                {
+                    "interval_index": int(i),
+                    "rate": float(rate),
+                    "t_low": float(temps[i]),
+                    "t_high": float(temps[i + 1]),
+                    # Harmonic mean = midpoint in inverse temperature beta = 1 / T.
+                    "t_new": 2.0 * temps[i] * temps[i + 1] / (temps[i] + temps[i + 1]),
+                }
+                for i, rate in enumerate(rates)
+                if rate < target_rate
+            ),
+            key=lambda d: d["rate"],
+        )
+
         history.append(
             {
-                "round": round_id,
+                "round": int(round_id),
                 "temperatures": [float(t) for t in temps],
-                "mean_swap_rates": mean_rates.tolist(),
-                "all_swap_rates": [r.tolist() for r in round_rates],
+                "swap_rates": rates.tolist(),
+                "candidate_insertions": candidate_insertions,
+                "max_temperatures": cap_value,
             }
         )
 
-        final_mean_rates = mean_rates
-        if mean_rates.size == 0 or np.all(mean_rates >= target_rate):
+        if rates.size == 0 or not candidate_insertions:
             if progress_print:
                 print(
-                    f"{progress_prefix}[LADDER] stop: target reached or no valid rates. final_temps={temps}",
+                    f"{progress_prefix}[LADDER] stop: target reached or no valid rates. "
+                    f"final_temps={np.round(temps, 6).tolist()}",
                     flush=True,
                 )
             break
 
-        new_temps = set(temps)
-        for i, rate in enumerate(mean_rates):
-            if rate < target_rate:
-                t_low = temps[i]
-                t_high = temps[i + 1]
-                new_temps.add(2.0 * t_low * t_high / (t_low + t_high))
+        if cap_value is not None:
+            remaining_slots = cap_value - len(temps)
+            if remaining_slots <= 0:
+                if progress_print:
+                    print(
+                        f"{progress_prefix}[LADDER] stop: max_temperatures={cap_value} reached "
+                        f"before all rates met target.",
+                        flush=True,
+                    )
+                break
+            candidate_insertions = candidate_insertions[:remaining_slots]
 
-        updated_temps = sorted(new_temps)
+        updated_temps = sorted(set(temps) | {item["t_new"] for item in candidate_insertions})
         if len(updated_temps) == len(temps):
             if progress_print:
                 print(f"{progress_prefix}[LADDER] stop: no new temperature inserted.", flush=True)
             break
+        states = _warm_start_states(final_states, temps, updated_temps)
         temps = updated_temps
 
     if progress_print:
         print(f"{progress_prefix}[LADDER] done: final n_temps={len(temps)}", flush=True)
 
-    return [float(t) for t in temps], final_mean_rates.tolist(), history
+    return [float(t) for t in temps], rates.tolist(), history
 
 
 # ---------------------------------------------------------------------
@@ -821,10 +882,10 @@ def run_fixed100_dataset(
     temperatures=(1.0, 2.0, 3.0, 5.0),
     ladder_target_rate: float = 0.4,
     ladder_max_rounds: int = 10,
+    ladder_max_temperatures: int | None = None,
     pt_n_jobs: int | None = 1,
-    ladder_ndpost: int = 500,
-    ladder_nskip: int = 500,
-    ladder_repeats: int = 3,
+    ladder_ndpost: int = 200,
+    ladder_nskip: int = 200,
     ladder_search_points: int | None = 1000,
     ladder_random_state: int = 123,
     swap_interval: int = 50,
@@ -887,9 +948,9 @@ def run_fixed100_dataset(
             "temperatures": list(temperatures),
             "ladder_target_rate": ladder_target_rate,
             "ladder_max_rounds": ladder_max_rounds,
+            "ladder_max_temperatures": ladder_max_temperatures,
             "ladder_ndpost": ladder_ndpost,
             "ladder_nskip": ladder_nskip,
-            "ladder_repeats": ladder_repeats,
             "ladder_search_points": ladder_search_points,
             "swap_interval": swap_interval,
             "multi_tries": multi_tries,
@@ -926,7 +987,7 @@ def run_fixed100_dataset(
                     X_search = X_train
                     y_search = y_train
 
-                run_temperatures, ladder_mean_rates, ladder_history = quick_ladder_search(
+                run_temperatures, ladder_swap_rates, ladder_history = quick_ladder_search(
                     X_search,
                     y_search,
                     n_trees=n_trees,
@@ -935,9 +996,9 @@ def run_fixed100_dataset(
                     proposal_probs=proposal_probs_default,
                     target_rate=ladder_target_rate,
                     max_rounds=ladder_max_rounds,
+                    max_temperatures=ladder_max_temperatures,
                     ndpost=ladder_ndpost,
                     nskip=ladder_nskip,
-                    n_repeats=ladder_repeats,
                     random_state=ladder_random_state + 10000 * run_id,
                     swap_interval=swap_interval,
                     post_swap_repair_steps=post_swap_repair_steps,
@@ -952,7 +1013,7 @@ def run_fixed100_dataset(
             else:
                 # no tempered arm requested, so the ladder is never read
                 run_temperatures = list(temperatures)
-                ladder_mean_rates, ladder_history = [], []
+                ladder_swap_rates, ladder_history = [], []
                 X_search = None
 
             if progress_print:
@@ -1031,14 +1092,14 @@ def run_fixed100_dataset(
                     "n_jobs": n_jobs,
                     "methods": short_methods,
                     "temperatures": run_temperatures,
-                    "ladder_mean_rates": ladder_mean_rates,
+                    "ladder_swap_rates": ladder_swap_rates,
                     "ladder_history": ladder_history,
                     "ladder_search_points": 0 if X_search is None else int(X_search.shape[0]),
                     # the settings that produced the ladder and the fits, which
                     # earlier runs did not record and cannot now be recovered
                     "ladder_ndpost": ladder_ndpost,
                     "ladder_nskip": ladder_nskip,
-                    "ladder_repeats": ladder_repeats,
+                    "ladder_max_temperatures": ladder_max_temperatures,
                     "ladder_target_rate": ladder_target_rate,
                     "swap_interval": swap_interval,
                     "pt_n_jobs": pt_n_jobs,
