@@ -382,6 +382,87 @@ sequenceDiagram
 </details>
 
 
+## Adaptive SMC with PT weights (smc2)
+
+`AdaptiveSMCBART` implements the requested configuration on a branch based
+directly on `mtmh_pt`: 1,000 complete-ensemble particles, ordinary importance
+ESS/N = 0.5 selected by bisection, and 100 **original DefaultSampler** sweeps
+at every temperature. Unlike the earlier `smc` branch, it does not add a full
+leaf Gibbs pass to every Default update or replace the Default variance kernel.
+It uses the baseline experiment's `tol=1` and standard four move probabilities.
+
+The importance target is the same collapsed, likelihood-tempered target used
+by the actual PT swap implementation: integrate leaf values out of
+`prior(leaves) * likelihood**beta`. The increment is the difference between
+the two log targets, **not** a power of the beta=1 marginal likelihood and
+not the two-particle PT swap acceptance probability. Cached SVD projections
+evaluate the PT formula without retaining 1,000 dense leaf-basis matrices;
+tests compare it against `_collapsed_loglik_for_sampler_state` and Gaussian
+integration. Beta zero is the calibrated prior with log likelihood weight zero.
+
+Every temperature uses systematic resampling, including the final temperature,
+so importance weighting always starts equally weighted. After resampling,
+one joint conditional leaf refresh at the new temperature lifts the collapsed
+particle to the correct joint target, using PT's existing refresh function.
+Exactly 100 unchanged Default sweeps follow this lift. The lift is recorded
+separately and does not replace one of those 100 steps. Importance ESS is not
+MCMC effective sample size. Collapsed-weight ESS need not be globally monotone
+in temperature; the bisection maintains a feasible/infeasible crossing bracket,
+and a feasible endpoint goes straight to beta=1.
+
+```python
+from bart_playground import AdaptiveSMCBART
+
+if __name__ == "__main__":
+    model = AdaptiveSMCBART(n_particles=1000, n_mcmc_steps=100,
+                           ess_ratio=0.5, n_trees=100, n_jobs=8,
+                           random_state=2024)
+    model.fit(X_train, y_train, X_test=X_test, retained_sweeps=7,
+              output_dir="smc2_draws", checkpoint_path="smc2_checkpoint.pkl")
+    endpoints = model.trace                  # 1,000 equal-weight terminal states
+    predictions = model.posterior_draws_["preds"]  # 7,000 x n_test
+```
+
+`retained_sweeps=7` saves rounds 94--100 of the final temperature's existing
+100 rejuvenation steps, all particles per round, without any extra posterior
+updates. Numeric predictions are on the original response scale; `sigmas`
+stores variance on the internal response scale; feature counts are int32.
+Rows are sweep-major, particle-minor. The final 1,000 rows are also exported
+separately by the experiment runner. Shared ancestry and path dependence remain.
+
+`n_jobs=1` is serial by default; positive worker counts are capped by particle
+count, `None` uses one per particle, and negative counts follow PT's available
+physical-core convention. Particles are parallelized during **all** stages,
+including prior/SVD preparation and rejuvenation. Each task owns a whole
+100-step block, shares read-only training inputs through file mappings, and
+returns a cache-free endpoint. Streams use fixed stage/offspring IDs, giving
+worker-count-invariant results in the same environment. Each worker uses one
+BLAS thread. Global beta selection and systematic resampling remain sequential.
+
+For the two run-0 datasets with four independent populations each:
+
+```bash
+python diagnosis/run_smc2.py --datasets abalone seoul_bike --output diagnosis/store_smc2/supervisor_run0 --chain-jobs 4 --particle-jobs 2
+```
+
+This requests eight active particle workers in total; server allocations can
+increase `--particle-jobs`. Datasets run sequentially. Defaults are N=1000,
+K=100, 100 trees and seven retained final-temperature rounds. Every completed
+temperature has an atomic checkpoint; use the same command with `--resume`
+after interruption. Only load trusted, locally generated pickle checkpoints.
+Data and statistical settings are fingerprinted, while worker counts can
+change on resume. Progress and ancestry are saved for every temperature.
+
+The analysis reports R_B/W and the outline's Relative RMSE / Relative CRPS for
+both terminal particles and the 7,000-state set, alongside the existing run-0
+baselines and the old SMC's early/final windows when available. Terminal-count
+comparisons select 1,000 evenly spaced states from each baseline's 7,000-state
+post-burn record. No flattened-population rank R-hat or MCMC ESS is reported.
+These comparisons match saved counts, not computation or effective sample size.
+The code retains the original Default kernel's numerical variance floor;
+it makes no claim that such inherited finite-precision safeguards are an
+exact continuous-target algorithm in the floor's extreme tail.
+
 ## Caveats
 
 - **No stability guarantees**: APIs may change without notice or documentation updates.
