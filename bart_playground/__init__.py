@@ -1,5 +1,6 @@
 from .bart import BART, DefaultBART, ProbitBART, LogisticBART, MultiBART, PipelineBART, ParallelTemperingBART
 from .DataGenerator import DataGenerator
+from .smc import SMCBART
 from .moves import all_moves, Change, Grow, Prune, Swap, MultiGrow, MultiPrune, MultiChange, MultiSwap
 from .params import Tree, Parameters
 from .priors import TreesPrior, GlobalParamPrior, BARTLikelihood, ComprehensivePrior
@@ -12,7 +13,7 @@ from .random_init import generate_data_from_defaultbart_prior
 import logging
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-__all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART", "MultiBART", "PipelineBART", "ParallelTemperingBART",
+__all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART", "MultiBART", "PipelineBART", "ParallelTemperingBART", "SMCBART",
            "Change", "Grow", "Prune", "Swap", 
            "MultiGrow", "MultiPrune", "MultiChange", "MultiSwap",
            "TreesPrior", "GlobalParamPrior", "BARTLikelihood", "ComprehensivePrior",

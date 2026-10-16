@@ -44,3 +44,5 @@ diagnosis/**/store/
 
 # Local archives created while reorganizing experiment results.
 /backup/
+/diagnosis/store_smc/
+/diagnosis/store_smc_population/
