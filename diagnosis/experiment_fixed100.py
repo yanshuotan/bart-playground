@@ -4,6 +4,7 @@ import csv
 import gc
 import json
 import shutil
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -216,6 +217,60 @@ def _warm_start_states(final_states, old_temps, new_temps):
     return states
 
 
+def _pooled_rejection_curve(rounds):
+    """Cumulative rejection Lambda(beta) pooled over several ladders.
+
+    `rounds` holds (temperatures, swap rates) pairs. Each is read as a rejection
+    density per unit beta = 1 / T, constant on each of its pairs; the densities
+    are averaged on the union of all the ladders' beta knots. A pair that never
+    swapped only bounds its density from below, so it is used only where no
+    other round measured that stretch. Returns the knots (increasing beta) and
+    Lambda at each, starting from 0 at the hottest end.
+    """
+    grid = np.unique(np.concatenate([1.0 / np.asarray(t, dtype=float) for t, _ in rounds]))
+    mids = 0.5 * (grid[:-1] + grid[1:])
+    measured = np.full((len(rounds), mids.size), np.nan)
+    saturated = np.full((len(rounds), mids.size), np.nan)
+    for k, (temps, rates) in enumerate(rounds):
+        betas = (1.0 / np.asarray(temps, dtype=float))[::-1]
+        rates = np.asarray(rates, dtype=float)[::-1]
+        # A zero rejection would make Lambda flat and its inverse undefined.
+        density = np.clip(1.0 - rates, 1e-6, 1.0) / np.diff(betas)
+        pair = np.clip(np.searchsorted(betas, mids) - 1, 0, density.size - 1)
+        target = np.where(rates[pair] > 0.0, 0, 1)
+        measured[k, target == 0] = density[pair][target == 0]
+        saturated[k, target == 1] = density[pair][target == 1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # all-NaN columns are expected
+        pooled = np.nanmean(measured, axis=0)
+        fallback = np.nanmax(saturated, axis=0)
+    pooled = np.where(np.isnan(pooled), fallback, pooled)
+    return grid, np.concatenate([[0.0], np.cumsum(pooled * np.diff(grid))])
+
+
+def _equi_rejection_ladder(rounds, design_rate, max_temperatures=None):
+    """Ladder with the same rejection rate on every adjacent pair.
+
+    The rejection rate of a pair is taken as proportional to its gap in beta,
+    so the pooled rejection density of `rounds` (see
+    `_pooled_rejection_curve`) gives the cumulative barrier Lambda(beta). The
+    new ladder keeps both ends of the latest ladder, has the fewest
+    temperatures for which Lambda / (N - 1) is at most 1 - design_rate, and
+    places them at equal steps of Lambda(beta). `max_temperatures` caps N.
+    Returns the ladder and Lambda.
+    """
+    grid, cumulative = _pooled_rejection_curve(rounds)
+    barrier = float(cumulative[-1])
+    n_temps = int(np.ceil(barrier / (1.0 - design_rate))) + 1
+    if max_temperatures is not None:
+        n_temps = min(n_temps, int(max_temperatures))
+    n_temps = max(n_temps, 2)
+    new_temps = np.sort(1.0 / np.interp(np.linspace(0.0, barrier, n_temps), cumulative, grid))
+    latest = rounds[-1][0]
+    new_temps[0], new_temps[-1] = float(latest[0]), float(latest[-1])
+    return [float(t) for t in new_temps], barrier
+
+
 def quick_ladder_search(
     X,
     y,
@@ -227,6 +282,9 @@ def quick_ladder_search(
     target_rate=0.4,
     max_rounds=10,
     max_temperatures: int | None = None,
+    ladder_rule: str = "respace",
+    respace_rate: float = 0.5,
+    pool_rounds: int = 3,
     ndpost=200,
     nskip=200,
     random_state=123,
@@ -243,14 +301,30 @@ def quick_ladder_search(
     The chains start at the root only once. Every round runs `nskip` burn-in
     iterations and then `ndpost` iterations whose swaps give that round's
     rates; the burn-in lets the chains settle on the new ladder, above all the
-    newly inserted ones. Each round inserts the harmonic mean (the
-    midpoint in beta = 1 / T) into every adjacent pair whose rate is below
-    `target_rate`, the lowest rates first, and the next round continues every
-    chain from where it stopped; an inserted temperature starts from the state
-    of the nearest one. `max_temperatures` caps the ladder size; None or a
-    non-positive value leaves it uncapped. The returned ladder includes the
-    last round's insertions.
+    newly inserted ones. While some adjacent pair's rate is below
+    `target_rate`, the ladder is changed by `ladder_rule`:
+
+    - "bisect" inserts the harmonic mean (the midpoint in beta = 1 / T) into
+      every such pair, the lowest rates first;
+    - "respace" replaces the whole ladder by `_equi_rejection_ladder`, which
+      can also remove temperatures. It pools the swap rates of the last
+      `pool_rounds` rounds and aims every pair at `respace_rate`. The default
+      0.5 is the equal-rejection optimum for non-reversible (even-odd) PT:
+      with every pair rejecting half its swaps, N is about 2 * Lambda and the
+      round-trip rate is close to its limit (Syed, Bouchard-Cote,
+      Deligiannidis and Doucet, JRSS-B 2022).
+
+    The next round continues every chain from where it stopped; a new
+    temperature starts from the state of the nearest old one.
+    `max_temperatures` caps the ladder size; None or a non-positive value
+    leaves it uncapped. The returned ladder includes the last round's change.
     """
+    if ladder_rule not in ("bisect", "respace"):
+        raise ValueError(f"ladder_rule must be 'bisect' or 'respace'; got {ladder_rule!r}")
+    if not 0.0 < respace_rate < 1.0:
+        raise ValueError(f"respace_rate must be in (0, 1); got {respace_rate}")
+    if pool_rounds < 1:
+        raise ValueError("pool_rounds must be at least 1")
     if ndpost < swap_interval:
         raise ValueError(
             f"ndpost={ndpost} is shorter than swap_interval={swap_interval}, so a round would attempt no swap."
@@ -276,6 +350,9 @@ def quick_ladder_search(
         print(
             f"{progress_prefix}[LADDER] start: n_points={X.shape[0]}, rounds<={max_rounds}, "
             f"iterations/round={nskip} burn-in + {ndpost} counted, target_rate={target_rate}, "
+            f"rule={ladder_rule}"
+            + (f" (design rate {respace_rate}, pooling {pool_rounds} rounds)" if ladder_rule == "respace" else "")
+            + ", "
             f"max_temperatures={cap_value if cap_value is not None else 'disabled'}, "
             f"init_temps={np.round(temps, 6).tolist()}",
             flush=True,
@@ -338,6 +415,7 @@ def quick_ladder_search(
                 "swap_rates": rates.tolist(),
                 "candidate_insertions": candidate_insertions,
                 "max_temperatures": cap_value,
+                "ladder_rule": ladder_rule,
             }
         )
 
@@ -349,6 +427,26 @@ def quick_ladder_search(
                     flush=True,
                 )
             break
+
+        if ladder_rule == "respace":
+            pooled = [(h["temperatures"], h["swap_rates"]) for h in history[-pool_rounds:]
+                      if len(h["swap_rates"]) == len(h["temperatures"]) - 1]
+            updated_temps, barrier = _equi_rejection_ladder(pooled, respace_rate, cap_value)
+            history[-1]["barrier"] = barrier
+            history[-1]["pooled_rounds"] = len(pooled)
+            if progress_print:
+                print(
+                    f"{progress_prefix}[LADDER] respace: Lambda={barrier:.3f} over {len(pooled)} rounds, "
+                    f"n_temps {len(temps)} -> {len(updated_temps)}",
+                    flush=True,
+                )
+            if len(updated_temps) == len(temps) and np.allclose(updated_temps, temps):
+                if progress_print:
+                    print(f"{progress_prefix}[LADDER] stop: respacing left the ladder unchanged.", flush=True)
+                break
+            states = _warm_start_states(final_states, temps, updated_temps)
+            temps = updated_temps
+            continue
 
         if cap_value is not None:
             remaining_slots = cap_value - len(temps)
@@ -883,6 +981,9 @@ def run_fixed100_dataset(
     ladder_target_rate: float = 0.4,
     ladder_max_rounds: int = 10,
     ladder_max_temperatures: int | None = None,
+    ladder_rule: str = "respace",
+    ladder_respace_rate: float = 0.5,
+    ladder_pool_rounds: int = 3,
     pt_n_jobs: int | None = 1,
     ladder_ndpost: int = 200,
     ladder_nskip: int = 200,
@@ -949,6 +1050,9 @@ def run_fixed100_dataset(
             "ladder_target_rate": ladder_target_rate,
             "ladder_max_rounds": ladder_max_rounds,
             "ladder_max_temperatures": ladder_max_temperatures,
+            "ladder_rule": ladder_rule,
+            "ladder_respace_rate": ladder_respace_rate,
+            "ladder_pool_rounds": ladder_pool_rounds,
             "ladder_ndpost": ladder_ndpost,
             "ladder_nskip": ladder_nskip,
             "ladder_search_points": ladder_search_points,
@@ -997,6 +1101,9 @@ def run_fixed100_dataset(
                     target_rate=ladder_target_rate,
                     max_rounds=ladder_max_rounds,
                     max_temperatures=ladder_max_temperatures,
+                    ladder_rule=ladder_rule,
+                    respace_rate=ladder_respace_rate,
+                    pool_rounds=ladder_pool_rounds,
                     ndpost=ladder_ndpost,
                     nskip=ladder_nskip,
                     random_state=ladder_random_state + 10000 * run_id,
@@ -1100,6 +1207,9 @@ def run_fixed100_dataset(
                     "ladder_ndpost": ladder_ndpost,
                     "ladder_nskip": ladder_nskip,
                     "ladder_max_temperatures": ladder_max_temperatures,
+                    "ladder_rule": ladder_rule,
+                    "ladder_respace_rate": ladder_respace_rate,
+                    "ladder_pool_rounds": ladder_pool_rounds,
                     "ladder_target_rate": ladder_target_rate,
                     "swap_interval": swap_interval,
                     "pt_n_jobs": pt_n_jobs,
