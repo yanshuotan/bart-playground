@@ -75,18 +75,10 @@ def _common_arguments(parser):
     parser.add_argument("--ladder-init-size", type=int, default=10)
     parser.add_argument("--ladder-max-temperatures", type=int, default=0, help="Cap on the ladder size; 0 leaves it uncapped.")
     parser.add_argument("--ladder-target-rate", type=float, default=0.4)
-    parser.add_argument("--ladder-rule", choices=("bisect", "respace"), default="respace",
-                        help="How a round changes the ladder: respace the whole ladder to equal "
-                             "rejection rates, or bisect every pair below target (the previous rule).")
-    parser.add_argument("--ladder-respace-rate", type=float, default=0.5,
-                        help="Swap rate respacing aims each pair at; 0.5 is the equal-rejection "
-                             "optimum for non-reversible PT (Syed et al. 2022).")
-    parser.add_argument("--ladder-pool-rounds", type=int, default=3,
-                        help="Rounds whose swap rates respacing pools.")
     parser.add_argument("--ladder-max-rounds", type=int, default=10)
-    parser.add_argument("--ladder-ndpost", type=int, default=200,
+    parser.add_argument("--ladder-ndpost", type=int, default=500,
                         help="Ladder-search iterations per round, after the burn-in; that round's swap rates come from them.")
-    parser.add_argument("--ladder-nskip", type=int, default=200,
+    parser.add_argument("--ladder-nskip", type=int, default=500,
                         help="Ladder-search burn-in at the start of every round; its swaps are not counted.")
     parser.add_argument("--ladder-search-points", type=int, default=1000)
     parser.add_argument(
@@ -175,9 +167,6 @@ def _fit_arguments(args, X, y, dataset_tag, store_root, *, long_ndpost, long_sto
         ladder_target_rate=args.ladder_target_rate,
         ladder_max_rounds=args.ladder_max_rounds,
         ladder_max_temperatures=args.ladder_max_temperatures if args.ladder_max_temperatures > 0 else None,
-        ladder_rule=args.ladder_rule,
-        ladder_respace_rate=args.ladder_respace_rate,
-        ladder_pool_rounds=args.ladder_pool_rounds,
         pt_n_jobs=args.pt_n_jobs,
         ladder_ndpost=args.ladder_ndpost, ladder_nskip=args.ladder_nskip,
         ladder_search_points=args.ladder_search_points,
