@@ -132,8 +132,9 @@ def plot_diagnosis(
     within_ax.set(title="(d) Within-chain segment rank-split R-hat", xlabel="window end", ylabel="R-hat")
     within_ax.legend(ncol=3, fontsize=8)
 
-    short_coords = np.asarray(worst["projected_2d"])
-    panel_title = "(b) Top two between/within directions"
+    # the fitted first half is left out of the scatter; the trace shows both halves
+    short_coords = np.asarray(worst["projected_2d"])[:, int(worst["fit_draws"]):, :]
+    panel_title = "(b) Top two between/within directions, held half"
     xlabel = f"direction 1 ($\\lambda_1$={float(worst['lambda_max']):.3g})"
     ylabel = f"direction 2 ($\\lambda_2$={float(worst['lambda_second']):.3g})"
     short_idx = spaced_indices(short_coords.shape[1], plot_draws)
@@ -180,7 +181,7 @@ def write_summary(path: Path, settings: dict[str, int | float], dataset_summary:
     ])
     lines.extend(["", "## Dataset-level results", ""])
     columns = [
-        "dataset", "worst_projected_rhat_mean", "cross_rhat_median_mean",
+        "dataset", "worst_lambda_max_mean", "cross_rhat_median_mean",
         "within_rhat_median_mean", "short_centroid_distance_mean",
         "long_rhat_median_mean",
     ]
@@ -246,8 +247,6 @@ def main() -> int:
                 "worst_lambda_max": worst["lambda_max"],
                 "worst_lambda_second": worst["lambda_second"],
                 "worst_eigen_gap": worst["eigen_gap"],
-                "worst_projected_rhat": worst["projected_rhat"],
-                "second_projected_rhat": worst["second_projected_rhat"],
                 "cross_rhat_median": cross["median"].median(),
                 "cross_rhat_q90": cross["q90"].median(),
                 "within_rhat_median": within["median"].median(),

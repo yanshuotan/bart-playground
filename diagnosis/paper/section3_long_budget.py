@@ -175,7 +175,6 @@ def draw_long_panels(args, pairs: list[tuple[str, str]], output: Path, first_pan
         result = worst_directions(draws, n_directions=2)
         projected = result["projected"]
         eigenvalues = result["eigenvalues"]
-        rhats = result["rhats"]
 
         trace_ax, scatter_ax = axes[row]
         iterations = np.arange(args.burn, args.burn + projected.shape[1])
@@ -185,15 +184,15 @@ def draw_long_panels(args, pairs: list[tuple[str, str]], output: Path, first_pan
         trace_ax.axvline(args.burn + int(result["fit_draws"]), color="0.35",
                          linestyle=(0, (4, 2)), linewidth=1.0)
         letter = PANELS[first_panel + 2 * row]
-        trace_ax.set(title=(f"({letter}) {label}, worst direction "
-                            f"($\\widehat R$={rhats[0]:.3f})"),
+        trace_ax.set(title=f"({letter}) {label}, worst direction",
                      xlabel="stored draw", ylabel="projected prediction")
         if row == 0:
             trace_ax.legend(ncol=4, fontsize=7.5, loc="upper center")
 
-        coords = projected
+        # the fitted first half is left out of the scatter; the trace shows both halves
+        coords = projected[:, int(result["fit_draws"]):, :]
         panel_title = (f"({PANELS[first_panel + 2 * row + 1]}) {label}, "
-                       "top two between/within directions")
+                       "top two directions, held half")
         xlabel = f"direction 1 ($\\lambda_1$={eigenvalues[0]:.3g})"
         ylabel = f"direction 2 ($\\lambda_2$={eigenvalues[1]:.3g})"
         idx = spaced(coords.shape[1], args.plot_draws)
@@ -206,8 +205,8 @@ def draw_long_panels(args, pairs: list[tuple[str, str]], output: Path, first_pan
         scatter_ax.set(title=panel_title, xlabel=xlabel, ylabel=ylabel)
         for ax in (trace_ax, scatter_ax):
             ax.grid(alpha=0.2)
-        print(f"[figure] {label}: worst-direction R-hat {rhats[0]:.3f}; "
-              f"lambda1/lambda2 {eigenvalues[0]:.3g}/{eigenvalues[1]:.3g}", flush=True)
+        print(f"[figure] {label}: lambda1/lambda2 {eigenvalues[0]:.3g}/{eigenvalues[1]:.3g}",
+              flush=True)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=args.dpi)
@@ -223,6 +222,7 @@ def ordered_datasets(args) -> list[tuple[str, str]]:
     runs = Path(__file__).resolve().parent / "tables" / "budget_comparison_runs.csv"
     if runs.is_file():
         ordering = pd.read_csv(runs).groupby("dataset")["long_rhat_q90"].mean()
+        available = [d for d in available if d in ordering.index]
         available.sort(key=lambda d: ordering.get(d, float("inf")))
     return [(d, DISPLAY.get(d, d.removeprefix("fixed100_"))) for d in available]
 

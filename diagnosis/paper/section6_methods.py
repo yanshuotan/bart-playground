@@ -344,7 +344,8 @@ def plot_worst_comparison(results: dict[str, dict[str, np.ndarray | float]], sta
     for row, method in enumerate(METHODS):
         result = results[method]
         projected = np.asarray(result["projected"])
-        coords = np.asarray(result["projected_2d"])
+        # the fitted first half is left out of the scatter; the trace shows both halves
+        coords = np.asarray(result["projected_2d"])[:, int(result["fit_draws"]):, :]
         x = np.arange(start, start + projected.shape[1])
         index = np.linspace(0, coords.shape[1] - 1,
                             min(coords.shape[1], plot_draws)).round().astype(int)
@@ -361,9 +362,8 @@ def plot_worst_comparison(results: dict[str, dict[str, np.ndarray | float]], sta
         name = METHOD_NAMES[method]
         axes[row, 0].axvline(start + int(result["fit_draws"]), color="0.35",
                              linestyle=(0, (4, 2)), linewidth=1.0)
-        axes[row, 0].set_title(
-            rf"{name}, direction 1 ($\widehat R$={result['projected_rhat']:.3f})")
-        axes[row, 1].set_title(f"{name}, top two between/within directions")
+        axes[row, 0].set_title(f"{name}, direction 1")
+        axes[row, 1].set_title(f"{name}, top two between/within directions, held half")
         axes[row, 0].set_ylabel("projected prediction")
         axes[row, 1].set_xlabel(rf"direction 1 ($\lambda_1$={result['lambda_max']:.3g})")
         axes[row, 1].set_ylabel(rf"direction 2 ($\lambda_2$={result['lambda_second']:.3g})")
@@ -391,7 +391,7 @@ def dataset_summary(run_frame: pd.DataFrame) -> pd.DataFrame:
 
 def paired_ratios(run_frame: pd.DataFrame) -> pd.DataFrame:
     metrics = [
-        "worst_projected_rhat", "cross_rhat_median", "within_rhat_median",
+        "cross_rhat_median", "within_rhat_median",
         "centroid_distance", "between_within_ratio",
         "rmse", "crps",
     ]
@@ -487,7 +487,6 @@ def write_summary(
         frame = summary[summary["dataset"] == dataset].copy()
         table = pd.DataFrame({
             "method": frame["method"],
-            "worst projected R-hat": [format_mean_sd(row, "worst_projected_rhat") for _, row in frame.iterrows()],
             "cross R-hat": [format_mean_sd(row, "cross_rhat_median") for _, row in frame.iterrows()],
             "within R-hat": [format_mean_sd(row, "within_rhat_median") for _, row in frame.iterrows()],
             "B/W ratio": [format_mean_sd(row, "between_within_ratio") for _, row in frame.iterrows()],
@@ -574,7 +573,7 @@ def write_root_summary(
         "## Four-method comparison", "",
         f"See [{comparison_summary.name}]({comparison_summary.name}).", "",
         "## Interpretation", "",
-        "The results support improved mixing through agreement across worst-direction, pointwise cross-chain, within-chain segment, and original-space separation diagnostics. Relative RMSE and CRPS make predictive performance comparable across datasets. The timing values quantify the associated computational cost. Segment R-hat is a stability diagnostic based on dependent pseudo-chains.", "",
+        "The results support improved mixing through agreement across pointwise cross-chain, within-chain segment, and original-space separation diagnostics. Relative RMSE and CRPS make predictive performance comparable across datasets. The timing values quantify the associated computational cost. Segment R-hat is a stability diagnostic based on dependent pseudo-chains.", "",
     ])
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -728,8 +727,6 @@ def main() -> int:
                     "worst_lambda_max": worst["lambda_max"],
                     "worst_lambda_second": worst["lambda_second"],
                     "worst_eigen_gap": worst["eigen_gap"],
-                    "worst_projected_rhat": worst["projected_rhat"],
-                    "second_projected_rhat": worst["second_projected_rhat"],
                     **rhat_summary,
                     "centroid_distance": geometry["centroid_distance"],
                     "between_within_ratio": geometry["between_within_ratio"],

@@ -82,9 +82,10 @@ def worst_directions(
 ) -> dict[str, np.ndarray]:
     """Leading between/within directions and the draws projected onto them.
 
-    Directions are fitted on the first half of every chain and the reported
-    R-hat comes from the second half. Fitting and scoring on the same draws
-    biases the R-hat upward, by a different amount for each method.
+    Directions are fitted on the first half of every chain; ``fit_draws``
+    marks that boundary so plots can show the held second half on its own.
+    No R-hat is reported on these axes: each method has its own fitted
+    directions, so projected R-hat values are not comparable across methods.
     """
     m, n, p = draws.shape
     if n_directions < 1 or n_directions > p:
@@ -93,7 +94,6 @@ def worst_directions(
     if half < 2 or n - half < 2:
         raise ValueError(f"Need at least four draws per chain to cross-fit; got {n}")
     fit = draws[:, :half, :]
-    held = draws[:, half:, :]
     means = fit.mean(axis=1)
     grand = means.mean(axis=0)
     within = np.zeros((p, p), dtype=float)
@@ -115,17 +115,11 @@ def worst_directions(
         if directions[anchor, column] < 0:
             directions[:, column] *= -1
     projected = np.einsum("mnp,pk->mnk", draws - grand[None, None, :], directions)
-    scored = np.einsum("mnp,pk->mnk", held - grand[None, None, :], directions)
-    rhats = []
-    for column in range(scored.shape[2]):
-        data = xr.DataArray(scored[:, :, column], dims=("chain", "draw"), name="projection")
-        rhats.append(float(az.rhat(data, method="rank")["projection"].values))
     return {
         "eigenvalues": values,
         "directions": directions,
         "fit_draws": half,
         "projected": projected,
-        "rhats": np.asarray(rhats),
     }
 
 
@@ -164,8 +158,6 @@ def worst_direction_summary(draws: np.ndarray,
         "lambda_max": float(values[0]),
         "lambda_second": float(values[1]),
         "eigen_gap": float(values[0] - values[1]),
-        "projected_rhat": float(found["rhats"][0]),
-        "second_projected_rhat": float(found["rhats"][1]),
         "directions": found["directions"],
         "fit_draws": found["fit_draws"],
         "projected": projected[:, :, 0],

@@ -17,10 +17,10 @@ All values summarize five runs per dataset.
 
 ## Dataset-level results
 
-| dataset | worst_projected_rhat_mean | cross_rhat_median_mean | within_rhat_median_mean | short_centroid_distance_mean | long_rhat_median_mean |
+| dataset | worst_lambda_max_mean | cross_rhat_median_mean | within_rhat_median_mean | short_centroid_distance_mean | long_rhat_median_mean |
 | --- | --- | --- | --- | --- | --- |
-| fixed100_Abalone | 1.3698 | 1.2894 | 1.2247 | 3.5383 | 1.0002 |
-| fixed100_Concrete | 2.1029 | 1.3887 | 1.2548 | 19.5801 | 1.0035 |
-| fixed100_Friedman | 2.1742 | 1.4700 | 1.2712 | 5.0399 | 1.0016 |
+| fixed100_Abalone | 25.4743 | 1.2894 | 1.2247 | 3.5383 | 1.0002 |
+| fixed100_Concrete | 45.4533 | 1.3887 | 1.2548 | 19.5801 | 1.0035 |
+| fixed100_Friedman | 53.7944 | 1.4700 | 1.2712 | 5.0399 | 1.0016 |
 
 The long chains are empirical references; their own R-hat summaries qualify comparisons with the production-length chains.
