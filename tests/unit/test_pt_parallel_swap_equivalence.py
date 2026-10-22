@@ -309,3 +309,56 @@ def test_worker_count_does_not_change_results(n_jobs):
             == parallel_sampler.generator.bit_generator.state
         )
         assert serial_sampler.move_accepted_counts == parallel_sampler.move_accepted_counts
+
+
+def _warm_start_pair(n_jobs):
+    """A fit that continues another, with one temperature duplicated from its neighbour."""
+    X, y = _toy_data()
+    common = dict(n_trees=6, swap_interval=3, store_swap_diagnostics=True)
+    first = ParallelTemperingBART(
+        ndpost=6, nskip=3, temperatures=[1.0, 2.0, 4.0], random_state=42, n_jobs=n_jobs, **common
+    ).fit(X, y, quietly=True, keep_final_states=True)
+    states = [first.final_states[0], first.final_states[1], first.final_states[1], first.final_states[2]]
+    second = ParallelTemperingBART(
+        ndpost=9, nskip=0, temperatures=[1.0, 2.0, 2.5, 4.0], random_state=43, n_jobs=n_jobs, **common
+    ).fit(X, y, quietly=True, init_states=states, keep_final_states=True)
+    return first, second
+
+
+def test_warm_start_matches_serial():
+    serial_first, serial_second = _warm_start_pair(n_jobs=1)
+    parallel_first, parallel_second = _warm_start_pair(n_jobs=4)
+    for serial, parallel in ((serial_first, parallel_first), (serial_second, parallel_second)):
+        assert serial.swap_diagnostics == parallel.swap_diagnostics
+        assert len(serial.final_states) == len(parallel.final_states) == serial.n_temperatures
+        for state_serial, state_parallel in zip(serial.final_states, parallel.final_states):
+            _assert_states_equal(state_serial, state_parallel)
+        for state_serial, state_parallel in zip(serial.trace, parallel.trace):
+            _assert_states_equal(state_serial, state_parallel)
+
+
+def test_warm_start_continues_from_given_states():
+    """With no burn-in, the first kept draw is one step from the given state, not from the root."""
+    X, y = _toy_data()
+    first = ParallelTemperingBART(
+        ndpost=20, nskip=20, n_trees=6, temperatures=[1.0, 2.0], swap_interval=5, random_state=42
+    ).fit(X, y, quietly=True, keep_final_states=True)
+    grown = sum(tree.n_leaves for tree in first.final_states[0].trees)
+    second = ParallelTemperingBART(
+        ndpost=1, nskip=0, n_trees=6, temperatures=[1.0, 2.0], swap_interval=5, random_state=43
+    ).fit(X, y, quietly=True, init_states=first.final_states)
+    root = ParallelTemperingBART(
+        ndpost=1, nskip=0, n_trees=6, temperatures=[1.0, 2.0], swap_interval=5, random_state=43
+    ).fit(X, y, quietly=True)
+    assert second.final_states is None
+    # the given states are copied, not advanced in place
+    assert sum(tree.n_leaves for tree in first.final_states[0].trees) == grown
+    assert grown > sum(tree.n_leaves for tree in root.trace[0].trees)
+    assert sum(tree.n_leaves for tree in second.trace[0].trees) > sum(tree.n_leaves for tree in root.trace[0].trees)
+
+
+def test_init_states_length_must_match_ladder():
+    X, y = _toy_data()
+    model = ParallelTemperingBART(ndpost=1, nskip=0, n_trees=2, temperatures=[1.0, 2.0])
+    with pytest.raises(ValueError, match="init_states"):
+        model.fit(X, y, quietly=True, init_states=[None])

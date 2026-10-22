@@ -1005,6 +1005,7 @@ class ParallelTemperingBART(BART):
         self.swap_accept_counts = np.zeros(max(0, self.n_temperatures - 1), dtype=np.int64)
         self.chain_traces = [[] for _ in range(self.n_temperatures)] if self.store_chain_traces else None
         self.swap_diagnostics = []
+        self.final_states = None
         self.sampler_kind = str(sampler_kind).lower()
         self.multi_tries = None if multi_tries is None else int(multi_tries)
         # After a parallel fit the chains live in the workers. Only the cold
@@ -1334,13 +1335,28 @@ class ParallelTemperingBART(BART):
             return True
         return False
 
-    def fit(self, X, y, quietly=False):
+    def fit(self, X, y, quietly=False, init_states=None, keep_final_states=False):
         data = self.preprocessor.fit_transform(X, y)
-        return self.fit_with_data(data, quietly=quietly)
+        return self.fit_with_data(
+            data, quietly=quietly, init_states=init_states, keep_final_states=keep_final_states
+        )
 
-    def fit_with_data(self, data: Dataset, quietly=False):
+    def fit_with_data(self, data: Dataset, quietly=False, init_states=None, keep_final_states=False):
+        """Run every chain for `nskip + ndpost` iterations.
+
+        `init_states`, one state per temperature in ladder order, starts the
+        chains from copies of those states instead of at the sampler's initial
+        state; the states must come from a fit on the same data. With
+        `keep_final_states`, `final_states` holds each temperature position's
+        state after the last iteration, which is what a later fit continues from.
+        """
+        if init_states is not None and len(init_states) != self.n_temperatures:
+            raise ValueError(
+                f"init_states has {len(init_states)} states for {self.n_temperatures} temperatures."
+            )
         self.data = data
         self.trace = []
+        self.final_states = None
         if self.chain_traces is not None:
             self.chain_traces = [[] for _ in range(self.n_temperatures)]
         self.swap_attempt_counts[:] = 0
@@ -1348,11 +1364,17 @@ class ParallelTemperingBART(BART):
         if self.store_swap_diagnostics:
             self.swap_diagnostics = []
 
-        current_states = []
         for sampler in self.chain_samplers:
             sampler.add_data(self.data)
             sampler.add_thresholds(self.preprocessor.thresholds)
-            current_states.append(sampler.get_init_state())
+        if init_states is None:
+            current_states = [sampler.get_init_state() for sampler in self.chain_samplers]
+        else:
+            # get_init_state also fits the data-dependent noise prior, which the
+            # continued states still need; nothing else in it applies to them.
+            for sampler in self.chain_samplers:
+                sampler.global_prior.fit_hyperparameters(self.data)
+            current_states = [state.copy() for state in init_states]
 
         total_iters = self.ndpost + self.nskip
         progress = None if quietly else tqdm(total=total_iters, desc="Iterations")
@@ -1367,11 +1389,18 @@ class ParallelTemperingBART(BART):
                 stack.callback(_close_pt_chain_workers, worker_processes)
                 del current_states  # the workers own the states from here on
                 self._fit_loop_workers(workers, total_iters, progress)
+                if keep_final_states:
+                    # After every swap step each position's state sits in its own slot.
+                    for worker in workers:
+                        worker.request_export_state()
+                    self.final_states = [worker.recv() for worker in workers]
                 collected = range(len(workers)) if self.collect_all_samplers else (0,)
                 for chain_id in collected:
                     self.chain_samplers[chain_id] = workers[chain_id].get_sampler()
         else:
             self._fit_loop_serial(current_states, total_iters, progress)
+            if keep_final_states:
+                self.final_states = current_states
         if progress is not None:
             progress.close()
 

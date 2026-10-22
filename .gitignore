@@ -46,3 +46,6 @@ diagnosis/**/store/
 /backup/
 /diagnosis/store_smc/
 /diagnosis/store_smc_population/
+
+# Local manuscript editing and one-off maintenance helpers.
+/.codex-local/

@@ -19,8 +19,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from core import (dataset_tag, load_with_shape, markdown_table,
-                  pointwise_rhat, summarize_rhat, worst_direction_summary)
+from core import (ResultCache, dataset_tag, load_with_shape, markdown_table,
+                  pointwise_rhat, run_inputs, summarize_rhat, worst_direction_summary)
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -38,8 +38,11 @@ DATASETS = (
     "fixed100_FriedmanSparseDir_p100",
     "fixed100_FriedmanSparseDir_p200",
     "fixed100_SeoulBike",
+    "fixed100_Superconduct_subsample5000",
 )
 RUNS = tuple(range(5))
+# Bump when a per-method calculation below changes, so cached results are redone.
+CACHE_VERSION = 2  # RMSE = sqrt(mean chain MSE); CRPS retains its existing definition.
 METHODS = ("default", "default_pt", "mtmh", "mtmh_pt")
 METHOD_NAMES = {
     "default": "Default",
@@ -98,6 +101,7 @@ TARGET_LOADERS = {
     "fixed100_Friedman": "friedman",
     "fixed100_FriedmanSparseDir_p100": "friedman_sparse_dir",
     "fixed100_SeoulBike": "seoul_bike",
+    "fixed100_Superconduct_subsample5000": "superconduct",
 }
 SPARSE_TARGET_LOADERS = {
     "fixed100_FriedmanSparseDir_p20": "friedman_p20_k5",
@@ -265,7 +269,7 @@ def predictive_metrics(
     y_scale: float,
     seed: int,
 ) -> tuple[float, float]:
-    """RMSE of the posterior mean of f, and CRPS of the posterior predictive.
+    """Root-average-chain-MSE RMSE and mean chain-wise predictive CRPS.
 
     `draws` holds posterior draws of f with no observation noise, so scoring
     them against the noisy targets would not be a CRPS of the predictive
@@ -289,7 +293,7 @@ def predictive_metrics(
         sd = np.sqrt(chain_variances) * float(y_scale)
         predictive = samples + rng.standard_normal(samples.shape) * sd[None, :]
         crps_values.append(np.mean(crps_from_samples(predictive, truth)))
-    return float(np.mean(rmse_values)), float(np.mean(crps_values))
+    return float(np.sqrt(np.mean(np.square(rmse_values)))), float(np.mean(crps_values))
 
 
 def predictive_baselines(train_targets: np.ndarray, truth: np.ndarray) -> dict[str, float]:
@@ -344,7 +348,8 @@ def plot_worst_comparison(results: dict[str, dict[str, np.ndarray | float]], sta
     for row, method in enumerate(METHODS):
         result = results[method]
         projected = np.asarray(result["projected"])
-        coords = np.asarray(result["projected_2d"])
+        # the fitted first half is left out of the scatter; the trace shows both halves
+        coords = np.asarray(result["projected_2d"])[:, int(result["fit_draws"]):, :]
         x = np.arange(start, start + projected.shape[1])
         index = np.linspace(0, coords.shape[1] - 1,
                             min(coords.shape[1], plot_draws)).round().astype(int)
@@ -361,9 +366,8 @@ def plot_worst_comparison(results: dict[str, dict[str, np.ndarray | float]], sta
         name = METHOD_NAMES[method]
         axes[row, 0].axvline(start + int(result["fit_draws"]), color="0.35",
                              linestyle=(0, (4, 2)), linewidth=1.0)
-        axes[row, 0].set_title(
-            rf"{name}, direction 1 ($\widehat R$={result['projected_rhat']:.3f})")
-        axes[row, 1].set_title(f"{name}, top two between/within directions")
+        axes[row, 0].set_title(f"{name}, direction 1")
+        axes[row, 1].set_title(f"{name}, top two between/within directions, held half")
         axes[row, 0].set_ylabel("projected prediction")
         axes[row, 1].set_xlabel(rf"direction 1 ($\lambda_1$={result['lambda_max']:.3g})")
         axes[row, 1].set_ylabel(rf"direction 2 ($\lambda_2$={result['lambda_second']:.3g})")
@@ -391,7 +395,7 @@ def dataset_summary(run_frame: pd.DataFrame) -> pd.DataFrame:
 
 def paired_ratios(run_frame: pd.DataFrame) -> pd.DataFrame:
     metrics = [
-        "worst_projected_rhat", "cross_rhat_median", "within_rhat_median",
+        "cross_rhat_median", "within_rhat_median",
         "centroid_distance", "between_within_ratio",
         "rmse", "crps",
     ]
@@ -487,8 +491,8 @@ def write_summary(
         frame = summary[summary["dataset"] == dataset].copy()
         table = pd.DataFrame({
             "method": frame["method"],
-            "worst projected R-hat": [format_mean_sd(row, "worst_projected_rhat") for _, row in frame.iterrows()],
-            "cross R-hat": [format_mean_sd(row, "cross_rhat_median") for _, row in frame.iterrows()],
+            "cross R-hat median": [format_mean_sd(row, "cross_rhat_median") for _, row in frame.iterrows()],
+            "cross R-hat q90": [format_mean_sd(row, "cross_rhat_q90") for _, row in frame.iterrows()],
             "within R-hat": [format_mean_sd(row, "within_rhat_median") for _, row in frame.iterrows()],
             "B/W ratio": [format_mean_sd(row, "between_within_ratio") for _, row in frame.iterrows()],
             "relative RMSE": [format_mean_sd(row, "relative_rmse") for _, row in frame.iterrows()],
@@ -502,9 +506,10 @@ def write_summary(
                 lambda value: "-" if pd.isna(value) else str(int(value))
             )
             lines.extend(["", "### Computational cost", "", markdown_table(timing_display)])
-    lines.extend(["", "## Interpretation guardrails", "",
+    lines.extend(["", "## Metric definitions", "",
                   "- Relative RMSE uses the training-mean predictor as 1; relative CRPS uses the empirical training-target climatology as 1. Lower is better.",
-                  "- Segment R-hat uses temporally dependent pseudo-chains and is a stability diagnostic, not a formal convergence certificate.",
+                  "- Method RMSE is sqrt(mean chain MSE) within each run; setting summaries average run scores.",
+                  "- Segment R-hat summarizes temporal stability across consecutive segments.",
                   "- Raw RMSE and CRPS remain available in the CSV tables.",
                   "- Timing reports the actual parallel PT implementation and omits serial PT speed-up.", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -531,8 +536,7 @@ def write_root_summary(
         rows.append({
             "dataset": dataset.removeprefix("fixed100_"),
             "cross R-hat": transition(default["cross_rhat_median_mean"], combined["cross_rhat_median_mean"]),
-            "within R-hat": transition(default["within_rhat_median_mean"], combined["within_rhat_median_mean"]),
-            "B/W ratio": transition(default["between_within_ratio_mean"], combined["between_within_ratio_mean"]),
+            "cross R-hat q90": transition(default["cross_rhat_q90_mean"], combined["cross_rhat_q90_mean"]),
             "relative RMSE": transition(default["relative_rmse_mean"], combined["relative_rmse_mean"]),
             "relative CRPS": transition(default["relative_crps_mean"], combined["relative_crps_mean"]),
             "time / Default": f"{cost:.2f}x" if np.isfinite(cost) else "not measured",
@@ -540,8 +544,7 @@ def write_root_summary(
 
     compact = pd.DataFrame(rows)
     mixing_metrics = [
-        "cross_rhat_median_mean", "within_rhat_median_mean",
-        "between_within_ratio_mean",
+        "cross_rhat_median_mean", "cross_rhat_q90_mean",
     ]
     combined_wins = all(
         frame.set_index("method")[metric].idxmin() == "MTMH+PT"
@@ -557,14 +560,14 @@ def write_root_summary(
              f"This directory contains standalone paper-facing analyses for five paired runs of {n_datasets} datasets.", "",
              "## Main result", ""]
     if combined_wins:
-        lines.append(f"MTMH+PT has the lowest five-run mean for all three comparison diagnostics in all {n_datasets} settings.")
+        lines.append(f"MTMH+PT has the lowest five-run mean for both primary agreement summaries in all {n_datasets} settings.")
     else:
         standard = summary[~summary['dataset'].str.contains('FriedmanSparseDir')]
         wins = sum(frame.set_index('method')[metric].idxmin() == 'MTMH+PT'
                    for _, frame in standard.groupby('dataset') for metric in mixing_metrics)
         lines.append(f"Across the {standard.dataset.nunique()} standard-BART datasets, MTMH+PT has the smallest five-run mean in {wins} of {len(mixing_metrics) * standard.dataset.nunique()} diagnostic cells. DART dimensions form a separate controlled extension.")
     lines.extend([
-        "Predictive changes are reported relative to training-only baselines.",
+        "Predictive changes use root-average-chain-MSE RMSE and observation-predictive CRPS, relative to training-derived references.",
         f"The measured MTMH+PT cost is {cost_min:.2f}x to {cost_max:.2f}x the Default runtime per chain "
         f"({n_timed} of {n_datasets} datasets have timing runs).", "",
         "The table reports five-run means as `Default -> MTMH+PT`.", "",
@@ -574,7 +577,7 @@ def write_root_summary(
         "## Four-method comparison", "",
         f"See [{comparison_summary.name}]({comparison_summary.name}).", "",
         "## Interpretation", "",
-        "The results support improved mixing through agreement across worst-direction, pointwise cross-chain, within-chain segment, and original-space separation diagnostics. Relative RMSE and CRPS make predictive performance comparable across datasets. The timing values quantify the associated computational cost. Segment R-hat is a stability diagnostic based on dependent pseudo-chains.", "",
+        "The results support improved mixing through agreement across pointwise cross-chain, within-chain segment, and original-space separation diagnostics. Relative RMSE and CRPS make predictive performance comparable across datasets. The timing values quantify the associated computational cost. Segment R-hat is a stability diagnostic based on dependent pseudo-chains.", "",
     ])
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -604,7 +607,49 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--ridge-fraction", type=float, default=1e-8)
     parser.add_argument("--dpi", type=int, default=150)
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Recompute every (dataset, run, method) and rewrite its cache entry.")
     return parser.parse_args()
+
+
+def method_results(args, dataset: str, run: int, method: str, truth: np.ndarray,
+                   baseline: dict[str, float], y_scale: float) -> dict:
+    """Everything section 6 derives from one method's draws in one run."""
+    all_draws = predictions(args.store_root, dataset, run, method, 0)
+    post_burn = all_draws[:, args.short_burn:, :]
+    worst = worst_direction_summary(post_burn, args.ridge_fraction)
+    geometry = chain_geometry(post_burn)
+    rmse, crps = predictive_metrics(
+        post_burn,
+        residual_variances(args.store_root, dataset, run, method, args.short_burn),
+        truth,
+        y_scale,
+        PREDICTIVE_NOISE_SEED + run,
+    )
+    chain_mse = ((post_burn.mean(axis=1) - truth) ** 2).mean(axis=1)
+    row = {
+        "dataset": dataset,
+        "run": run,
+        "method": METHOD_NAMES[method],
+        "worst_lambda_max": worst["lambda_max"],
+        "worst_lambda_second": worst["lambda_second"],
+        "worst_eigen_gap": worst["eigen_gap"],
+        **full_draw_rhat(post_burn, args.n_segments),
+        "centroid_distance": geometry["centroid_distance"],
+        "between_within_ratio": geometry["between_within_ratio"],
+        "geometry_draws_per_chain": geometry["geometry_draws_per_chain"],
+        "rmse": rmse,
+        "rmse_mean_chainwise": float(np.sqrt(chain_mse).mean()),
+        "crps": crps,
+        "relative_rmse": rmse / baseline["naive_rmse"],
+        "relative_crps": crps / baseline["climatology_crps"],
+    }
+    return {
+        "row": row,
+        "worst": worst,
+        "cross": rolling_cross_rhat(all_draws, args.window, args.step),
+        "within": rolling_within_rhat(all_draws, args.segment_length, args.n_segments, args.step),
+    }
 
 
 def main() -> int:
@@ -674,6 +719,12 @@ def main() -> int:
         print(f"[comparison:{update_kind}] updated tables: {table_dir}", flush=True)
         return 0
 
+    cache = ResultCache("section6_methods", {
+        "version": CACHE_VERSION, "window": args.window, "step": args.step,
+        "segment_length": args.segment_length, "n_segments": args.n_segments,
+        "short_burn": args.short_burn, "ridge_fraction": args.ridge_fraction,
+        "noise_seed": PREDICTIVE_NOISE_SEED,
+    }, enabled=not args.no_cache)
     run_rows, baseline_rows, cross_all, within_all = [], [], [], []
     for dataset in args.datasets:
         full_targets = full_target_vector(args.store_root, dataset)
@@ -696,63 +747,39 @@ def main() -> int:
             })
 
             cross_by_method, within_by_method, worst_by_method = {}, {}, {}
+            all_cached = True
             for method in METHODS:
-                all_draws = predictions(args.store_root, dataset, run, method, 0)
-                post_burn = all_draws[:, args.short_burn:, :]
-                worst = worst_direction_summary(all_draws[:, args.short_burn:, :], args.ridge_fraction)
-                cross = rolling_cross_rhat(all_draws, args.window, args.step)
-                within = rolling_within_rhat(all_draws, args.segment_length, args.n_segments, args.step)
-                geometry = chain_geometry(post_burn)
-                rhat_summary = full_draw_rhat(post_burn, args.n_segments)
-                rmse, crps = predictive_metrics(
-                    post_burn,
-                    residual_variances(args.store_root, dataset, run, method,
-                                       args.short_burn),
-                    truth,
-                    y_scale,
-                    PREDICTIVE_NOISE_SEED + run,
-                )
-                relative_rmse = rmse / baseline["naive_rmse"]
-                relative_crps = crps / baseline["climatology_crps"]
+                inputs = run_inputs(args.store_root, dataset, run, [method])
+                key = (dataset, f"run{run:03d}", method)
+                result = cache.get(key, inputs)
+                if result is None:
+                    all_cached = False
+                    result = method_results(args, dataset, run, method, truth, baseline, y_scale)
+                    cache.put(key, inputs, result)
 
                 method_label = METHOD_NAMES[method]
-                cross_by_method[method] = cross
-                within_by_method[method] = within
-                worst_by_method[method] = worst
-                cross_all.append(cross.assign(dataset=dataset, run=run, method=method_label))
-                within_all.append(within.assign(dataset=dataset, run=run, method=method_label))
-                run_rows.append({
-                    "dataset": dataset,
-                    "run": run,
-                    "method": method_label,
-                    "worst_lambda_max": worst["lambda_max"],
-                    "worst_lambda_second": worst["lambda_second"],
-                    "worst_eigen_gap": worst["eigen_gap"],
-                    "worst_projected_rhat": worst["projected_rhat"],
-                    "second_projected_rhat": worst["second_projected_rhat"],
-                    **rhat_summary,
-                    "centroid_distance": geometry["centroid_distance"],
-                    "between_within_ratio": geometry["between_within_ratio"],
-                    "geometry_draws_per_chain": geometry["geometry_draws_per_chain"],
-                    "rmse": rmse,
-                    "crps": crps,
-                    "relative_rmse": relative_rmse,
-                    "relative_crps": relative_crps,
-                })
+                cross_by_method[method] = result["cross"]
+                within_by_method[method] = result["within"]
+                worst_by_method[method] = result["worst"]
+                cross_all.append(result["cross"].assign(dataset=dataset, run=run, method=method_label))
+                within_all.append(result["within"].assign(dataset=dataset, run=run, method=method_label))
+                run_rows.append(result["row"])
+            rhat_path = figure_dir / f"{dataset}_run{run:03d}_rhat_comparison.png"
+            worst_path = figure_dir / f"{dataset}_run{run:03d}_worst_direction.png"
+            if all_cached and rhat_path.is_file() and worst_path.is_file():
+                continue
             rhat_fig = plot_rhat_comparison(
                 within_by_method,
                 f"{dataset} | run {run:03d} | within-chain segment R-hat: "
                 f"median and chain range",
             )
-            rhat_fig.savefig(figure_dir / f"{dataset}_run{run:03d}_rhat_comparison.png",
-                             dpi=args.dpi, bbox_inches="tight")
+            rhat_fig.savefig(rhat_path, dpi=args.dpi, bbox_inches="tight")
             plt.close(rhat_fig)
             worst_fig = plot_worst_comparison(
                 worst_by_method, args.short_burn,
                 f"{dataset} | run {run:03d} | worst-direction comparison",
             )
-            worst_fig.savefig(figure_dir / f"{dataset}_run{run:03d}_worst_direction.png",
-                              dpi=args.dpi, bbox_inches="tight")
+            worst_fig.savefig(worst_path, dpi=args.dpi, bbox_inches="tight")
             plt.close(worst_fig)
 
     run_frame = pd.DataFrame(run_rows)
@@ -782,6 +809,7 @@ def main() -> int:
     )
     print(f"[comparison] tables: {table_dir}", flush=True)
     print(f"[comparison] figures: {figure_dir}", flush=True)
+    print(f"[comparison] cache: {cache.hits} reused, {cache.misses} computed", flush=True)
     return 0
 
 

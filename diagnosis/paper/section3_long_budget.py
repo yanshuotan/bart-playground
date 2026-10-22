@@ -24,8 +24,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-from core import (dataset_tag, load_with_shape, long_predictions,  # noqa: E402
-                  long_runs, pointwise_rhat_summary, worst_directions)
+from core import (dataset_tag, input_signature, load_with_shape,  # noqa: E402
+                  long_predictions, long_runs, pointwise_rhat_summary, run_inputs,
+                  worst_directions)
 
 DISPLAY = {
     "fixed100_Abalone": "Abalone",
@@ -39,6 +40,7 @@ DISPLAY = {
     "fixed100_FriedmanSparseDir_p100": "Friedman-S p100",
     "fixed100_FriedmanSparseDir_p200": "Friedman-S p200",
     "fixed100_SeoulBike": "SeoulBike",
+    "fixed100_Superconduct_subsample5000": "Superconduct",
 }
 
 
@@ -82,12 +84,14 @@ def table_main(argv=None) -> int:
         tag = dataset_tag(store, dataset)
         for path in sorted((directory / "preds").glob(f"{tag}__run*__default__preds.csv")):
             run = int(re.search(r"__run(\d+)__", path.name).group(1))
-            if (dataset, run) in cached:
+            # a replaced draw file changes this, so its cached row is recomputed
+            inputs = input_signature({}, run_inputs(store, dataset, run, ["default", "default_long"]))
+            if (dataset, run) in cached and cached[(dataset, run)].get("inputs") == inputs:
                 hit = cached[(dataset, run)]
                 rows.append({k: hit[k] for k in (
                     "dataset", "run", "draws_per_chain",
                     "short_rhat_median", "short_rhat_q90", "short_rhat_max",
-                    "long_rhat_median", "long_rhat_q90", "long_rhat_max",
+                    "long_rhat_median", "long_rhat_q90", "long_rhat_max", "inputs",
                 )})
                 print(f"[budget] {dataset} run {run:03d}  cached", flush=True)
                 continue
@@ -104,6 +108,7 @@ def table_main(argv=None) -> int:
                 "long_rhat_median": long_rhat["median"],
                 "long_rhat_q90": long_rhat["q90"],
                 "long_rhat_max": long_rhat["maximum"],
+                "inputs": inputs,
             })
             print(f"[budget] {dataset} run {run:03d}  "
                   f"short median/q90 {short_rhat['median']:.3f}/{short_rhat['q90']:.3f}  "
@@ -112,6 +117,7 @@ def table_main(argv=None) -> int:
     runs = pd.DataFrame(rows)
     (args.out_dir / "tables").mkdir(parents=True, exist_ok=True)
     runs.assign(settings=fingerprint).to_csv(cache_path, index=False)
+    runs = runs.drop(columns="inputs")
     runs.to_csv(args.out_dir / "tables" / "budget_comparison_runs.csv", index=False)
 
     grouped = runs.groupby("dataset").agg(
@@ -158,6 +164,7 @@ DISPLAY = {
     "fixed100_FriedmanSparseDir_p100": "Friedman-S p100",
     "fixed100_FriedmanSparseDir_p200": "Friedman-S p200",
     "fixed100_SeoulBike": "SeoulBike",
+    "fixed100_Superconduct_subsample5000": "Superconduct",
 }
 
 
@@ -175,7 +182,6 @@ def draw_long_panels(args, pairs: list[tuple[str, str]], output: Path, first_pan
         result = worst_directions(draws, n_directions=2)
         projected = result["projected"]
         eigenvalues = result["eigenvalues"]
-        rhats = result["rhats"]
 
         trace_ax, scatter_ax = axes[row]
         iterations = np.arange(args.burn, args.burn + projected.shape[1])
@@ -185,15 +191,15 @@ def draw_long_panels(args, pairs: list[tuple[str, str]], output: Path, first_pan
         trace_ax.axvline(args.burn + int(result["fit_draws"]), color="0.35",
                          linestyle=(0, (4, 2)), linewidth=1.0)
         letter = PANELS[first_panel + 2 * row]
-        trace_ax.set(title=(f"({letter}) {label}, worst direction "
-                            f"($\\widehat R$={rhats[0]:.3f})"),
+        trace_ax.set(title=f"({letter}) {label}, worst direction",
                      xlabel="stored draw", ylabel="projected prediction")
         if row == 0:
             trace_ax.legend(ncol=4, fontsize=7.5, loc="upper center")
 
-        coords = projected
+        # the fitted first half is left out of the scatter; the trace shows both halves
+        coords = projected[:, int(result["fit_draws"]):, :]
         panel_title = (f"({PANELS[first_panel + 2 * row + 1]}) {label}, "
-                       "top two between/within directions")
+                       "top two directions, held half")
         xlabel = f"direction 1 ($\\lambda_1$={eigenvalues[0]:.3g})"
         ylabel = f"direction 2 ($\\lambda_2$={eigenvalues[1]:.3g})"
         idx = spaced(coords.shape[1], args.plot_draws)
@@ -206,8 +212,8 @@ def draw_long_panels(args, pairs: list[tuple[str, str]], output: Path, first_pan
         scatter_ax.set(title=panel_title, xlabel=xlabel, ylabel=ylabel)
         for ax in (trace_ax, scatter_ax):
             ax.grid(alpha=0.2)
-        print(f"[figure] {label}: worst-direction R-hat {rhats[0]:.3f}; "
-              f"lambda1/lambda2 {eigenvalues[0]:.3g}/{eigenvalues[1]:.3g}", flush=True)
+        print(f"[figure] {label}: lambda1/lambda2 {eigenvalues[0]:.3g}/{eigenvalues[1]:.3g}",
+              flush=True)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=args.dpi)
@@ -223,6 +229,7 @@ def ordered_datasets(args) -> list[tuple[str, str]]:
     runs = Path(__file__).resolve().parent / "tables" / "budget_comparison_runs.csv"
     if runs.is_file():
         ordering = pd.read_csv(runs).groupby("dataset")["long_rhat_q90"].mean()
+        available = [d for d in available if d in ordering.index]
         available.sort(key=lambda d: ordering.get(d, float("inf")))
     return [(d, DISPLAY.get(d, d.removeprefix("fixed100_"))) for d in available]
 

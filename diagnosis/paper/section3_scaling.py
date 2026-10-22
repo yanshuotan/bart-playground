@@ -24,7 +24,7 @@ import xarray as xr
 
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
-from core import load_with_shape, pointwise_rhat_summary  # noqa: E402
+from core import load_with_shape, pointwise_rhat_summary, prediction_variance_terms  # noqa: E402
 
 TAG = re.compile(r"^scal_(?P<source>[A-Za-z]+)_n(?P<n>\d+)(?:_sd(?P<sd>\d+))?$")
 
@@ -44,9 +44,7 @@ def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
 
 def score(draws: np.ndarray) -> dict[str, float]:
     summary = pointwise_rhat_summary(draws)
-    chain_means = draws.mean(axis=1)
-    within = draws.var(axis=1, ddof=1).mean(axis=0)
-    between = chain_means.var(axis=0, ddof=1)
+    within, between = prediction_variance_terms(draws)
     chains, retained, points = draws.shape
     alone = xr.DataArray(draws.transpose(1, 0, 2).reshape(1, -1, chains * points),
                          dims=("chain", "draw", "point"), name="prediction")
@@ -56,7 +54,7 @@ def score(draws: np.ndarray) -> dict[str, float]:
         "rhat_q90": summary["q90"],
         "within_median": float(np.median(within)),
         "between_median": float(np.median(between)),
-        "between_share_median": float(np.median(between / (between + within))),
+        "variance_population_denominators": 1,
         "rel_ess_single_median": float(np.median(single.mean(axis=0) / retained)),
     }
 
@@ -155,7 +153,7 @@ def main(supplied: list[str] | None = None) -> int:
     pd.set_option("display.width", 220)
     mean = frame.drop(columns=["run"]).groupby(keys, dropna=False).mean().reset_index()
     columns = ["rhat_median", "rhat_q90", "within_median", "between_median",
-               "between_share_median", "rel_ess_single_median"]
+               "rel_ess_single_median"]
     print()
     print("size sweep (noise fixed where it applies)")
     size = mean[mean.noise.isna() | mean.noise.eq(1.0)].sort_values(["source", "n_train"])
