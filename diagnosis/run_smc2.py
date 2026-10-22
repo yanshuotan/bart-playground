@@ -158,7 +158,7 @@ def analyze(root,dataset,settings):
         indices=np.linspace(0,p.shape[1]-1,settings['n_particles'],dtype=int)
         if settings['n_particles']<=p.shape[1]:
             methods[method+'_terminal_count']=(p[:,indices],v[:,indices])
-    old=ROOT/'diagnosis/store_smc_population'/tag/'run000_p50_w0_s1000'
+    old=ROOT/'diagnosis/store_smc'/tag/'run000_p50_w0_s1000'
     if old.exists():
         for first,last in [(61,200),(861,1000)]:
             start,stop=(first-1)*50,last*50
@@ -170,14 +170,16 @@ def analyze(root,dataset,settings):
         single=np.array([scores(a,b,truth,scale) for a,b in zip(p,v)])
         rows.append({'dataset':dataset,'method':name,'samples_per_repeat':p.shape[1],**geometry(p),
             'rmse_mean':single[:,0].mean(),'rmse_sd':single[:,0].std(ddof=1),
+            'rmse_root_mean_mse':np.sqrt(np.mean(single[:,0]**2)),
             'crps_mean':single[:,1].mean(),'crps_sd':single[:,1].std(ddof=1),
-            'relative_rmse':single[:,0].mean()/ref['naive_rmse'],
+            'relative_rmse':np.sqrt(np.mean(single[:,0]**2))/ref['naive_rmse'],
             'relative_crps':single[:,1].mean()/ref['climatology_crps']})
     with (folder/'comparison.csv').open('w',newline='',encoding='utf-8') as stream:
         writer=csv.DictWriter(stream,fieldnames=list(rows[0]))
         writer.writeheader();writer.writerows(rows)
     write_json(folder/'analysis.json',{'metrics':rows,'references':ref,
         'rank_rhat_reported':False,'flattened_mcmc_ess_reported':False,
+        'rmse_convention':'sqrt(mean repeat MSE), matching the current outline; rmse_mean is auxiliary',
         'terminal_count_selection':'Equally spaced indices from each baseline post-burn record',
         'terminal_particles_not_iid':True,'final_rounds_not_extra_updates':True,
         'comparison_is_equal_wall_time':False})
