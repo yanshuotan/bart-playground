@@ -287,6 +287,7 @@ def analyze(output, source, reference_population=None):
             pooled = unordered_scores(p.reshape(-1,100), v.reshape(-1), truth, y_scale)
             return {"method": method, "samples_per_replicate": p.shape[1],
                 **unordered_geometry(p), "rmse_single_mean": float(np.mean([a for a,b in single])),
+                "rmse_root_mean_mse": float(np.sqrt(np.mean([a*a for a,b in single]))),
                 "crps_single_mean": float(np.mean([b for a,b in single])),
                 "rmse_pooled": pooled[0], "crps_pooled": pooled[1]}
 
@@ -356,7 +357,7 @@ def analyze(output, source, reference_population=None):
     fig.savefig(dest / "collection_block_comparison.png",dpi=160); plt.close(fig)
     pd.DataFrame(drift).to_csv(dest / "collection_drift_summary.csv",index=False)
     fig, axes = plt.subplots(1,3,figsize=(13,5.2),layout="constrained")
-    for ax, key, title in zip(axes, ("R_BW","rmse_single_mean","crps_single_mean"),
+    for ax, key, title in zip(axes, ("R_BW","rmse_root_mean_mse","crps_single_mean"),
                              ("Prediction-space R_B/W", "Posterior-mean RMSE", "Predictive MC-CRPS")):
         ax.scatter(matched[key],np.arange(len(labels)),color="#26764a")
         ax.set_yticks(np.arange(len(labels)), labels); ax.invert_yaxis()
@@ -486,7 +487,7 @@ def main():
     if args.analyze_only and args.output is not None:
         args.dataset = json.loads((args.output/"settings.json").read_text()).get("dataset","abalone")
     tag = DATASET_CONFIGS[args.dataset]["dataset_tag"]
-    args.output = args.output or ROOT/"diagnosis/store_smc_population"/tag/"run000"
+    args.output = args.output or ROOT/"diagnosis/store_smc"/tag/"run000"
     args.source = args.source or ROOT/"diagnosis/store"/tag
     if args.analyze_only:
         analyze(args.output,args.source,args.reference_population); return

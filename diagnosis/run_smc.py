@@ -372,7 +372,7 @@ def analyze(output, source, burn):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "diagnosis/store_smc" / TAG / "run000")
+    parser.add_argument("--output", type=Path, default=ROOT / "backup/smc_init" / TAG / "run000")
     parser.add_argument("--source", type=Path, default=ROOT / "diagnosis/store" / TAG)
     parser.add_argument("--n-particles", type=int, default=100)
     parser.add_argument("--n-mcmc-steps", type=int, default=2)

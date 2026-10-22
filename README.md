@@ -187,7 +187,7 @@ python diagnosis/run_smc_population.py
 Four processes each run one independent 100-particle population, with 100 trees,
 two MCMC sweeps per annealing stage, 50 beta=1 population warm-up sweeps and 100
 retained population sweeps. Each repeat yields 10,000 equally weighted states.
-Results are saved under `diagnosis/store_smc_population/fixed100_Abalone/run000/`,
+Results are saved under `diagnosis/store_smc/fixed100_Abalone/run000/`,
 including particle/sweep identities. The full-population analysis uses every
 SMC sample and the paper's post-burn baseline records; an additional matched
 comparison selects 70 evenly spaced sweeps (all particles, 7,000 states) against
@@ -201,7 +201,7 @@ For four simultaneous populations on a server allocated 32 CPUs, run the
 50-particle, 1,000-round experiment using eight posterior workers per population:
 
 ```bash
-python diagnosis/run_smc_population.py --dataset abalone --n-particles 50 --warmup-sweeps 0 --retained-sweeps 1000 --jobs 4 --posterior-n-jobs 8 --skip-analysis --output diagnosis/store_smc_population/fixed100_Abalone/run000_p50_w0_s1000_parallel8
+python diagnosis/run_smc_population.py --dataset abalone --n-particles 50 --warmup-sweeps 0 --retained-sweeps 1000 --jobs 4 --posterior-n-jobs 8 --skip-analysis --output diagnosis/store_smc/fixed100_Abalone/run000_p50_w0_s1000_parallel8
 ```
 
 Use `--dataset seoul_bike` and a fresh output path for SeoulBike. Omitting
@@ -224,7 +224,7 @@ The 50-particle comparison uses 60 beta=1 warm-up sweeps and 140 retained
 sweeps (7,000 states per repeat), with the same four-process execution:
 
 ```bash
-python diagnosis/run_smc_population.py --n-particles 50 --warmup-sweeps 60 --retained-sweeps 140 --jobs 4 --output diagnosis/store_smc_population/fixed100_Abalone/run000_p50_w60_s140 --reference-population diagnosis/store_smc_population/fixed100_Abalone/run000
+python diagnosis/run_smc_population.py --n-particles 50 --warmup-sweeps 60 --retained-sweeps 140 --jobs 4 --output diagnosis/store_smc/fixed100_Abalone/run000_p50_w60_s140 --reference-population diagnosis/store_smc/fixed100_Abalone/run000
 ```
 
 The optional reference adds the earlier population experiment to the comparison.
@@ -236,7 +236,7 @@ with the same output and reference paths to regenerate diagnostics.
 The same 50-particle configuration on SeoulBike run 0 is:
 
 ```bash
-python diagnosis/run_smc_population.py --dataset seoul_bike --n-particles 50 --warmup-sweeps 60 --retained-sweeps 140 --jobs 4 --output diagnosis/store_smc_population/fixed100_SeoulBike/run000_p50_w60_s140
+python diagnosis/run_smc_population.py --dataset seoul_bike --n-particles 50 --warmup-sweeps 60 --retained-sweeps 140 --jobs 4 --output diagnosis/store_smc/fixed100_SeoulBike/run000_p50_w60_s140
 ```
 
 The runner checks training/test row indices and the encoded fixed-test predictors
@@ -253,10 +253,10 @@ time (`--warmup-sweeps 0 --retained-sweeps 1000`). With 50 particles this stores
 independent repeats in parallel inside each dataset:
 
 ```bash
-python diagnosis/run_smc_population.py --dataset abalone --n-particles 50 --warmup-sweeps 0 --retained-sweeps 1000 --jobs 4 --skip-analysis --output diagnosis/store_smc_population/fixed100_Abalone/run000_p50_w0_s1000
-python diagnosis/analyze_smc_windows.py --output diagnosis/store_smc_population/fixed100_Abalone/run000_p50_w0_s1000
-python diagnosis/run_smc_population.py --dataset seoul_bike --n-particles 50 --warmup-sweeps 0 --retained-sweeps 1000 --jobs 4 --skip-analysis --output diagnosis/store_smc_population/fixed100_SeoulBike/run000_p50_w0_s1000
-python diagnosis/analyze_smc_windows.py --output diagnosis/store_smc_population/fixed100_SeoulBike/run000_p50_w0_s1000
+python diagnosis/run_smc_population.py --dataset abalone --n-particles 50 --warmup-sweeps 0 --retained-sweeps 1000 --jobs 4 --skip-analysis --output diagnosis/store_smc/fixed100_Abalone/run000_p50_w0_s1000
+python diagnosis/analyze_smc_windows.py --output diagnosis/store_smc/fixed100_Abalone/run000_p50_w0_s1000
+python diagnosis/run_smc_population.py --dataset seoul_bike --n-particles 50 --warmup-sweeps 0 --retained-sweeps 1000 --jobs 4 --skip-analysis --output diagnosis/store_smc/fixed100_SeoulBike/run000_p50_w0_s1000
+python diagnosis/analyze_smc_windows.py --output diagnosis/store_smc/fixed100_SeoulBike/run000_p50_w0_s1000
 ```
 
 Window analysis uses 140 consecutive population sweeps (all 50 particles,
@@ -289,7 +289,7 @@ than treating duplicated final particles as a time series. Diagnostics follow
 the paper's 3,000-draw exclusion, 1,000-draw cross-chain windows, and four
 consecutive within-chain segments. Initialization and production costs are
 recorded separately, and initialization is included in total cost. Outputs
-are under `diagnosis/store_smc/fixed100_Abalone/run000/`; existing results are
+are under `backup/smc_init/fixed100_Abalone/run000/`; existing results are
 read for comparison. To rerun only the analysis, pass `--analyze-only`.
 
 ### Binary Classification

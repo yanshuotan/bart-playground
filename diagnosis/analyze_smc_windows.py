@@ -40,6 +40,7 @@ def score_set(preds, sigmas, truth, y_scale):
     result = {**unordered_geometry(preds),
         "rmse_single_mean":float(np.mean([x[0] for x in scores])),
         "rmse_single_sd":float(np.std([x[0] for x in scores],ddof=1)),
+        "rmse_root_mean_mse":float(np.sqrt(np.mean([x[0]**2 for x in scores]))),
         "crps_single_mean":float(np.mean([x[1] for x in scores])),
         "crps_single_sd":float(np.std([x[1] for x in scores],ddof=1)),
         "rmse_pooled":pooled[0],"crps_pooled":pooled[1],
@@ -166,7 +167,7 @@ def analyze_windows(output, source=None, width=140, stride=20):
     colors={"default":"#d17b0f","default_pt":"#287bb5","mtmh":"#9250ac",
             "mtmh_pt":"#bc4256","default_long":"#555555","default_long_tail":"#999999"}
     fig,axes=plt.subplots(1,3,figsize=(15,5),layout="constrained")
-    for ax,key,title in zip(axes,("R_BW","rmse_single_mean","crps_single_mean"),
+    for ax,key,title in zip(axes,("R_BW","rmse_root_mean_mse","crps_single_mean"),
                             ("Prediction-space R_B/W","Posterior-mean RMSE","Predictive MC-CRPS")):
         ax.plot(frame.first_sweep,frame[key],marker=".",color="#147451",label="SMC windows",linewidth=2)
         for row in baselines:
