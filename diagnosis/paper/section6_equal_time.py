@@ -244,8 +244,6 @@ def curves_main(args) -> int:
     order = [d for d in ORDER if d in set(short.dataset)]
     median = summary.pivot(index="dataset", columns="method", values="rhat_median")
     q90 = summary.pivot(index="dataset", columns="method", values="rhat_q90")
-    iters = summary.pivot(index="dataset", columns="method", values="iterations")
-    write_table_body(args.table_dir / "equal_time_rows.tex", order, median, q90, iters)
     draw_curves(args, frame, order)
 
     pd.set_option("display.width", 200)
@@ -265,25 +263,6 @@ def curves_main(args) -> int:
     print(f"tables: {args.table_dir}")
     print(f"figures: {args.figure_dir}")
     return 0
-
-
-def write_table_body(path: Path, order, median, q90, iters) -> None:
-    """The LaTeX row bodies, smallest value in each half of a row in bold."""
-    width = max(len(DISPLAY[d]) for d in order)
-    lines = []
-    for dataset in order:
-        cells = []
-        for table in (median, q90):
-            best = table.loc[dataset].min()
-            for method in NAMES:
-                value = f"{table.loc[dataset, method]:.3f}"
-                cells.append(r"$\mathbf{" + value + "}$"
-                             if table.loc[dataset, method] == best else f"${value}$")
-        counts = "/".join(f"{int(iters.loc[dataset, m]):,}" for m in NAMES[1:])
-        lines.append(f"{DISPLAY[dataset]:<{width}} & " + " & ".join(cells)
-                     + f" & {counts} " + chr(92) * 2)
-    eol = chr(10)
-    path.write_text(eol.join(lines) + eol, newline=eol, encoding="utf-8")
 
 
 def draw_curves(args: argparse.Namespace, frame: pd.DataFrame, order) -> None:

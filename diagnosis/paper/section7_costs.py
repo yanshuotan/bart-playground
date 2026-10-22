@@ -44,7 +44,7 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
 sys.path.insert(0, str(DIAG))
-from core import load_with_shape  # noqa: E402
+from core import ResultCache, load_with_shape, prediction_variance_terms, run_inputs  # noqa: E402
 from section6_methods import (full_target_vector, predictions,  # noqa: E402
                               residual_variances, split_indices)
 from fixed100_support import (  # noqa: E402
@@ -57,6 +57,8 @@ from fixed100_support import (  # noqa: E402
 from run_fixed100 import repo_nested_friedman1_generator  # noqa: E402
 
 METHODS = ["default", "mtmh", "default_pt", "mtmh_pt"]
+# Bump when score() or the scalar diagnostics change, so cached results are redone.
+CACHE_VERSION = 1
 METHOD_NAMES = {"default": "Default", "default_pt": "Default+PT",
                 "mtmh": "MTMH", "mtmh_pt": "MTMH+PT",
                 "default_long": "Default (long)"}
@@ -76,6 +78,8 @@ TIMING_TAG = {
     "fixed100_FriedmanSparseDir_p100": "fixed100_FriedmanSparseDir",
     "fixed100_FriedmanSparseDir_p200": "fixed100_FriedmanSparseDirP200K5",
     "fixed100_SeoulBike": "fixed100_SeoulBike",
+    # no timing run exists for Superconduct; its cost ratios stay missing
+    "fixed100_Superconduct_subsample5000": "fixed100_Superconduct_subsample5000",
 }
 DISPLAY = {
     "fixed100_Abalone": "Abalone", "fixed100_Airfoil": "Airfoil",
@@ -86,6 +90,7 @@ DISPLAY = {
     "fixed100_FriedmanSparseDir_p100": "DART $d=100$",
     "fixed100_FriedmanSparseDir_p200": "DART $d=200$",
     "fixed100_SeoulBike": "SeoulBike",
+    "fixed100_Superconduct_subsample5000": "Superconduct",
 }
 # store folder -> how to rebuild the design so that the noise-free signal is known
 SYNTHETIC = {
@@ -111,11 +116,15 @@ def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
                         help="Also score the stored 10^7 Default chains.")
     parser.add_argument("--reuse-ess", action="store_true",
                         help="Reuse existing ESS counts for identical retained draws; refresh other statistics.")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Recompute every (dataset, run, method) and rewrite its cache entry.")
     return parser.parse_args(supplied)
 
 
 def cost_ratios(timing_dir: Path, dataset: str) -> dict[str, float]:
     path = timing_dir / f"{TIMING_TAG[dataset]}_run000_summary.csv"
+    if not path.is_file():
+        return {}
     rows = {r["label"]: r for r in csv.DictReader(path.open(encoding="utf-8"))}
     ratios = {m: float(rows[TIMING_LABEL[m]]["relative_to_default"])
               for m in METHOD_NAMES if TIMING_LABEL[m] in rows}
@@ -197,8 +206,7 @@ def score(draws: np.ndarray, y: np.ndarray, truth: np.ndarray | None,
     chain_mse = float(((chain_means - pooled_mean[None, :]) ** 2).mean())
 
     # Exact variance decomposition of the finite, equally weighted mixture.
-    within = draws.var(axis=1, ddof=0).mean(axis=0)
-    between = chain_means.var(axis=0, ddof=0)
+    within, between = prediction_variance_terms(draws)
     total = within + between
     np.testing.assert_allclose(total, draws.reshape(-1, draws.shape[-1]).var(axis=0),
                                rtol=1e-10, atol=1e-12)
@@ -285,32 +293,50 @@ def score(draws: np.ndarray, y: np.ndarray, truth: np.ndarray | None,
 def costs_main(args) -> int:
     args.table_dir.mkdir(parents=True, exist_ok=True)
     wanted = METHODS + (["default_long"] if args.long else [])
-    cache = {}
-    if args.reuse_ess:
-        previous = pd.read_csv(args.table_dir / 'consequences_run_level.csv')
-        cache = {(r['dataset'], int(r['run']), r['method']): r for r in previous.to_dict('records')}
+    cache_settings = {
+        "version": CACHE_VERSION, "burn": args.burn, "interval": args.interval,
+    }
+    results = ResultCache("section7_costs", cache_settings,
+                          enabled=not (args.no_cache or args.reuse_ess))
+    ess_cache = ResultCache("section7_costs", cache_settings) if args.reuse_ess else None
 
     rows = []
     for dataset in args.datasets:
         ratios = cost_ratios(args.timing_dir, dataset)
         for run in args.runs:
-            y, truth = targets(dataset, args.store_root, run)
+            observed = None
             for method in wanted:
-                draws = stored_draws(args.store_root, dataset, run, method, args.burn)
-                if draws is None:
+                inputs = run_inputs(args.store_root, dataset, run, [method])
+                if not any(p.parent.name == "preds" for p in inputs):
                     continue
-                check_alignment(args.store_root, dataset, run, method, draws, y)
+                key = (dataset, f"run{run:03d}", method)
+                scored = results.get(key, inputs)
+                if scored is None:
+                    if observed is None:
+                        observed = targets(dataset, args.store_root, run)
+                    y, truth = observed
+                    draws = stored_draws(args.store_root, dataset, run, method, args.burn)
+                    check_alignment(args.store_root, dataset, run, method, draws, y)
+                    # Reuse ESS only from an entry whose settings and input
+                    # file signatures match this run's current records.
+                    previous = ess_cache.get(key, inputs) if ess_cache is not None else None
+                    if args.reuse_ess and previous is None:
+                        raise ValueError(
+                            f'No matching ESS cache for {dataset} {run} {method}; '
+                            'rerun without --reuse-ess to compute current ESS')
+                    scored = {"chains": draws.shape[0], "draws": draws.shape[1],
+                              **score(draws, y, truth, args.interval, cached=previous)}
+                    results.put(key, inputs, scored)
+                    del draws
+                chains = scored["chains"]
                 row = {"dataset": dataset, "run": run,
-                       "method": METHOD_NAMES[method], "draws": draws.shape[1],
+                       "method": METHOD_NAMES[method], "draws": scored["draws"],
                        "cost_ratio": ratios.get(method, np.nan)}
-                previous = cache.get((dataset, run, METHOD_NAMES[method]))
-                if args.reuse_ess and previous is None:
-                    raise ValueError(f'Missing ESS cache for {dataset} {run} {method}')
-                row.update(score(draws, y, truth, args.interval, cached=previous))
+                row.update({k: v for k, v in scored.items() if k not in ("chains", "draws")})
                 for kind in ("bulk", "tail"):
                     for scope in ("single", "multi"):
                         # A four-chain estimate costs four sequential chains.
-                        charged = row["cost_ratio"] * (draws.shape[0]
+                        charged = row["cost_ratio"] * (chains
                                                        if scope == "multi" else 1)
                         row[f"ess_{kind}_{scope}_per_cost"] = (
                             row[f"ess_{kind}_{scope}_median"] / charged
@@ -319,8 +345,8 @@ def costs_main(args) -> int:
                             row[f"ess_{kind}_{scope}_per_cost"]
                             if row["agreement_screen_pass"] else np.nan)
                 rows.append(row)
-                del draws
             print(f"[consequences] {dataset} run {run:03d}", flush=True)
+    print(f"[consequences] cache: {results.hits} reused, {results.misses} computed", flush=True)
 
     frame = pd.DataFrame(rows)
     frame.to_csv(args.table_dir / "consequences_run_level.csv", index=False)
@@ -350,7 +376,10 @@ def costs_main(args) -> int:
             print(f"  {column}")
             print(wide[order].round(4).to_string())
 
-    covered = summary.reset_index().dropna(subset=["cover_f_single"])
+    # only the generated designs know f, so a run without one has no such column
+    covered = summary.reset_index()
+    covered = (covered.dropna(subset=["cover_f_single"])
+               if "cover_f_single" in covered else covered.iloc[:0])
     if len(covered):
         print()
         print(f"containment of the true f at the {args.interval:.0%} level, "
@@ -393,59 +422,83 @@ def scalar_summary(values):
     result['agreement_screen_pass'] = np.isfinite(result['rhat']) and result['rhat'] <= 1.01
     return result
 
+def scalar_results(args, dataset, run, method, scale):
+    """Run-level and chain-level rows for one method, plus its thinned traces."""
+    draws = stored_draws(args.store_root, dataset, run, method, 0)
+    if draws is None:
+        raise FileNotFoundError(f'{dataset} run {run}: missing {method}')
+    variances = residual_variances(args.store_root, dataset, run, method)
+    if variances.shape != draws.shape[:2]:
+        raise ValueError('prediction / variance draw alignment mismatch')
+    quantities = {'panel_mean_f': draws.mean(axis=2),
+                  'noise_variance_y': variances * scale**2}
+    rows, chains, traces = [], [], {}
+    for quantity, full in quantities.items():
+        values = full[:, args.burn:]
+        base = {'dataset': dataset, 'run': run, 'method': METHOD_NAMES[method],
+                'quantity': quantity, 'draws_per_chain': values.shape[1],
+                'store_stride': 1000 if method == 'default_long' else 1}
+        per_chain = [scalar_summary(series[None, :]) for series in values]
+        summary = scalar_summary(values)
+        # the same quantity under the other convention, so the two
+        # sit in one row rather than in two tables
+        for key in ('ess_bulk', 'ess_tail', 'rel_ess_bulk', 'rel_ess_tail'):
+            summary[f'{key}_single_mean'] = float(
+                np.mean([d[key] for d in per_chain]))
+        rows.append({**base, **summary})
+        for c, diagnostics in enumerate(per_chain):
+            chains.append({**base, 'chain': c, **diagnostics})
+        stride = max(1, full.shape[1]//1500)
+        traces[quantity] = (np.arange(0, full.shape[1], stride), full[:, ::stride])
+    return {'rows': rows, 'chains': chains, 'traces': traces}
+
+
 def scalar_main(args):
     rows, chains = [], []
     out = args.table_dir; out.mkdir(exist_ok=True)
     figs = args.table_dir.parent/'figures'/'scalar_quantities'; figs.mkdir(parents=True, exist_ok=True)
+    cache = ResultCache('section7_scalar', {'version': CACHE_VERSION, 'burn': args.burn},
+                        enabled=not args.no_cache)
     for dataset in args.datasets:
-        targets = full_target_vector(args.store_root, dataset)
+        targets = None
         for run in args.runs:
-            train = targets[split_indices(args.store_root, dataset, run, 'train_idx')]
-            scale = float(np.ptp(train))
-            fig, axes = plt.subplots(2, 4, figsize=(14, 6), layout='constrained') if run == 0 else (None, None)
-            for column, method in enumerate(['default', 'mtmh', 'default_pt', 'mtmh_pt', 'default_long']):
-                if args.plots_only and column == 4:
+            results, all_cached = {}, True
+            for method in ['default', 'mtmh', 'default_pt', 'mtmh_pt', 'default_long']:
+                if args.plots_only and method == 'default_long':
                     continue
-                draws = stored_draws(args.store_root, dataset, run, method, 0)
-                if draws is None:
-                    raise FileNotFoundError(f'{dataset} run {run}: missing {method}')
-                variances = residual_variances(args.store_root, dataset, run, method)
-                if variances.shape != draws.shape[:2]:
-                    raise ValueError('prediction / variance draw alignment mismatch')
-                quantities = {'panel_mean_f': draws.mean(axis=2),
-                              'noise_variance_y': variances * scale**2}
-                for qindex, (quantity, full) in enumerate(quantities.items()):
-                    values = full[:, args.burn:]
-                    base = {'dataset': dataset, 'run': run, 'method': METHOD_NAMES[method],
-                            'quantity': quantity, 'draws_per_chain': values.shape[1],
-                            'store_stride': 1000 if method == 'default_long' else 1}
-                    per_chain = [scalar_summary(series[None, :]) for series in values]
-                    summary = scalar_summary(values)
-                    # the same quantity under the other convention, so the two
-                    # sit in one row rather than in two tables
-                    for key in ('ess_bulk', 'ess_tail', 'rel_ess_bulk', 'rel_ess_tail'):
-                        summary[f'{key}_single_mean'] = float(
-                            np.mean([d[key] for d in per_chain]))
-                    rows.append({**base, **summary})
-                    for c, diagnostics in enumerate(per_chain):
-                        chains.append({**base, 'chain': c, **diagnostics})
-                    if fig is not None and column < 4:
+                inputs = run_inputs(args.store_root, dataset, run, [method])
+                key = (dataset, f'run{run:03d}', method)
+                result = cache.get(key, inputs)
+                if result is None:
+                    all_cached = False
+                    if targets is None:
+                        targets = full_target_vector(args.store_root, dataset)
+                    train = targets[split_indices(args.store_root, dataset, run, 'train_idx')]
+                    result = scalar_results(args, dataset, run, method, float(np.ptp(train)))
+                    cache.put(key, inputs, result)
+                results[method] = result
+                rows.extend(result['rows']); chains.extend(result['chains'])
+            figure = figs/f'{dataset}_run000.png'
+            if run == 0 and not (all_cached and figure.is_file()):
+                fig, axes = plt.subplots(2, 4, figsize=(14, 6), layout='constrained')
+                for column, method in enumerate(['default', 'mtmh', 'default_pt', 'mtmh_pt']):
+                    for qindex, row in enumerate(results[method]['rows']):
+                        quantity = row['quantity']
+                        x, series = results[method]['traces'][quantity]
                         ax = axes[qindex, column]
-                        stride = max(1, full.shape[1]//1500)
-                        for c, series in enumerate(full):
-                            ax.plot(np.arange(0, len(series), stride), series[::stride], lw=.5, alpha=.7, label=f'chain {c}')
+                        for c, trace in enumerate(series):
+                            ax.plot(x, trace, lw=.5, alpha=.7, label=f'chain {c}')
                         ax.axvline(args.burn, color='black', ls='--', lw=.8)
-                        ax.set_title(f'{METHOD_NAMES[method]} | R-hat {rows[-1]["rhat"]:.3f}')
+                        ax.set_title(f'{METHOD_NAMES[method]} | R-hat {row["rhat"]:.3f}')
                         ax.set_ylabel(quantity); ax.set_xlabel('stored draw')
                         if quantity == 'noise_variance_y':
                             ax.set_yscale('log')
                             ax.set_ylabel('noise variance (outcome scale; log axis)')
-                del draws
-            if fig is not None:
                 axes[0, 0].legend(fontsize=6)
                 fig.suptitle(f'{dataset}, run 0; dashed line ends warm-up')
-                fig.savefig(figs/f'{dataset}_run000.png', dpi=150); plt.close(fig)
+                fig.savefig(figure, dpi=150); plt.close(fig)
             print(f'[scalar] {dataset} run {run}', flush=True)
+    print(f'[scalar] cache: {cache.hits} reused, {cache.misses} computed', flush=True)
     if args.plots_only:
         return
     frame = pd.DataFrame(rows)
@@ -467,6 +520,8 @@ def parse_scalar_args(supplied: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--burn", type=int, default=3000)
     parser.add_argument("--plots-only", action="store_true",
                         help="Refresh run-0 figures without overwriting diagnostic tables")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Recompute every (dataset, run, method) and rewrite its cache entry.")
     return parser.parse_args(supplied)
 
 

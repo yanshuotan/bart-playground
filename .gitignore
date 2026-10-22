@@ -44,3 +44,6 @@ diagnosis/**/store/
 
 # Local archives created while reorganizing experiment results.
 /backup/
+
+# Local manuscript editing and one-off maintenance helpers.
+/.codex-local/

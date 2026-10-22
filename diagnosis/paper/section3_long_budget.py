@@ -24,8 +24,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-from core import (dataset_tag, load_with_shape, long_predictions,  # noqa: E402
-                  long_runs, pointwise_rhat_summary, worst_directions)
+from core import (dataset_tag, input_signature, load_with_shape,  # noqa: E402
+                  long_predictions, long_runs, pointwise_rhat_summary, run_inputs,
+                  worst_directions)
 
 DISPLAY = {
     "fixed100_Abalone": "Abalone",
@@ -39,6 +40,7 @@ DISPLAY = {
     "fixed100_FriedmanSparseDir_p100": "Friedman-S p100",
     "fixed100_FriedmanSparseDir_p200": "Friedman-S p200",
     "fixed100_SeoulBike": "SeoulBike",
+    "fixed100_Superconduct_subsample5000": "Superconduct",
 }
 
 
@@ -82,12 +84,14 @@ def table_main(argv=None) -> int:
         tag = dataset_tag(store, dataset)
         for path in sorted((directory / "preds").glob(f"{tag}__run*__default__preds.csv")):
             run = int(re.search(r"__run(\d+)__", path.name).group(1))
-            if (dataset, run) in cached:
+            # a replaced draw file changes this, so its cached row is recomputed
+            inputs = input_signature({}, run_inputs(store, dataset, run, ["default", "default_long"]))
+            if (dataset, run) in cached and cached[(dataset, run)].get("inputs") == inputs:
                 hit = cached[(dataset, run)]
                 rows.append({k: hit[k] for k in (
                     "dataset", "run", "draws_per_chain",
                     "short_rhat_median", "short_rhat_q90", "short_rhat_max",
-                    "long_rhat_median", "long_rhat_q90", "long_rhat_max",
+                    "long_rhat_median", "long_rhat_q90", "long_rhat_max", "inputs",
                 )})
                 print(f"[budget] {dataset} run {run:03d}  cached", flush=True)
                 continue
@@ -104,6 +108,7 @@ def table_main(argv=None) -> int:
                 "long_rhat_median": long_rhat["median"],
                 "long_rhat_q90": long_rhat["q90"],
                 "long_rhat_max": long_rhat["maximum"],
+                "inputs": inputs,
             })
             print(f"[budget] {dataset} run {run:03d}  "
                   f"short median/q90 {short_rhat['median']:.3f}/{short_rhat['q90']:.3f}  "
@@ -112,6 +117,7 @@ def table_main(argv=None) -> int:
     runs = pd.DataFrame(rows)
     (args.out_dir / "tables").mkdir(parents=True, exist_ok=True)
     runs.assign(settings=fingerprint).to_csv(cache_path, index=False)
+    runs = runs.drop(columns="inputs")
     runs.to_csv(args.out_dir / "tables" / "budget_comparison_runs.csv", index=False)
 
     grouped = runs.groupby("dataset").agg(
@@ -158,6 +164,7 @@ DISPLAY = {
     "fixed100_FriedmanSparseDir_p100": "Friedman-S p100",
     "fixed100_FriedmanSparseDir_p200": "Friedman-S p200",
     "fixed100_SeoulBike": "SeoulBike",
+    "fixed100_Superconduct_subsample5000": "Superconduct",
 }
 
 
