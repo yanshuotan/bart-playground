@@ -17,8 +17,8 @@ long-chain empirical reference.
 | `exploratory/` | Earlier general analysis scripts, the notebook, and exploratory results. |
 | `vanda_logs/` | Cluster run logs and metadata kept for provenance; no analysis reads them. |
 | `run_fixed100.py` | Entry point for running selected fixed datasets and run IDs. |
-| `experiment_fixed100.py` | Chain execution and fixed-100 result writing. |
-| `fixed100_support.py` | Dataset loading, ladder search, and sparse-data utilities. |
+| `experiment_fixed100.py` | Temperature-ladder search, chain execution, and fixed-100 result writing. |
+| `fixed100_support.py` | Dataset loading and sparse-data utilities. |
 
 ## Run experiments
 
@@ -27,7 +27,7 @@ default. `--store-dir` selects another location relative to `diagnosis/`.
 
 ```bash
 python diagnosis/run_fixed100.py fixed --datasets abalone --skip-long
-python diagnosis/run_fixed100.py fixed --datasets abalone --run-ids 3 4 --ladder original --skip-short
+python diagnosis/run_fixed100.py fixed --datasets abalone --run-ids 3 4 --n-chains 1 --n-jobs 1 --skip-short
 python diagnosis/run_fixed100.py sparse --variants friedman_p20_k5 friedman_p200_k5
 ```
 
