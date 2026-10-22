@@ -459,6 +459,11 @@ baselines and the old SMC's early/final windows when available. Terminal-count
 comparisons select 1,000 evenly spaced states from each baseline's 7,000-state
 post-burn record. No flattened-population rank R-hat or MCMC ESS is reported.
 These comparisons match saved counts, not computation or effective sample size.
+Population results from the `smc` branch live in `diagnosis/store_smc/`;
+SMC2 results live in `diagnosis/store_smc2/`. The former directory was renamed
+from `store_smc_population`; it no longer contains initialization-only runs.
+RMSE uses the square root of average repeat MSE, matching the current outline;
+the average repeat RMSE is retained as an auxiliary output.
 The code retains the original Default kernel's numerical variance floor;
 it makes no claim that such inherited finite-precision safeguards are an
 exact continuous-target algorithm in the floor's extreme tail.
