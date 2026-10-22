@@ -237,6 +237,7 @@ def quick_ladder_search(
     s_alpha: float = 1.0,
     progress_print: bool = False,
     progress_prefix: str = "",
+    n_jobs: int | None = 1,
 ):
     """Adaptive temperature-ladder search on one continuing pilot run.
 
@@ -249,7 +250,9 @@ def quick_ladder_search(
     chain from where it stopped; an inserted temperature starts from the state
     of the nearest one. `max_temperatures` caps the ladder size; None or a
     non-positive value leaves it uncapped. The returned ladder includes the
-    last round's insertions.
+    last round's insertions. `n_jobs` is passed to every round's fit; the
+    production runs keep the serial default, the timing benchmark gives each
+    temperature its own worker.
     """
     if ndpost < swap_interval:
         raise ValueError(
@@ -298,6 +301,7 @@ def quick_ladder_search(
             print_swap_diagnostics=False,
             dirichlet_prior=dirichlet_prior,
             s_alpha=s_alpha,
+            n_jobs=n_jobs,
         )
         model.fit(X, y, quietly=True, init_states=states, keep_final_states=True)
         rates = np.asarray(model.get_params().get("swap_accept_rates", []), dtype=float)

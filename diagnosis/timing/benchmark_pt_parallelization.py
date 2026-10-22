@@ -19,6 +19,12 @@ unless ``--chain-seed`` overrides the base.  ``elapsed_seconds`` starts after
 model construction and preprocessing and covers chain initialisation, worker
 start-up/shutdown and the complete MCMC run.
 
+With ``--search-ladder`` the stored ladder is not reused. The production
+ladder search (``run_fixed100.py`` defaults) runs again first with one worker
+per temperature and is timed; its ladder feeds the PT rows, and it is compared
+with the stored one (``--ladder-store``). The summaries then add the search time
+and each PT arm's cost including it.
+
 For each fit the script measures, on Linux, the peak number of live PT worker
 processes.  It also records the CPUs the scheduler allocated (``PBS_NCPUS``)
 and the process CPU affinity.
@@ -135,6 +141,8 @@ SOURCES = {
                              "fixed100_FriedmanSparseDirP200K5", _sparse("friedman_p200_k5"),
                              DART),
     "seoul_bike": _Source("fixed100_SeoulBike", "fixed100_SeoulBike", _named("seoul_bike")),
+    "superconduct": _Source("fixed100_Superconduct_subsample5000",
+                            "fixed100_Superconduct_subsample5000", _named("superconduct")),
 }
 DATASETS = tuple(SOURCES)
 # (label, method, backend) in execution order within a chain. Serial and
@@ -160,6 +168,13 @@ PER_CHAIN_FIELDS = (
 SUMMARY_FIELDS = (
     "label", "n_temperatures", "parallel_cpus", "n_chains_timed",
     "mean_seconds_per_chain", "std_seconds_per_chain", "relative_to_default",
+)
+# Summary row for the timed search; its "per chain" time is the one search.
+SEARCH_LABEL = "ladder search (parallel)"
+SEARCH_FIELDS = (
+    "dataset", "run_id", "search_seconds", "rounds", "n_temperatures", "peak_worker_processes",
+    "allocated_cpus", "affinity_cpus", "n_search_points", "stored_n_temperatures",
+    "matches_stored_ladder", "temperatures",
 )
 
 
@@ -207,6 +222,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--with-serial", action="store_true",
                         help="Also time the serial PT variants, which the paper does not report.")
+    parser.add_argument(
+        "--search-ladder", action="store_true",
+        help="Search the ladder again with the production settings, one worker per temperature, "
+             "time the search, and use its ladder for the PT rows instead of the stored one. "
+             "The stored ladder, when present, is only compared against.",
+    )
+    parser.add_argument("--ladder-store", type=Path, default=None,
+                        help="Store whose run ladder the searched one is compared with "
+                             "(default: diagnosis/store).")
+    parser.add_argument("--ladder-tmax", type=float, default=100.0)
+    parser.add_argument("--ladder-init-size", type=int, default=10)
+    parser.add_argument("--ladder-target-rate", type=float, default=0.4)
+    parser.add_argument("--ladder-max-rounds", type=int, default=10)
+    parser.add_argument("--ladder-ndpost", type=int, default=500)
+    parser.add_argument("--ladder-nskip", type=int, default=500)
+    parser.add_argument("--ladder-search-points", type=int, default=1000)
+    parser.add_argument("--ladder-random-state", type=int, default=123)
     parser.add_argument("--show-progress", action="store_true", help="Show sampler progress bars (off for cleaner timing).")
     parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failed fit.")
     parser.add_argument("--dry-run", action="store_true", help="Check data, splits, ladders and worker counts without fitting.")
@@ -231,10 +263,14 @@ def parse_args() -> argparse.Namespace:
 # Data, split and temperature ladder
 # ---------------------------------------------------------------------------
 
+LADDER_STORE: Path | None = None  # set from --ladder-store
+
+
 def _stored_run_dirs(name: str, run_id: int) -> list[Path]:
     """Directories that may hold this run's stored indices and ladders."""
     source = SOURCES[name]
-    return [
+    first = [LADDER_STORE / source.directory] if LADDER_STORE is not None else []
+    return first + [
         DIAGNOSIS_DIR / "store" / source.directory,
         DIAGNOSIS_DIR / "store_seed2024" / f"s24_short_{name}_r{run_id}" / source.directory,
     ]
@@ -284,6 +320,53 @@ def load_temperature_ladder(name: str, run_id: int) -> tuple[np.ndarray, Path]:
             raise ValueError(f"Invalid stored ladder in {directory}: {temperatures}")
         return np.asarray(temperatures, dtype=float), directory
     raise FileNotFoundError(f"No stored temperature ladder for {name} run {run_id} in {_stored_run_dirs(name, run_id)}")
+
+
+def timed_ladder_search(name: str, split: dict[str, Any], args) -> dict[str, Any]:
+    """Run the production ladder search again, one worker per temperature, and time it.
+
+    Same subset, initial ladder, seeds and rules as `run_fixed100.py` with its
+    defaults (bisection on one continuing pilot, 500 burn-in + 500 counted
+    iterations per round); the only change is `n_jobs=None`, so every round's
+    fit gives each temperature its own process.
+    """
+    X_train, y_train = split["X_train"], split["y_train"]
+    if args.ladder_search_points and args.ladder_search_points < X_train.shape[0]:
+        rng = np.random.default_rng(split["train_seed"])
+        idx = rng.choice(X_train.shape[0], args.ladder_search_points, replace=False)
+        X_search, y_search = X_train[idx], y_train[idx]
+    else:
+        X_search, y_search = X_train, y_train
+    cfg = SOURCES[name].cfg
+    with ChildProcessMonitor() as monitor:
+        start = time.perf_counter()
+        temperatures, _rates, history = exp.quick_ladder_search(
+            X_search, y_search,
+            n_trees=args.n_trees, tree_alpha=args.tree_alpha, tree_beta=args.tree_beta,
+            proposal_probs=default_proposal_probs,
+            target_rate=args.ladder_target_rate, max_rounds=args.ladder_max_rounds,
+            max_temperatures=None, ndpost=args.ladder_ndpost, nskip=args.ladder_nskip,
+            random_state=args.ladder_random_state + 10000 * args.run_id,
+            swap_interval=args.swap_interval, post_swap_repair_steps=0,
+            initial_temperatures=initial_temperatures(args),
+            dirichlet_prior=cfg.get("dirichlet_prior", False),
+            s_alpha=float(cfg.get("s_alpha", 1.0)),
+            progress_print=True, progress_prefix=f"[{SOURCES[name].tag} search] ",
+            n_jobs=None,
+        )
+        elapsed = time.perf_counter() - start
+    return {
+        "temperatures": np.asarray(temperatures, dtype=float),
+        "search_seconds": elapsed,
+        "rounds": len(history),
+        "peak_worker_processes": monitor.peak_children if monitor.available else "",
+        "n_search_points": X_search.shape[0],
+    }
+
+
+def initial_temperatures(args) -> tuple[float, ...]:
+    """The production starting ladder, as `run_fixed100.py` builds it."""
+    return tuple(np.geomspace(1.0, args.ladder_tmax, args.ladder_init_size).tolist())
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +524,12 @@ def _write_csv(path: Path, fields, rows) -> None:
             writer.writerow({field: row.get(field, "") for field in fields})
 
 
-def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def summarize(rows: list[dict[str, Any]], search: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Per-method means relative to Default's mean per chain.
+
+    A timed ladder search becomes one more row: its single wall time, divided by
+    the same Default mean per chain.
+    """
     summary = []
     # Serial rows only exist when --with-serial was given; the lookup below
     # skips any configuration that was not timed, so listing both is safe.
@@ -465,11 +553,31 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "relative_to_default": "",
             "_mean": statistics.mean(seconds),
         })
+    if search is not None:
+        seconds = float(search["search_seconds"])
+        summary.append({
+            "label": SEARCH_LABEL,
+            "n_temperatures": search["n_temperatures"],
+            "parallel_cpus": search["peak_worker_processes"] or "n/a",
+            "n_chains_timed": 1,
+            "mean_seconds_per_chain": f"{seconds:.1f}",
+            "std_seconds_per_chain": "",
+            "relative_to_default": "",
+            "_mean": seconds,
+        })
     default = next((row for row in summary if row["label"] == "default"), None)
     if default is not None:
         for row in summary:
             row["relative_to_default"] = f"{row['_mean'] / default['_mean']:.2f}"
     return summary
+
+
+def read_search(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    with path.open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    return rows[0] if rows else None
 
 
 def sections_from_dir(directory: Path) -> list[dict[str, Any]]:
@@ -487,6 +595,7 @@ def sections_from_dir(directory: Path) -> list[dict[str, Any]]:
         for row in rows:
             row["elapsed_seconds"] = float(row["elapsed_seconds"])
         first = rows[0]
+        search = read_search(path.with_name(path.name.replace("_per_chain.csv", "_ladder_search.csv")))
         present = {r["label"] for r in rows}
         last_label = next(label for label, _, _ in reversed(CONFIGS) if label in present)
         sections.append({
@@ -496,7 +605,8 @@ def sections_from_dir(directory: Path) -> list[dict[str, Any]]:
             "allocated": first.get("allocated_cpus") or "-", "affinity": first.get("affinity_cpus") or "-",
             # A chain counts as done once its last timed configuration is in.
             "chains_done": len({r["chain"] for r in rows if r["label"] == last_label}),
-            "summary": summarize(rows),
+            "search": search,
+            "summary": summarize(rows, search),
         })
     order = [SOURCES[name].tag for name in DATASETS]
     sections.sort(key=lambda s: order.index(s["dataset"]) if s["dataset"] in order else len(order))
@@ -513,7 +623,8 @@ def write_markdown(path: Path, sections: list[dict[str, Any]], args) -> None:
         "",
         "`parallel CPUs` = peak number of live PT worker processes measured during each parallel fit "
         "(1 for serial / non-PT rows). Times are per chain; `x default` = mean per-chain time "
-        "/ default's mean per-chain time.",
+        "/ default's mean per-chain time. When the ladder was searched in the job, the "
+        f"`{SEARCH_LABEL}` row is that one search, also divided by default's mean per-chain time.",
         "",
     ]
     for section in sections:
@@ -524,6 +635,17 @@ def write_markdown(path: Path, sections: list[dict[str, Any]], args) -> None:
             f"allocated CPUs={section['allocated']}, affinity CPUs={section['affinity']}, "
             f"chains timed so far={section['chains_done']}/{args.n_chains}",
             "",
+        ]
+        search = section["search"]
+        if search:
+            lines += [
+                f"Ladder search: {float(search['search_seconds']):.1f}s, {search['rounds']} rounds, "
+                f"{search['n_temperatures']} temperatures, peak workers={search['peak_worker_processes']}, "
+                f"{search['n_search_points']} search points; stored ladder has "
+                f"{search['stored_n_temperatures'] or '-'} temperatures, identical={search['matches_stored_ladder']}.",
+                "",
+            ]
+        lines += [
             "| method | temperatures | parallel CPUs | mean s/chain | std s/chain | x default |",
             "|---|---:|---:|---:|---:|---:|",
         ]
@@ -552,7 +674,12 @@ def run_benchmark(args) -> int:
     prepared = []
     for name in args.datasets:
         split = load_split(name, args.run_id)
-        temperatures, ladder_dir = load_temperature_ladder(name, args.run_id)
+        try:
+            temperatures, ladder_dir = load_temperature_ladder(name, args.run_id)
+        except FileNotFoundError:
+            if not args.search_ladder:
+                raise
+            temperatures, ladder_dir = np.array([]), None
         pt_workers = resolve_pt_workers(None if args.pt_n_jobs == 0 else args.pt_n_jobs, len(temperatures))
         print(
             f"{name}: n={split['n_rows']} train={len(split['train_idx'])} test={len(split['test_idx'])}; "
@@ -581,8 +708,33 @@ def run_benchmark(args) -> int:
         summary_path = output_dir / f"{tag}_run{args.run_id:03d}_summary.csv"
         rows: list[dict[str, Any]] = []
         print(f"\n=== {tag}: {len(temperatures)} temperatures, parallel PT workers={pt_workers} ===", flush=True)
-        run_numba_warmup(args, split["X_train"], split["y_train"], temperatures,
+        run_numba_warmup(args, split["X_train"], split["y_train"],
+                         np.asarray(initial_temperatures(args)) if args.search_ladder else temperatures,
                          SOURCES[name].cfg)
+        if args.search_ladder:
+            gc.collect()
+            searched = timed_ladder_search(name, split, args)
+            stored = temperatures
+            temperatures = searched["temperatures"]
+            pt_workers = resolve_pt_workers(None if args.pt_n_jobs == 0 else args.pt_n_jobs, len(temperatures))
+            search_row = {
+                "dataset": tag, "run_id": args.run_id,
+                "search_seconds": f"{searched['search_seconds']:.3f}", "rounds": searched["rounds"],
+                "n_temperatures": len(temperatures),
+                "peak_worker_processes": searched["peak_worker_processes"],
+                "allocated_cpus": allocated if allocated is not None else "",
+                "affinity_cpus": affinity if affinity is not None else "",
+                "n_search_points": searched["n_search_points"],
+                "stored_n_temperatures": len(stored) if len(stored) else "",
+                "matches_stored_ladder": (len(stored) == len(temperatures) and bool(np.allclose(stored, temperatures)))
+                                         if len(stored) else "",
+                "temperatures": json.dumps([round(float(t), 10) for t in temperatures]),
+            }
+            _write_csv(output_dir / f"{tag}_run{args.run_id:03d}_ladder_search.csv", SEARCH_FIELDS, [search_row])
+            print(f"[{tag}] ladder search {searched['search_seconds']:.1f}s, {searched['rounds']} rounds, "
+                  f"{len(temperatures)} temperatures, peak workers={searched['peak_worker_processes']}, "
+                  f"identical to stored ladder: {search_row['matches_stored_ladder']}; "
+                  f"parallel PT workers={pt_workers}", flush=True)
 
         for chain in range(args.n_chains):
             seed = args.chain_seed + chain
@@ -621,7 +773,8 @@ def run_benchmark(args) -> int:
                 )
                 _write_csv(per_chain_path, PER_CHAIN_FIELDS,
                            [{**r, "elapsed_seconds": f"{r['elapsed_seconds']:.3f}"} for r in rows])
-                _write_csv(summary_path, SUMMARY_FIELDS, summarize(rows))
+                _write_csv(summary_path, SUMMARY_FIELDS,
+                           summarize(rows, search_row if args.search_ladder else None))
                 write_markdown(output_dir / "summary.md", sections_from_dir(output_dir), args)
 
     print("\n" + (output_dir / "summary.md").read_text(encoding="utf-8"))
@@ -629,7 +782,10 @@ def run_benchmark(args) -> int:
 
 
 def main() -> int:
-    return run_benchmark(parse_args())
+    global LADDER_STORE
+    args = parse_args()
+    LADDER_STORE = args.ladder_store.expanduser().resolve() if args.ladder_store else None
+    return run_benchmark(args)
 
 
 if __name__ == "__main__":
