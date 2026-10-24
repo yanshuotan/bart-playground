@@ -126,10 +126,19 @@ class _PTSwapLoglikCache:
         self.entries = [_MISSING] * n_chains
         self.values = [dict() for _ in range(n_chains)]
 
-    def swap(self, i: int, j: int):
+    def swap(self, i: int, j: int, keep_values: bool = False):
+        """Follow a swap of the states at i and j.
+
+        Memoized values are dropped because the post-swap refresh perturbs
+        them in the last bits; with `keep_values` (no refresh until the end of
+        the swap step) they move with their states instead.
+        """
         self.entries[i], self.entries[j] = self.entries[j], self.entries[i]
-        self.values[i] = {}
-        self.values[j] = {}
+        if keep_values:
+            self.values[i], self.values[j] = self.values[j], self.values[i]
+        else:
+            self.values[i] = {}
+            self.values[j] = {}
 
     def leaf_basis(self, chain_id: int):
         """Cached basis for the state now at `chain_id`, or None if not built yet."""
@@ -879,6 +888,18 @@ class ParallelTemperingBART(BART):
     -1 is usually the fastest choice. One process per temperature oversubscribes
     as soon as there are more temperatures than cores, and one process per
     *logical* core is slower than one per physical core on an SMT machine.
+
+    `batched_swap_refresh` changes how a swap step refreshes leaf values. By
+    default every accepted swap is followed by a joint leaf refresh of both
+    states at their new temperatures. The swap acceptance uses the collapsed
+    likelihood, which depends on tree structures and eps_sigma2 only, and the
+    refresh draws all leaves afresh from their conditional, so only the last
+    refresh of each state matters. With `batched_swap_refresh=True` all sweeps
+    of a swap step are decided first and every state that took part in an
+    accepted swap is refreshed once, at its final temperature. The transition
+    is the same in distribution, but the random streams differ from the
+    default, so draws are not bitwise identical to it (serial and parallel
+    runs still agree with each other bit for bit).
     """
     preprocessor_class = DefaultPreprocessor
 
@@ -917,6 +938,7 @@ class ParallelTemperingBART(BART):
         sampler_kind: str = "default",
         multi_tries: Optional[int] = None,
         collect_all_samplers: bool = False,
+        batched_swap_refresh: bool = False,
     ):
         if max_bins is None:
             max_bins = 100
@@ -1014,6 +1036,7 @@ class ParallelTemperingBART(BART):
         # ones come back only when asked for, which the equivalence tests do;
         # otherwise `chain_samplers[1:]` keep their pre-fit state.
         self.collect_all_samplers = bool(collect_all_samplers)
+        self.batched_swap_refresh = bool(batched_swap_refresh)
 
     def _effective_parallel_workers(self) -> int:
         """Number of worker processes; each hosts one or more temperature chains."""
@@ -1121,15 +1144,10 @@ class ParallelTemperingBART(BART):
         for the pair being resolved, and pairs within a sweep are disjoint, so
         that order is stable while a batch is in flight.
         """
+        if self.batched_swap_refresh:
+            return self._swap_step_with_workers_batched(workers, iter_idx)
         n_chains = self.n_temperatures
-        for worker in workers:
-            worker.request("get_rng_state")
-        rngs = []
-        for worker in workers:
-            rng_state = worker.recv()
-            bit_generator = getattr(np.random, rng_state["bit_generator"])()
-            bit_generator.state = rng_state
-            rngs.append(np.random.Generator(bit_generator))
+        rngs = self._fetch_worker_rngs(workers)
 
         holder = list(range(n_chains))
         swap_step = (iter_idx + 1) // self.swap_interval
@@ -1180,6 +1198,94 @@ class ParallelTemperingBART(BART):
             for position in refresh_positions:
                 rngs[position].bit_generator.state = workers[holder[position]].recv()
 
+        self._finish_swap_step_with_workers(workers, holder, rngs)
+        return accepted_any
+
+    def _swap_step_with_workers_batched(self, workers, iter_idx: int) -> bool:
+        """`_swap_step_with_workers` with one refresh per moved state at the end.
+
+        See `batched_swap_refresh`. Leaf values do not change until the end of
+        the step, so each state's collapsed log-likelihoods are memoized here
+        per temperature and only missing values are requested.
+        """
+        n_chains = self.n_temperatures
+        rngs = self._fetch_worker_rngs(workers)
+        holder = list(range(n_chains))
+        memo = [dict() for _ in range(n_chains)]  # by handle, i.e. by state
+        moved = [False] * n_chains                # by handle
+        swap_step = (iter_idx + 1) // self.swap_interval
+        base_offset = swap_step % 2
+        in_posterior = iter_idx >= self.nskip
+        accepted_any = False
+
+        for sweep in range(self._swap_sweeps_per_interval()):
+            offset = (base_offset + sweep) % 2
+            pairs = [(left, left + 1) for left in range(offset, n_chains - 1, 2)]
+            if not pairs:
+                continue
+
+            pending = []
+            for i, j in pairs:
+                temp_a = float(self.temperatures[i])
+                temp_b = float(self.temperatures[j])
+                for handle, temps in ((holder[i], (temp_a, temp_b)), (holder[j], (temp_b, temp_a))):
+                    missing = tuple(t for t in temps if t not in memo[handle])
+                    if missing:
+                        workers[handle].request("collapsed_logliks", missing)
+                        pending.append((handle, missing))
+            for handle, missing in pending:
+                memo[handle].update(zip(missing, workers[handle].recv()))
+
+            for i, j in pairs:
+                temp_a = float(self.temperatures[i])
+                temp_b = float(self.temperatures[j])
+                ll_aa, ll_ba = memo[holder[i]][temp_a], memo[holder[i]][temp_b]
+                ll_bb, ll_ab = memo[holder[j]][temp_b], memo[holder[j]][temp_a]
+                delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
+                if in_posterior:
+                    self.swap_attempt_counts[i] += 1
+                u = rngs[i].uniform(0.0, 1.0)
+                accepted = bool(np.log(u) < delta)
+                self._record_swap_diagnostic(
+                    i, j, temp_a, temp_b, ll_aa, ll_bb, ll_ab, ll_ba, delta, accepted,
+                    iteration=iter_idx + 1, sweep=sweep + 1, swap_step=swap_step,
+                )
+                if accepted:
+                    accepted_any = True
+                    holder[i], holder[j] = holder[j], holder[i]
+                    moved[holder[i]] = moved[holder[j]] = True
+                    if in_posterior:
+                        self.swap_accept_counts[i] += 1
+
+        refresh_positions = [position for position in range(n_chains) if moved[holder[position]]]
+        for position in refresh_positions:
+            workers[holder[position]].request(
+                "refresh_with_rng",
+                float(self.temperatures[position]),
+                rngs[position].bit_generator.state,
+            )
+        for position in refresh_positions:
+            rngs[position].bit_generator.state = workers[holder[position]].recv()
+
+        self._finish_swap_step_with_workers(workers, holder, rngs)
+        return accepted_any
+
+    @staticmethod
+    def _fetch_worker_rngs(workers):
+        for worker in workers:
+            worker.request("get_rng_state")
+        rngs = []
+        for worker in workers:
+            rng_state = worker.recv()
+            bit_generator = getattr(np.random, rng_state["bit_generator"])()
+            bit_generator.state = rng_state
+            rngs.append(np.random.Generator(bit_generator))
+        return rngs
+
+    @staticmethod
+    def _finish_swap_step_with_workers(workers, holder, rngs) -> None:
+        """Move displaced states to their positions' workers and hand back the RNGs."""
+        n_chains = len(holder)
         # Move displaced states to the worker of their temperature position.
         moves = [(position, holder[position]) for position in range(n_chains) if holder[position] != position]
         for _position, source in moves:
@@ -1194,7 +1300,6 @@ class ParallelTemperingBART(BART):
             worker.request("set_rng_state", rngs[position].bit_generator.state)
         for worker in workers:
             worker.recv()
-        return accepted_any
 
     @staticmethod
     def _build_temperature_ladder(
@@ -1335,6 +1440,47 @@ class ParallelTemperingBART(BART):
             return True
         return False
 
+    def _swap_step_serial_batched(self, states, iter_idx: int) -> bool:
+        """Serial swap step with one refresh per moved state; see `batched_swap_refresh`."""
+        n_chains = self.n_temperatures
+        swap_step = (iter_idx + 1) // self.swap_interval
+        base_offset = swap_step % 2
+        in_posterior = iter_idx >= self.nskip
+        swap_cache = _PTSwapLoglikCache(n_chains)
+        moved = [False] * n_chains  # by position; both states of an accepted swap are marked
+        accepted_any = False
+        for sweep in range(self._swap_sweeps_per_interval()):
+            offset = (base_offset + sweep) % 2
+            for i in range(offset, n_chains - 1, 2):
+                j = i + 1
+                temp_a = float(self.temperatures[i])
+                temp_b = float(self.temperatures[j])
+                ll_aa, ll_bb, ll_ab, ll_ba = self._swap_collapsed_logliks(
+                    states, i, j, temp_a, temp_b, swap_cache=swap_cache
+                )
+                delta = float(ll_ab + ll_ba - ll_aa - ll_bb)
+                if in_posterior:
+                    self.swap_attempt_counts[i] += 1
+                u = self.chain_samplers[i].generator.uniform(0.0, 1.0)
+                accepted = bool(np.log(u) < delta)
+                self._record_swap_diagnostic(
+                    i, j, temp_a, temp_b, ll_aa, ll_bb, ll_ab, ll_ba, delta, accepted,
+                    iteration=iter_idx + 1, sweep=sweep + 1, swap_step=swap_step,
+                )
+                if accepted:
+                    accepted_any = True
+                    states[i], states[j] = states[j], states[i]
+                    swap_cache.swap(i, j, keep_values=True)
+                    moved[i] = moved[j] = True
+                    if in_posterior:
+                        self.swap_accept_counts[i] += 1
+        for position in range(n_chains):
+            if moved[position]:
+                self._refresh_state_tempered_params(
+                    states[position], position, leaf_basis=swap_cache.leaf_basis(position)
+                )
+        return accepted_any
+
     def fit(self, X, y, quietly=False, init_states=None, keep_final_states=False):
         data = self.preprocessor.fit_transform(X, y)
         return self.fit_with_data(
@@ -1439,7 +1585,10 @@ class ParallelTemperingBART(BART):
                         current_states[chain_id] = block_chain_states[chain_id][1]
 
                 # Swap only at interval boundaries.
-                if self.n_temperatures > 1 and ((iter_idx + 1) % self.swap_interval == 0):
+                if (self.n_temperatures > 1 and ((iter_idx + 1) % self.swap_interval == 0)
+                        and self.batched_swap_refresh):
+                    accepted_swap_this_iter = self._swap_step_serial_batched(current_states, iter_idx)
+                elif self.n_temperatures > 1 and ((iter_idx + 1) % self.swap_interval == 0):
                     swap_step = (iter_idx + 1) // self.swap_interval
                     swap_cache = _PTSwapLoglikCache(self.n_temperatures)
                     base_offset = ((iter_idx + 1) // self.swap_interval) % 2
@@ -1551,6 +1700,7 @@ class ParallelTemperingBART(BART):
             "swap_sweeps": self.swap_sweeps,
             "effective_swap_sweeps": self._swap_sweeps_per_interval(),
             "post_swap_repair_steps": self.post_swap_repair_steps,
+            "batched_swap_refresh": self.batched_swap_refresh,
             "n_jobs": self.n_jobs,
             "effective_parallel_workers": self._effective_parallel_workers(),
             "chains_per_worker": [
