@@ -1,0 +1,13 @@
+#!/bin/bash
+#PBS -q auto_free
+#PBS -j oe
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=28:mpiprocs=1:ompthreads=1:mem=110gb
+# qsub -N NAME -v ARGS="--dataset concrete --variant ae_baseline ..." variant.pbs
+cd ~/bart-opt || exit 1
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 NUMBA_NUM_THREADS=1
+PY=~/bart-playground/.venv/bin/python
+echo "host=$(hostname) commit=$(git rev-parse --short HEAD) args=$ARGS start=$(date -Is)"
+$PY -W ignore -c "import arviz"
+$PY -u -W ignore hpc_opt/run_variant.py $ARGS --n-jobs 28
+echo "exit=$? end=$(date -Is)"
