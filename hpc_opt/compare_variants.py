@@ -29,7 +29,8 @@ sys.path.insert(0, str(ROOT / "diagnosis" / "paper"))
 from core import load_with_shape, pointwise_rhat  # noqa: E402
 from section6_methods import PREDICTIVE_NOISE_SEED, predictive_baselines, predictive_metrics  # noqa: E402
 
-TAGS = {"concrete": "fixed100_Concrete", "seoul_bike": "fixed100_SeoulBike"}
+TAGS = {"concrete": "fixed100_Concrete", "seoul_bike": "fixed100_SeoulBike", "abalone": "fixed100_Abalone",
+        "airfoil": "fixed100_Airfoil", "calhousing": "fixed100_CalHousing_subsample5000", "ccpp": "fixed100_CCPP"}
 METHODS = ("default_pt", "mtmh_pt")
 BURN = 3000
 

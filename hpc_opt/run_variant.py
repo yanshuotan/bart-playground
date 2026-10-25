@@ -31,7 +31,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "diagnosis"))
 
-TAGS = {"concrete": "fixed100_Concrete", "seoul_bike": "fixed100_SeoulBike"}
+TAGS = {"concrete": "fixed100_Concrete", "seoul_bike": "fixed100_SeoulBike", "abalone": "fixed100_Abalone",
+        "airfoil": "fixed100_Airfoil", "calhousing": "fixed100_CalHousing_subsample5000", "ccpp": "fixed100_CCPP"}
 BASELINE = Path("/scratch/e1377027/share_pt")
 
 
@@ -186,6 +187,7 @@ def main():
                       "ladder": args.ladder, "ladder_target_rate": args.target_rate,
                       "short_ndpost": args.ndpost, "n_chains": args.chains, "methods": args.methods,
                       "pt_n_jobs": args.pt_n_jobs, "n_jobs": args.n_jobs,
+                      "code_commit": os.environ.get("CODE_COMMIT", ""),
                       **{k: v for k, v in ladders[r].items()}},
         )
         wall_dir = store_root / tag / "wall_times"
