@@ -9,5 +9,5 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_TH
 PY=~/bart-playground/.venv/bin/python
 echo "host=$(hostname) commit=$(git rev-parse --short HEAD) args=$ARGS start=$(date -Is)"
 $PY -W ignore -c "import arviz"
-$PY -u -W ignore hpc_opt/run_variant.py $ARGS --n-jobs 28
+$PY -u -W ignore hpc_opt/run_variant.py $ARGS --n-jobs ${NJOBS:-28}
 echo "exit=$? end=$(date -Is)"
