@@ -889,17 +889,19 @@ class ParallelTemperingBART(BART):
     as soon as there are more temperatures than cores, and one process per
     *logical* core is slower than one per physical core on an SMT machine.
 
-    `batched_swap_refresh` changes how a swap step refreshes leaf values. By
-    default every accepted swap is followed by a joint leaf refresh of both
-    states at their new temperatures. The swap acceptance uses the collapsed
-    likelihood, which depends on tree structures and eps_sigma2 only, and the
-    refresh draws all leaves afresh from their conditional, so only the last
-    refresh of each state matters. With `batched_swap_refresh=True` all sweeps
-    of a swap step are decided first and every state that took part in an
-    accepted swap is refreshed once, at its final temperature. The transition
-    is the same in distribution, but the random streams differ from the
-    default, so draws are not bitwise identical to it (serial and parallel
-    runs still agree with each other bit for bit).
+    `batched_swap_refresh` changes how a swap step refreshes leaf values. With
+    `batched_swap_refresh=False` every accepted swap is followed by a joint
+    leaf refresh of both states at their new temperatures. The swap acceptance
+    uses the collapsed likelihood, which depends on tree structures and
+    eps_sigma2 only, and the refresh draws all leaves afresh from their
+    conditional, so only the last refresh of each state matters. With
+    `batched_swap_refresh=True` (the default) all sweeps of a swap step are
+    decided first and every state that took part in an accepted swap is
+    refreshed once, at its final temperature. The transition is the same in
+    distribution, but the random streams differ, so draws are not bitwise
+    identical between the two settings (serial and parallel runs still agree
+    with each other bit for bit). Runs stored before this became the default
+    used False.
     """
     preprocessor_class = DefaultPreprocessor
 
@@ -938,7 +940,7 @@ class ParallelTemperingBART(BART):
         sampler_kind: str = "default",
         multi_tries: Optional[int] = None,
         collect_all_samplers: bool = False,
-        batched_swap_refresh: bool = False,
+        batched_swap_refresh: bool = True,
     ):
         if max_bins is None:
             max_bins = 100

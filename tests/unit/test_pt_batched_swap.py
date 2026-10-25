@@ -53,7 +53,7 @@ def test_batched_with_one_sweep_equals_default(n_jobs):
     # refreshes exactly the states the batched step refreshes, from the same streams.
     X, y = _data()
     common = _common("default", 1)
-    default = ParallelTemperingBART(n_jobs=n_jobs, **common).fit(X, y, quietly=True)
+    default = ParallelTemperingBART(n_jobs=n_jobs, batched_swap_refresh=False, **common).fit(X, y, quietly=True)
     batched = ParallelTemperingBART(n_jobs=n_jobs, batched_swap_refresh=True, **common).fit(X, y, quietly=True)
     assert default.swap_accept_counts.sum() > 0
     _assert_same_fit(default, batched)
@@ -62,7 +62,7 @@ def test_batched_with_one_sweep_equals_default(n_jobs):
 def test_batched_differs_from_default_with_many_sweeps():
     X, y = _data()
     common = _common("default", None)
-    default = ParallelTemperingBART(n_jobs=1, **common).fit(X, y, quietly=True)
+    default = ParallelTemperingBART(n_jobs=1, batched_swap_refresh=False, **common).fit(X, y, quietly=True)
     batched = ParallelTemperingBART(n_jobs=1, batched_swap_refresh=True, **common).fit(X, y, quietly=True)
     leaf_a = np.concatenate([t.leaf_vals[t.vars == -1] for t in default.trace[-1].trees])
     leaf_b = np.concatenate([t.leaf_vals[t.vars == -1] for t in batched.trace[-1].trees])
