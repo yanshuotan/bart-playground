@@ -15,7 +15,6 @@ long-chain empirical reference.
 | `timing/` | PT timing benchmark, per-run CSV files, and the timing summary used by the paper analysis. |
 | `paper/` | Standalone diagnosis and comparison scripts plus paper-facing tables, figures, and summaries. |
 | `exploratory/` | Earlier general analysis scripts, the notebook, and exploratory results. |
-| `vanda_logs/` | Cluster run logs and metadata kept for provenance; no analysis reads them. |
 | `run_fixed100.py` | Entry point for running selected fixed datasets and run IDs. |
 | `experiment_fixed100.py` | Temperature-ladder search, chain execution, and fixed-100 result writing. |
 | `fixed100_support.py` | Dataset loading and sparse-data utilities. |

@@ -240,7 +240,7 @@ def figures_main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--store-root", type=Path, default=script.parent.parent / "store")
     parser.add_argument("--datasets", nargs="+",
-                        default=["fixed100_Abalone", "fixed100_SeoulBike"])
+                        default=["fixed100_Concrete", "fixed100_SeoulBike"])
     parser.add_argument("--all", action="store_true",
                         help="Every dataset with long chains, split across pages.")
     parser.add_argument("--rows-per-figure", type=int, default=4)
