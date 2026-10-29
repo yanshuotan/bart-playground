@@ -11,6 +11,7 @@ configured dataset uses runs `000` through `004`.
 | `section6_methods.py` | four-method factorial tables, rolling and projection figures | Figures 4--5, §6 tables |
 | `section6_equal_time.py` | equal-wall-time curves and the pooled-estimator baseline | §6 wall-time figure and tables |
 | `section7_costs.py` | pooling, decomposition, coverage, ESS; scalar-quantity diagnostics | §7 tables and figure |
+| `section7_feature_use.py` | split-use shares, inclusion probabilities and their chain agreement (`feature_use_*.csv`) | `tab:feature-use` |
 | `long_tail_tables.py` | long and contiguous-tail Default records scored as methods (`*_tail_as_method_*.csv`) | `long`/`tail` columns of §7 tables, tail rows of the appendix tables |
 | `long_tail_note.py` | contiguous-tail comparison | supporting figures and CSVs for the outline's tail analysis |
 | `core.py` | shared loading, pointwise R-hat, between/within directions | imported, not run |
@@ -31,6 +32,7 @@ first one, so existing invocations still work.
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py costs --long
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py scalar
 .\.venv\Scripts\python.exe diagnosis\paper\long_tail_tables.py
+.\.venv\Scripts\python.exe diagnosis\paper\section7_feature_use.py
 ```
 
 
@@ -38,8 +40,8 @@ Every script accepts `--help`.
 
 ## Caching
 
-`section6_methods.py`, `section7_costs.py costs`, `section7_costs.py scalar` and
-`long_tail_tables.py` keep one result per (dataset, run, method) under `diagnosis/paper/cache/<script>/`
+`section6_methods.py`, `section7_costs.py costs`, `section7_costs.py scalar`,
+`long_tail_tables.py` and `section7_feature_use.py` keep one result per (dataset, run, method) under `diagnosis/paper/cache/<script>/`
 (ignored by git). An entry is reused while the analysis settings, the script's
 `CACHE_VERSION` and the size and mtime of every store file it reads (that
 method's preds and sigmas, the run's indices and test targets) are unchanged.
@@ -77,6 +79,14 @@ the contiguous `default_long_tail` record of the final 10,000 iterations. Each
 keeps 7,000 draws per chain after the 3,000-draw warm-up. Standard-BART settings
 go to `long_tail_as_method_*`, DART settings to `dart_tail_as_method_*`; the
 latent-f containment columns are filled on the four generated designs only.
+
+`section7_feature_use.py` reads `vars_histogram`, the per-draw split counts per
+predictor summed over all trees, for the four methods and both long-Default
+records. Split-use shares and inclusion indicators follow the package's
+`feature_inclusion_frequency(normalize='per_draw')` and
+`feature_inclusion_probability`. DART selection weights are the conditional
+posterior means `(a/d + c_v)/(a + sum c)` with `a = 1`, computed from the same
+counts.
 
 `section6_equal_time.py baselines` uses run 0 and production wall time only.
 Each single-chain estimator gets the full budget and its four stored chains are
