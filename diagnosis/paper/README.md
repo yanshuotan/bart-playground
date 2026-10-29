@@ -11,6 +11,7 @@ configured dataset uses runs `000` through `004`.
 | `section6_methods.py` | four-method factorial tables, rolling and projection figures | Figures 4--5, §6 tables |
 | `section6_equal_time.py` | equal-wall-time curves and the pooled-estimator baseline | §6 wall-time figure and tables |
 | `section7_costs.py` | pooling, decomposition, coverage, ESS; scalar-quantity diagnostics | §7 tables and figure |
+| `long_tail_tables.py` | long and contiguous-tail Default records scored as methods (`*_tail_as_method_*.csv`) | `long`/`tail` columns of §7 tables, tail rows of the appendix tables |
 | `long_tail_note.py` | contiguous-tail comparison | supporting figures and CSVs for the outline's tail analysis |
 | `core.py` | shared loading, pointwise R-hat, between/within directions | imported, not run |
 
@@ -29,6 +30,7 @@ first one, so existing invocations still work.
 .\.venv\Scripts\python.exe diagnosis\paper\section6_equal_time.py baselines
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py costs --long
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py scalar
+.\.venv\Scripts\python.exe diagnosis\paper\long_tail_tables.py
 ```
 
 
@@ -36,8 +38,8 @@ Every script accepts `--help`.
 
 ## Caching
 
-`section6_methods.py`, `section7_costs.py costs` and `section7_costs.py scalar`
-keep one result per (dataset, run, method) under `diagnosis/paper/cache/<script>/`
+`section6_methods.py`, `section7_costs.py costs`, `section7_costs.py scalar` and
+`long_tail_tables.py` keep one result per (dataset, run, method) under `diagnosis/paper/cache/<script>/`
 (ignored by git). An entry is reused while the analysis settings, the script's
 `CACHE_VERSION` and the size and mtime of every store file it reads (that
 method's preds and sigmas, the run's indices and test targets) are unchanged.
@@ -68,6 +70,13 @@ fixed inputs and the outcome-scale noise variance, across runs 0--4 and all four
 arms plus long Default. It writes run-level and chain-level CSVs, a summary, and
 full run-0 traces with the warm-up boundary. Single-chain R-hat there compares
 temporal halves; it does not measure independent-chain agreement.
+
+`long_tail_tables.py` scores three Default records with the section 6 and 7
+definitions: production `default`, the stride-1,000 `default_long` record and
+the contiguous `default_long_tail` record of the final 10,000 iterations. Each
+keeps 7,000 draws per chain after the 3,000-draw warm-up. Standard-BART settings
+go to `long_tail_as_method_*`, DART settings to `dart_tail_as_method_*`; the
+latent-f containment columns are filled on the four generated designs only.
 
 `section6_equal_time.py baselines` uses run 0 and production wall time only.
 Each single-chain estimator gets the full budget and its four stored chains are
