@@ -1,0 +1,32 @@
+#!/bin/bash
+#PBS -q auto_free
+#PBS -j oe
+#PBS -l walltime=72:00:00
+#PBS -l select=1:ncpus=20:mpiprocs=1:ompthreads=1:mem=150gb
+# Production short chains for one dataset with the current sampler defaults
+# (fused MTMH scoring + batched PT swap refresh), ladder searched afresh.
+# Five runs in parallel, four chains each; every PT chain runs serially.
+# qsub -N NAME -v DATASET=seoul_bike,STORE=/scratch/e1377027/rerun_ae rerun_short.pbs
+# RUNS="3" redoes chosen runs only (then request ~4 cpus and ~64gb).
+cd ~/bart-opt || exit 1
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 NUMBA_NUM_THREADS=1
+PY=~/bart-playground/.venv/bin/python
+# run_fixed100.py puts diagnosis/ first on sys.path, so without this the venv's
+# editable install (~/bart-playground, an older checkout) would be imported.
+export PYTHONPATH=$HOME/bart-opt
+# Checked from diagnosis/, as run_fixed100.py runs, and on real paths (/home is a link to /nfs/home).
+(cd diagnosis && $PY -c "import os, sys, bart_playground as b; r = os.path.realpath
+sys.exit(0 if r(b.__file__).startswith(r(os.path.expanduser('~/bart-opt')) + os.sep) else 1)") \
+  || { echo "bart_playground does not come from ~/bart-opt"; exit 1; }
+LOG=$STORE/logs
+mkdir -p $LOG
+echo "host=$(hostname) dataset=$DATASET commit=$CODE_COMMIT start=$(date -Is)"
+$PY -W ignore -c "import arviz"
+for r in ${RUNS:-0 1 2 3 4}; do
+  $PY -u -W ignore diagnosis/run_fixed100.py fixed --datasets $DATASET --run-ids $r \
+      --n-runs 5 --n-chains 4 --n-jobs 4 --pt-n-jobs 1 --skip-long --store-dir $STORE \
+      > $LOG/${DATASET}_run$r.log 2>&1 &
+done
+fail=0
+for job in $(jobs -p); do wait $job || fail=$((fail + 1)); done
+echo "failed_runs=$fail end=$(date -Is)"
