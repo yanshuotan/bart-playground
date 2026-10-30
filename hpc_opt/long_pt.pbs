@@ -1,11 +1,13 @@
 #!/bin/bash
 #PBS -q auto_free
 #PBS -j oe
-#PBS -l walltime=96:00:00
+#PBS -l walltime=24:00:00
 #PBS -l select=1:ncpus=47:mpiprocs=1:ompthreads=1:mem=150gb
 # One long PT chain (hpc_opt/long_pt.py); ncpus = temperatures + 1 for one worker per temperature.
 # qsub -N NAME -v DATASET=seoul_bike,RUN=0,CHAIN=0,METHOD=mtmh_pt,ITERS=1000000,CODE_COMMIT=... long_pt.pbs
-# Resubmitting the same chain resumes after its last finished chunk.
+# Resubmitting the same chain resumes after its last finished chunk. A short walltime
+# lets the scheduler backfill the job; the job resubmits itself while chunks remain,
+# but only if it finished at least one chunk (so a failing run does not loop).
 cd ~/bart-opt || exit 1
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 NUMBA_NUM_THREADS=1
 export PYTHONPATH=$HOME/bart-opt
@@ -15,6 +17,18 @@ LOG=$OUT/logs
 mkdir -p $LOG
 echo "host=$(hostname) dataset=$DATASET run=$RUN chain=$CHAIN method=$METHOD commit=$CODE_COMMIT start=$(date -Is)"
 $PY -W ignore -c "import arviz"
-$PY -u -W ignore hpc_opt/long_pt.py --dataset $DATASET --run $RUN --chain $CHAIN --method $METHOD \
+TAG=$($PY -c "import sys; sys.path.insert(0, 'hpc_opt'); import long_pt; print(long_pt.TAGS['$DATASET'])")
+DIR=$OUT/$TAG/run$(printf %03d $RUN)/$METHOD/chain$CHAIN
+count() { ls $DIR/chunk[0-9][0-9][0-9][0-9].npz 2>/dev/null | wc -l; }
+before=$(count)
+# Stop the run an hour before the walltime so the lines below still get to resubmit.
+timeout --signal=TERM ${RUN_HOURS:-23}h $PY -u -W ignore hpc_opt/long_pt.py --dataset $DATASET --run $RUN --chain $CHAIN --method $METHOD \
     --iterations $ITERS --out $OUT >> $LOG/${DATASET}_run${RUN}_${METHOD}_chain${CHAIN}.log 2>&1
-echo "exit=$? end=$(date -Is)"
+status=$?
+after=$(count)
+echo "exit=$status chunks $before -> $after end=$(date -Is)"
+total=$((ITERS / 10000))
+if [ "$after" -lt "$total" ] && [ "$after" -gt "$before" ]; then
+  cd ~/bart-opt/hpc_opt && qsub -N $PBS_JOBNAME \
+    -v DATASET=$DATASET,RUN=$RUN,CHAIN=$CHAIN,METHOD=$METHOD,ITERS=$ITERS,CODE_COMMIT=$CODE_COMMIT,RUN_HOURS=${RUN_HOURS:-23} long_pt.pbs
+fi

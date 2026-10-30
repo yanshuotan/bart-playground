@@ -5,8 +5,8 @@ Usage: python hpc_opt/long_pt.py --dataset seoul_bike --run 0 --chain 0 \
 
 Each chunk is one ParallelTemperingBART fit started from the previous chunk's
 final states (as the ladder search continues its rounds); chunk k is seeded with
-SeedSequence([chain_seed, k]). After every chunk the stored draws and the final
-states are written, so a rerun resumes after the last finished chunk.
+SeedSequence([chain_seed, k]). After every chunk the final states and then the
+stored draws are written, so a rerun resumes after the last finished chunk.
 
 Stored per chunk, for every `thin`-th cold-chain draw: predictions at the fixed
 test panel (response scale), eps_sigma2, the per-feature split counts, and the
@@ -134,11 +134,9 @@ def main():
         raise ValueError(f"missing chunks in {out}: {done}")
     states = None
     if start:
-        with open(out / "final_states.pkl", "rb") as fh:
-            saved = pickle.load(fh)
-        if saved["chunk"] != start - 1:
-            raise ValueError("final_states.pkl does not match the last chunk")
-        states = saved["states"]
+        # Written before its chunk file, so it exists for every finished chunk.
+        with open(out / f"states{start - 1:04d}.pkl", "rb") as fh:
+            states = pickle.load(fh)
     print(f"[LONG] {tag} run {args.run} chain {args.chain} {args.method}: J={len(temps)}, "
           f"chunks {start}..{n_chunks - 1} of {n_chunks}, seed {seed}", flush=True)
 
@@ -172,11 +170,16 @@ def main():
             record["tail_sigmas"] = np.array([float(s.global_params["eps_sigma2"][0]) for s in trace])
             record["tail_vars_histogram"] = np.array([s.vars_histogram for s in trace])
         states = model.final_states
-        with open(out / "final_states.tmp", "wb") as fh:
-            pickle.dump({"chunk": k, "states": states}, fh)
+        # States first, then the chunk file that marks the chunk as finished, so a
+        # job killed between the two writes resumes from a consistent point.
+        with open(out / "states.tmp", "wb") as fh:
+            pickle.dump(states, fh)
+        os.replace(out / "states.tmp", out / f"states{k:04d}.pkl")
         np.savez_compressed(out / f"chunk{k:04d}.tmp.npz", **record)
         os.replace(out / f"chunk{k:04d}.tmp.npz", out / f"chunk{k:04d}.npz")
-        os.replace(out / "final_states.tmp", out / "final_states.pkl")
+        old_states = out / f"states{k - 2:04d}.pkl"
+        if old_states.exists():
+            old_states.unlink()
         rates = record["swap_accepts"] / np.maximum(1, record["swap_attempts"])
         print(f"[LONG] chunk {k + 1}/{n_chunks}: fit {fit_s:.0f}s, total {time.perf_counter() - t0:.0f}s, "
               f"mean swap rate {rates.mean():.3f}, log post {record['log_post_terms'].sum(axis=1).mean():.1f}",
