@@ -133,6 +133,8 @@ def analyze(dataset,settings):
     v=np.stack([np.load(folder/f'chain{r:03d}'/'sigmas.npy') for r in range(4)])
     methods={'conditional_smc':(p,v)}
     source=ROOT/'diagnosis/store'/tag
+    full_long=load_with_shape(source/'preds'/f'{tag}__run000__default_long__preds.csv').transpose(0,2,1)[:,3000:]
+    long_center=full_long.mean(axis=(0,1))
     for method in ('default','default_pt','mtmh','mtmh_pt','default_long'):
         a=load_with_shape(source/'preds'/f'{tag}__run000__{method}__preds.csv').transpose(0,2,1)[:,3000:]
         b=load_with_shape(source/'sigmas'/f'{tag}__run000__{method}__sigmas.csv').reshape(4,-1)[:,3000:]
@@ -148,17 +150,39 @@ def analyze(dataset,settings):
     rows=[]
     for name,(a,b) in methods.items():
         scores=np.array([unordered_scores(x,z,truth,scale) for x,z in zip(a,b)])
-        rows.append({'method':name,'samples_per_chain':count,**unordered_geometry(a),
+        within=float(np.mean(np.sum((a-a.mean(axis=1)[:,None,:])**2,axis=2)))
+        geometry=(unordered_geometry(a) if within>0 else {
+            'R_BW':None,'within_population_variance':0.,
+            'between_centroid_variance':float(np.mean(np.sum((a.mean(axis=1)-a.mean(axis=(0,1)))**2,axis=1)))})
+        rows.append({'method':name,'samples_per_chain':count,**geometry,
+            'mean_centroid_distance_to_full_long':float(np.linalg.norm(a.mean(axis=1)-long_center,axis=1).mean()),
+            'distinct_predictions_per_chain':[int(len(np.unique(x,axis=0))) for x in a],
             'relative_rmse':float(np.sqrt(np.mean(scores[:,0]**2))/references['naive_rmse']),
             'relative_crps':float(scores[:,1].mean()/references['climatology_crps'])})
     # Same axes, same saved count for each method; the reference is not truth.
     pca=PCA(n_components=2).fit(np.concatenate([a.reshape(-1,len(truth)) for a,b in methods.values()]))
+    from scipy.stats import gaussian_kde
+    reference_xy=pca.transform(full_long.reshape(-1,len(truth)))
+    all_xy=np.concatenate([reference_xy]+[pca.transform(a.reshape(-1,len(truth))) for a,b in methods.values()])
+    low=all_xy.min(axis=0); high=all_xy.max(axis=0)
+    pad=np.maximum((high-low)*.06,1e-6)
+    gx=np.linspace(low[0]-pad[0],high[0]+pad[0],90)
+    gy=np.linspace(low[1]-pad[1],high[1]+pad[1],90)
+    xx,yy=np.meshgrid(gx,gy)
+    density=gaussian_kde(reference_xy.T)(np.vstack([xx.ravel(),yy.ravel()])).reshape(xx.shape)
+    levels=np.unique(np.quantile(density,[.5,.75,.9,.97]))
+    np.savez(folder/'pca_axes.npz',components=pca.components_,mean=pca.mean_,
+             explained_variance_ratio=pca.explained_variance_ratio_,long_reference_center=long_center)
     fig,axes=plt.subplots(2,4,figsize=(13,6),layout='constrained',sharex=True,sharey=True)
     for ax,(name,(a,b)) in zip(axes.ravel(),methods.items()):
+        ax.contour(xx,yy,density,levels=levels,colors='0.7',linewidths=.7)
         for r in range(4):
             xy=pca.transform(a[r]); ax.scatter(xy[:,0],xy[:,1],s=10,alpha=.65,label=f'chain {r+1}')
             center=xy.mean(axis=0); ax.scatter(*center,s=60,marker='x',color=f'C{r}')
-        ax.set_title(name.replace('_',' '),fontsize=9); ax.set_xlabel('PC1'); ax.set_ylabel('PC2')
+        ax.set_title(name.replace('_',' '),fontsize=9)
+        ax.set_xlabel(f'PC1 ({100*pca.explained_variance_ratio_[0]:.1f}%)')
+        ax.set_ylabel(f'PC2 ({100*pca.explained_variance_ratio_[1]:.1f}%)')
+    axes[0,0].legend(fontsize=7,loc='best',frameon=False)
     for ax in axes.ravel()[len(methods):]: ax.set_visible(False)
     fig.suptitle(f'{dataset} run0: {count} states per chain; exploratory short conditional-SMC test')
     fig.savefig(folder/'common_pca.png',dpi=150); plt.close(fig)
@@ -166,6 +190,8 @@ def analyze(dataset,settings):
     write_json(folder/'analysis.json',{'dataset':dataset,'metrics':rows,'references':references,
         'timing':times,'pca_explained_variance_ratio':pca.explained_variance_ratio_,
         'pca_fit':'all displayed methods, equal saved counts, response scale, no standardization',
+        'grey_contours':'all saved post-burn long Default states; descriptive reference, not ground truth',
+        'long_reference_samples_per_chain':full_long.shape[1],
         'test_not_7000_draw_experiment':count!=7000,'pca_does_not_establish_bias':True,
         'four_chains_parallel_one_cpu_each':True})
     print(json.dumps({'dataset':dataset,'metrics':rows}),flush=True)
@@ -190,6 +216,10 @@ def main():
         old=json.loads(old_path.read_text())
         for k in ('n_particles','draws','burn'):
             if settings[k]!=old[k]: raise ValueError(f'Cannot resume with different {k}.')
+        settings['sampling_code_commit']=old.get('sampling_code_commit',old['code_commit'])
+        if args.analyze_only:
+            settings['analysis_code_commit']=settings['code_commit']
+            settings['code_commit']=settings['sampling_code_commit']
     write_json(old_path,settings)
     for dataset in args.datasets:
         if not args.analyze_only:
