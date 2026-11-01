@@ -140,6 +140,10 @@ def analyze(dataset,settings):
     references=predictive_baselines(split['y_train'],truth)
     p=np.stack([np.load(folder/f'chain{r:03d}'/'preds.npy') for r in range(4)])
     v=np.stack([np.load(folder/f'chain{r:03d}'/'sigmas.npy') for r in range(4)])
+    for r in range(4):
+        chain_folder=folder/f'chain{r:03d}'
+        np.save(chain_folder/'rmses.npy',np.sqrt(np.mean((p[r]-truth)**2,axis=1)))
+        np.save(chain_folder/'conditional_iteration.npy',np.arange(settings['burn']+1,settings['burn']+count+1))
     methods={'conditional_smc':(p,v)}
     source=ROOT/'diagnosis/store'/tag
     full_long=load_with_shape(source/'preds'/f'{tag}__run000__default_long__preds.csv').transpose(0,2,1)[:,3000:]
@@ -184,7 +188,7 @@ def analyze(dataset,settings):
              explained_variance_ratio=pca.explained_variance_ratio_,long_reference_center=long_center)
     columns=3 if len(methods)<=6 else 4
     rows_count=(len(methods)+columns-1)//columns
-    fig,axes=plt.subplots(rows_count,columns,figsize=(4*columns,3*rows_count),
+    fig,axes=plt.subplots(rows_count,columns,figsize=(3*columns,3*rows_count),
                           layout='constrained',sharex=True,sharey=True,squeeze=False)
     names={'conditional_smc':f'Conditional SMC (N={settings["n_particles"]}, K=2)',
            'default':'Default','default_pt':'Default + PT','mtmh':'MTMH',
@@ -195,12 +199,13 @@ def analyze(dataset,settings):
         for r in range(4):
             xy=pca.transform(a[r]); ax.scatter(xy[:,0],xy[:,1],s=10,alpha=.65,label=f'chain {r+1}')
             center=xy.mean(axis=0); ax.scatter(*center,s=60,marker='x',color=f'C{r}')
-        ax.set_title(names[name],fontsize=9)
+        ax.set_title(names[name],fontsize=12)
         ax.set_xlabel(f'PC1 ({100*pca.explained_variance_ratio_[0]:.1f}%)')
         ax.set_ylabel(f'PC2 ({100*pca.explained_variance_ratio_[1]:.1f}%)')
     axes[0,0].legend(fontsize=7,loc='best',frameon=False)
     for ax in axes.ravel()[len(methods):]: ax.set_visible(False)
-    fig.suptitle(f'{dataset} run0: {count} states per chain; exploratory short conditional-SMC test')
+    label={'abalone':'Abalone','seoul_bike':'SeoulBike'}[dataset]
+    fig.suptitle(f'{label}, run0: {count} selected states per chain\nShort local test; grey contours: stored long Default',fontsize=12)
     fig.savefig(folder/'common_pca.png',dpi=150); plt.close(fig)
     times=[json.loads((folder/f'chain{r:03d}'/'timing.json').read_text()) for r in range(4)]
     write_json(folder/'analysis.json',{'dataset':dataset,'metrics':rows,'references':references,
