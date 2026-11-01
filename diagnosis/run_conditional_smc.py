@@ -22,6 +22,7 @@ import numpy as np
 from threadpoolctl import threadpool_limits
 
 ROOT=Path(__file__).resolve().parents[1]
+DATA_ROOT=Path(os.environ.get('CSMC_DATA_ROOT',str(ROOT))).resolve()
 sys.path.insert(0,str(ROOT))
 sys.path.insert(0,str(ROOT/'diagnosis'))
 
@@ -38,13 +39,16 @@ def write_json(path,value):
             time.sleep(.02)
 
 def split_data(dataset):
+    import fixed100_support as support
+    support.UCI_CACHE_DIR=DATA_ROOT/'diagnosis/store/uci_cache'
+    support.OPENML_CACHE_DIR=DATA_ROOT/'diagnosis/store/openml_cache'
     from fixed100_support import load_dataset,DATASET_CONFIGS
     from experiment_fixed100 import make_fixed100_splits
     from run_smc_population import validate_stored_split
     X,y=load_dataset(dataset)
     split=make_fixed100_splits(X,y,n_runs=1)[0]
     tag=DATASET_CONFIGS[dataset]['dataset_tag']
-    validate_stored_split(split,ROOT/'diagnosis/store'/tag,tag)
+    validate_stored_split(split,DATA_ROOT/'diagnosis/store'/tag,tag)
     return split,tag
 
 def worker(dataset,index,settings):
@@ -145,7 +149,7 @@ def analyze(dataset,settings):
         np.save(chain_folder/'rmses.npy',np.sqrt(np.mean((p[r]-truth)**2,axis=1)))
         np.save(chain_folder/'conditional_iteration.npy',np.arange(settings['burn']+1,settings['burn']+count+1))
     methods={'conditional_smc':(p,v)}
-    source=ROOT/'diagnosis/store'/tag
+    source=DATA_ROOT/'diagnosis/store'/tag
     full_long=load_with_shape(source/'preds'/f'{tag}__run000__default_long__preds.csv').transpose(0,2,1)[:,3000:]
     long_center=full_long.mean(axis=(0,1))
     for method in ('default','default_pt','mtmh','mtmh_pt','default_long'):
@@ -154,7 +158,7 @@ def analyze(dataset,settings):
         if count>a.shape[1]: raise ValueError('Matched baseline count exceeds saved draws.')
         ix=np.linspace(0,a.shape[1]-1,count,dtype=int)
         methods[method]=(a[:,ix],b[:,ix])
-    old=ROOT/'diagnosis/store_smc'/tag/'run000_p50_w0_s1000'/'replicates'
+    old=DATA_ROOT/'diagnosis/store_smc'/tag/'run000_p50_w0_s1000'/'replicates'
     if old.exists():
         ix=np.linspace(860*50,1000*50-1,count,dtype=int)
         a=np.stack([np.load(old/f'replicate{r:03d}'/'preds.npy',mmap_mode='r')[ix] for r in range(4)])
@@ -229,8 +233,11 @@ def main():
     parser.add_argument('--analyze-only',action='store_true')
     args=parser.parse_args()
     if min(args.n_particles,args.draws,args.jobs)<1 or args.burn<0 or args.jobs>4: parser.error('Invalid counts.')
-    settings={**vars(args),'output':str(args.output.resolve()),
-              'code_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()}
+    code_commit=os.environ.get('CSMC_CODE_COMMIT')
+    if not code_commit:
+        code_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
+    settings={**vars(args),'output':str(args.output.resolve()),'data_root':str(DATA_ROOT),
+              'code_commit':code_commit}
     args.output.mkdir(parents=True,exist_ok=args.resume or args.analyze_only)
     old_path=args.output/'settings.json'
     if old_path.exists():
