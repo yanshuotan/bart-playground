@@ -53,6 +53,8 @@ def split_data(dataset):
 
 def worker(dataset,index,settings):
     from bart_playground import ConditionalSMCBART
+    worker_commit=os.environ.get('CSMC_CODE_COMMIT') or subprocess.check_output(
+        ['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     folder=Path(settings['output'])/dataset/f'chain{index:03d}'
     folder.mkdir(parents=True,exist_ok=True)
     if settings['resume'] and (folder/'timing.json').exists():
@@ -117,6 +119,7 @@ def worker(dataset,index,settings):
                 'last_iteration_seconds':model.history_[-1]['seconds']})
         assert np.isfinite(arrays['preds']).all() and np.all(arrays['sigmas']>0)
         result={'dataset':dataset,'chain':index,'seed':2024+index,'pilot_seed':1729+index,
+            'worker_code_commit':worker_commit,
             'stages':len(model.beta_history_)-1,'initialization_seconds':model.initialization_seconds_,
             'elapsed_seconds':previous_elapsed+time.perf_counter()-started,
             'burn_iterations':settings['burn'],'retained_draws':count,
@@ -177,7 +180,7 @@ def analyze(dataset,settings):
             'relative_rmse':float(np.sqrt(np.mean(scores[:,0]**2))/references['naive_rmse']),
             'relative_crps':float(scores[:,1].mean()/references['climatology_crps'])})
     # Same axes, same saved count for each method; the reference is not truth.
-    pca=PCA(n_components=2).fit(np.concatenate([a.reshape(-1,len(truth)) for a,b in methods.values()]))
+    pca=PCA(n_components=2,svd_solver='full').fit(np.concatenate([a.reshape(-1,len(truth)) for a,b in methods.values()]))
     from scipy.stats import gaussian_kde
     reference_xy=pca.transform(full_long.reshape(-1,len(truth)))
     all_xy=np.concatenate([reference_xy]+[pca.transform(a.reshape(-1,len(truth))) for a,b in methods.values()])
@@ -248,7 +251,10 @@ def main():
         if args.analyze_only:
             settings['analysis_code_commit']=settings['code_commit']
             settings['code_commit']=settings['sampling_code_commit']
-    write_json(old_path,settings)
+    if old_path.exists():
+        write_json(args.output/'latest_invocation.json',settings)
+    else:
+        write_json(old_path,settings)
     for dataset in args.datasets:
         already_complete=all((args.output/dataset/f'chain{r:03d}'/'timing.json').exists() for r in range(4))
         if not args.analyze_only and not (args.resume and already_complete):
