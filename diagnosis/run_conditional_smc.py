@@ -29,7 +29,13 @@ def write_json(path,value):
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)
     temporary=path.with_suffix('.tmp')
     temporary.write_text(json.dumps(value,indent=2,default=lambda a:a.tolist() if isinstance(a,np.ndarray) else str(a)),encoding='utf-8')
-    temporary.replace(path)
+    for attempt in range(100):
+        try:
+            temporary.replace(path)
+            break
+        except PermissionError:
+            if attempt==99: raise
+            time.sleep(.02)
 
 def split_data(dataset):
     from fixed100_support import load_dataset,DATASET_CONFIGS
@@ -59,6 +65,9 @@ def worker(dataset,index,settings):
             with checkpoint.open('rb') as stream: model=pickle.load(stream)
             if model.experiment_fingerprint_!=digest:
                 raise ValueError('Checkpoint data differ from this split.')
+            if (model.n_particles!=settings['n_particles'] or model.n_mcmc_steps!=2
+                    or model.sampler.tree_prior.n_trees!=100):
+                raise ValueError('Checkpoint particle count or mutation settings differ.')
             previous_elapsed=model.elapsed_seconds_
             mode='r+'
         else:
@@ -173,13 +182,20 @@ def analyze(dataset,settings):
     levels=np.unique(np.quantile(density,[.5,.75,.9,.97]))
     np.savez(folder/'pca_axes.npz',components=pca.components_,mean=pca.mean_,
              explained_variance_ratio=pca.explained_variance_ratio_,long_reference_center=long_center)
-    fig,axes=plt.subplots(2,4,figsize=(13,6),layout='constrained',sharex=True,sharey=True)
+    columns=3 if len(methods)<=6 else 4
+    rows_count=(len(methods)+columns-1)//columns
+    fig,axes=plt.subplots(rows_count,columns,figsize=(4*columns,3*rows_count),
+                          layout='constrained',sharex=True,sharey=True,squeeze=False)
+    names={'conditional_smc':f'Conditional SMC (N={settings["n_particles"]}, K=2)',
+           'default':'Default','default_pt':'Default + PT','mtmh':'MTMH',
+           'mtmh_pt':'MTMH + PT','default_long':'Default long',
+           'historical_smc_modified_kernel':'Historical SMC (modified kernel)'}
     for ax,(name,(a,b)) in zip(axes.ravel(),methods.items()):
         ax.contour(xx,yy,density,levels=levels,colors='0.7',linewidths=.7)
         for r in range(4):
             xy=pca.transform(a[r]); ax.scatter(xy[:,0],xy[:,1],s=10,alpha=.65,label=f'chain {r+1}')
             center=xy.mean(axis=0); ax.scatter(*center,s=60,marker='x',color=f'C{r}')
-        ax.set_title(name.replace('_',' '),fontsize=9)
+        ax.set_title(names[name],fontsize=9)
         ax.set_xlabel(f'PC1 ({100*pca.explained_variance_ratio_[0]:.1f}%)')
         ax.set_ylabel(f'PC2 ({100*pca.explained_variance_ratio_[1]:.1f}%)')
     axes[0,0].legend(fontsize=7,loc='best',frameon=False)
@@ -222,7 +238,8 @@ def main():
             settings['code_commit']=settings['sampling_code_commit']
     write_json(old_path,settings)
     for dataset in args.datasets:
-        if not args.analyze_only:
+        already_complete=all((args.output/dataset/f'chain{r:03d}'/'timing.json').exists() for r in range(4))
+        if not args.analyze_only and not (args.resume and already_complete):
             started=time.perf_counter()
             with ProcessPoolExecutor(max_workers=args.jobs,mp_context=mp.get_context('spawn')) as pool:
                 futures=[pool.submit(worker,dataset,r,settings) for r in range(4)]

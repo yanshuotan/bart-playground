@@ -110,8 +110,9 @@ Historical result folders are not regenerated or relabelled by this change.
 `ConditionalSMCBART` uses the original Default kernel and retains one complete
 reference annealing trajectory in each conditional particle sweep. All other
 particles are regenerated, and a terminal index selects the next reference
-trajectory. **One selected endpoint per iteration** is the Markov-chain output;
-the whole auxiliary population is not a collection of posterior draws.
+trajectory. **One selected endpoint per iteration** is the Markov-chain output.
+The unweighted auxiliary cloud is not automatically posterior output; this
+implementation reports selected endpoints only, retaining self-transitions.
 
 An independent adaptive SMC pilot fixes the temperature and resampling
 schedules before Particle Gibbs begins (or supply explicit `betas` and an
@@ -148,6 +149,10 @@ SMC fit on all accumulated observations using the existing response scaling;
 it is not an online particle filter.
 
 For a **full-population posterior sample set**, retain all particles at beta=1:
+
+The population APIs and runner below remain ordinary-SMC controls. Use
+`ConditionalSMCBART` and `run_conditional_smc.py` for the conditional replacement;
+their selected-state output must not be pooled like an auxiliary population.
 
 ```python
 model = SMCBART(n_particles=100, n_trees=100, random_state=2024).fit(X, y, quietly=True)

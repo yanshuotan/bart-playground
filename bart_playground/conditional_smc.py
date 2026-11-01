@@ -59,6 +59,12 @@ class ConditionalSMCBART(SMCBART):
         self.pilot_seed = pilot_seed
 
     def fit_with_data(self, data, quietly=False):
+        self.is_fitted=False
+        self.trace=[]
+        self.particles_=[]
+        self.weights_=np.empty(0)
+        self.reference_path_=None
+        self._validate_data(data.X,data.y)
         self.data = data
         self.sampler.add_data(data)
         self.sampler.add_thresholds(self.preprocessor.thresholds)
@@ -153,6 +159,7 @@ class ConditionalSMCBART(SMCBART):
         self.weights_=np.ones(1)
         self.last_diagnostics_={'selected_particle':index,'reference_retained':bool(reference is not None and index==0),
                                 'stages':diagnostics}
+        self.stage_diagnostics_=diagnostics
         if conditional:
             self.iteration_+=1
         return self.trace[0]

@@ -98,3 +98,16 @@ def test_pilot_schedule_is_frozen_across_particle_gibbs_updates():
     schedule=m.beta_history_.copy(); mask=m.fixed_resampling_.copy()
     for _ in range(3): m.step()
     assert schedule==m.beta_history_ and mask==m.fixed_resampling_
+
+
+def test_failed_refit_cannot_keep_a_fitted_reference_on_different_data():
+    X=np.arange(8.)[:,None]; y=np.sin(X[:,0])
+    m=ConditionalSMCBART(n_particles=3,n_trees=2,n_mcmc_steps=1,
+                          betas=[0,.2,1.]).fit(X,y,quietly=True)
+    assert len(m.stage_diagnostics_)==2
+    m.resampling_schedule=[True]
+    with pytest.raises(ValueError,match='resampling_schedule'):
+        m.fit(X,y+1,quietly=True)
+    assert not m.is_fitted and m.reference_path_ is None
+    with pytest.raises(ValueError,match='Fit before'):
+        m.step()
