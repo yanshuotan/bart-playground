@@ -78,7 +78,6 @@ TIMING_TAG = {
     "fixed100_FriedmanSparseDir_p100": "fixed100_FriedmanSparseDir",
     "fixed100_FriedmanSparseDir_p200": "fixed100_FriedmanSparseDirP200K5",
     "fixed100_SeoulBike": "fixed100_SeoulBike",
-    # no timing run exists for Superconduct; its cost ratios stay missing
     "fixed100_Superconduct_subsample5000": "fixed100_Superconduct_subsample5000",
 }
 DISPLAY = {

@@ -6,6 +6,23 @@ from typing import Optional
 from .params import Parameters
 from .util import fast_choice, fast_choice_with_weights
 
+# When True, the Multi* moves score candidates with the fused kernels in
+# mtm_kernels (bit-identical, faster); False keeps the original
+# simulate_* + calculate_simulated_likelihood path for reference and tests.
+FAST_MTM_SCORING = True
+_mtm_kernels = None
+_EMPTY_CUMSUM = np.empty(0, dtype=np.float64)  # stands for s is None in the kernels
+
+
+def _kernels():
+    # Imported lazily: mtm_kernels imports priors, which imports this module.
+    global _mtm_kernels
+    if _mtm_kernels is None:
+        from . import mtm_kernels
+        _mtm_kernels = mtm_kernels
+    return _mtm_kernels
+
+
 
 class Move(ABC):
     """
@@ -226,6 +243,67 @@ class MultiGrow(Grow):
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
     
     def try_propose(self, proposed, generator):
+        if not FAST_MTM_SCORING:
+            return self._try_propose_reference(proposed, generator)
+        k = _kernels()
+        tree = proposed.trees[self.trees_changed[0]]
+        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
+        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
+        n_samples = self.get_n_samples(tree)
+        f_sigma2, alpha, beta = self.likelihood.f_sigma2, self.tree_prior.alpha, self.tree_prior.beta
+        ls_resids = k.residual_sum_sq(residuals)
+        index = k.RowIndex(tree, residuals)
+        flat_thr, thr_offsets = k.flat_thresholds(self.possible_thresholds)
+        s_cumsum = _EMPTY_CUMSUM if self.s is None else np.cumsum(self.s)
+
+        nodes, var_ids, thresholds, log_bwd_weights = k.grow_candidates(
+            generator, n_samples, tree.dataX, tree.vars, index.offsets, index.rows, tree.n, index.sums, tree.leaves,
+            s_cumsum, flat_thr, thr_offsets, residuals, ls_resids, eps_sigma2, f_sigma2, self.temp,
+            alpha, beta)
+        candidates = list(zip(nodes, var_ids, thresholds, log_bwd_weights))
+
+        if np.all(log_bwd_weights == -np.inf):
+            return False
+
+        max_log_bwd = np.max(log_bwd_weights)
+        bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
+        node_id, var, threshold, _ = candidates[idx]
+        log_weight_yj = log_bwd_weights[[idx]]
+
+        log_tran_fwd = -np.log(tree.n_leaves)
+        success = tree.split_leaf(node_id, var, threshold)
+
+        terminal_split_nodes = tree.terminal_split_nodes
+        log_tran_bwd = -np.log(len(terminal_split_nodes))
+        log_p_bwd = log_weight_yj + log_tran_bwd + np.log(bwd_weights.sum()) + max_log_bwd
+
+        sampled_others = fast_choice(generator, terminal_split_nodes, size=n_samples-1)
+        prune_candidates = [node_id] + list(np.atleast_1d(sampled_others))
+
+        index = k.RowIndex(tree, residuals)
+        log_fwd_weights = []
+        log_pi_cache = {}
+        for prune_node_id in prune_candidates:
+            if prune_node_id in log_pi_cache:
+                log_pi = log_pi_cache[prune_node_id]
+            else:
+                log_likelihood, log_prior = k.prune_candidate(
+                    tree.vars, index.offsets, index.rows, tree.n, index.sums, prune_node_id,
+                    residuals, ls_resids, eps_sigma2, f_sigma2, self.temp, alpha, beta)
+                log_pi = log_likelihood + log_prior
+                log_pi_cache[prune_node_id] = log_pi
+            log_fwd_weights.append(0.5*float(log_pi))
+        log_fwd_weights = np.array(log_fwd_weights)
+        log_weight_x = log_fwd_weights[[0]]
+        max_log_fwd = np.max(log_fwd_weights)
+        fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
+        log_p_fwd = log_weight_x + log_tran_fwd + np.log(fwd_weights.sum()) + max_log_fwd
+
+        self.log_tran_ratio = log_p_bwd - log_p_fwd
+        return success
+
+    def _try_propose_reference(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         eps_sigma2 = self.current.global_params["eps_sigma2"][0]
@@ -318,6 +396,78 @@ class MultiPrune(Prune):
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
         
     def try_propose(self, proposed, generator):
+        if not FAST_MTM_SCORING:
+            return self._try_propose_reference(proposed, generator)
+        k = _kernels()
+        tree = proposed.trees[self.trees_changed[0]]
+        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
+        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
+        n_samples = self.get_n_samples(tree)
+        all_candidates = tree.terminal_split_nodes
+
+        if not all_candidates:
+            return False
+
+        f_sigma2, alpha, beta = self.likelihood.f_sigma2, self.tree_prior.alpha, self.tree_prior.beta
+        ls_resids = k.residual_sum_sq(residuals)
+        index = k.RowIndex(tree, residuals)
+        sampled_candidates = list(np.atleast_1d(fast_choice(generator, all_candidates, size=n_samples)))
+
+        log_pi_cache = {}
+        candidates = []
+        for node_id in sampled_candidates:
+            if node_id in log_pi_cache:
+                log_pi = log_pi_cache[node_id]
+            else:
+                log_likelihood, log_prior = k.prune_candidate(
+                    tree.vars, index.offsets, index.rows, tree.n, index.sums, node_id,
+                    residuals, ls_resids, eps_sigma2, f_sigma2, self.temp, alpha, beta)
+                log_pi = log_likelihood + log_prior
+                log_pi_cache[node_id] = log_pi
+            candidates.append((node_id, 0.5*float(log_pi)))
+
+        log_bwd_weights = np.array([w for _, w in candidates])
+        max_log_bwd = np.max(log_bwd_weights)
+        bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
+        node_id, _ = candidates[idx]
+        log_weight_yj = log_bwd_weights[[idx]]
+
+        log_tran_fwd = -np.log(len(all_candidates))
+        grow_candidate = (node_id, tree.vars[node_id], tree.thresholds[node_id]) # Record
+        tree.prune_split(node_id)
+        log_tran_bwd = -np.log(tree.n_leaves)  # log T(y_i, x): grow back
+        log_p_bwd = log_weight_yj + log_tran_bwd + np.log(bwd_weights.sum()) + max_log_bwd
+
+        n_samples = self.get_n_samples(tree)
+        index = k.RowIndex(tree, residuals)
+        flat_thr, thr_offsets = k.flat_thresholds(self.possible_thresholds)
+        s_cumsum = _EMPTY_CUMSUM if self.s is None else np.cumsum(self.s)
+        log_fwd_weights = []
+
+        # First add the recorded grow candidate (it restores the current tree, so it is valid)
+        leaf_id, var, threshold = grow_candidate
+        valid, log_likelihood, log_prior = k.grow_candidate(
+            tree.dataX, tree.vars, index.offsets, index.rows, tree.n, index.sums, leaf_id, var, threshold,
+            residuals, ls_resids, eps_sigma2, f_sigma2, self.temp, alpha, beta)
+        if not valid:
+            raise RuntimeError("Reverse grow of a pruned split produced an empty leaf.")
+        log_fwd_weights.append(0.5 * float(log_likelihood + log_prior))
+
+        *_, other_weights = k.grow_candidates(
+            generator, max(n_samples - 1, 0), tree.dataX, tree.vars, index.offsets, index.rows, tree.n, index.sums,
+            tree.leaves, s_cumsum, flat_thr, thr_offsets, residuals, ls_resids, eps_sigma2, f_sigma2,
+            self.temp, alpha, beta)
+        log_fwd_weights = np.concatenate([log_fwd_weights, other_weights])
+        log_weight_x = log_fwd_weights[[0]]
+        max_log_fwd = np.max(log_fwd_weights)
+        fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
+        log_p_fwd = log_weight_x + log_tran_fwd + np.log(fwd_weights.sum()) + max_log_fwd
+
+        self.log_tran_ratio = log_p_bwd - log_p_fwd
+        return True
+
+    def _try_propose_reference(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         eps_sigma2 = self.current.global_params["eps_sigma2"][0]
@@ -414,6 +564,63 @@ class MultiChange(Change):
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
 
     def try_propose(self, proposed, generator):
+        if not FAST_MTM_SCORING:
+            return self._try_propose_reference(proposed, generator)
+        k = _kernels()
+        tree = proposed.trees[self.trees_changed[0]]
+        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
+        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
+        n_samples = self.get_n_samples(tree)
+        f_sigma2 = self.likelihood.f_sigma2
+        ls_resids = k.residual_sum_sq(residuals)
+        index = k.RowIndex(tree, residuals)
+        flat_thr, thr_offsets = k.flat_thresholds(self.possible_thresholds)
+        s_cumsum = _EMPTY_CUMSUM if self.s is None else np.cumsum(self.s)
+
+        nodes, var_ids, thresholds, log_bwd_weights = k.change_candidates(
+            generator, n_samples, tree.dataX, tree.vars, tree.thresholds, index.offsets, index.rows, tree.n, index.sums,
+            tree.split_nodes, s_cumsum, flat_thr, thr_offsets, residuals, ls_resids, eps_sigma2,
+            f_sigma2, self.temp)
+        candidates = list(zip(nodes, var_ids, thresholds, log_bwd_weights))
+
+        if np.all(log_bwd_weights == -np.inf):
+            return False
+
+        max_log_bwd = np.max(log_bwd_weights)
+        bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
+        node_id, var, threshold, _ = candidates[idx]
+        log_weight_yj = log_bwd_weights[[idx]]
+        log_p_bwd = log_weight_yj + np.log(bwd_weights.sum()) + max_log_bwd
+
+        old_var = tree.vars[node_id]
+        old_threshold = tree.thresholds[node_id]
+        success = tree.change_split(node_id, var, threshold)
+
+        index = k.RowIndex(tree, residuals)
+        log_fwd_weights = []
+        # The reverse change restores the current tree, so it is valid
+        valid, log_likelihood = k.change_candidate(
+            tree.dataX, tree.vars, tree.thresholds, index.offsets, index.rows, tree.n, index.sums,
+            node_id, old_var, old_threshold, residuals, ls_resids, eps_sigma2, f_sigma2, self.temp)
+        if not valid:
+            raise RuntimeError("Reverse change of a split produced an empty node.")
+        log_fwd_weights.append(0.5*float(log_likelihood))
+
+        *_, other_weights = k.change_candidates(
+            generator, max(n_samples - 1, 0), tree.dataX, tree.vars, tree.thresholds, index.offsets, index.rows,
+            tree.n, index.sums, tree.split_nodes, s_cumsum, flat_thr, thr_offsets, residuals, ls_resids,
+            eps_sigma2, f_sigma2, self.temp)
+        log_fwd_weights = np.concatenate([log_fwd_weights, other_weights])
+        log_weight_x = log_fwd_weights[[0]]
+        max_log_fwd = np.max(log_fwd_weights)
+        fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
+        log_p_fwd = log_weight_x + np.log(fwd_weights.sum()) + max_log_fwd
+
+        self.log_tran_ratio = log_p_bwd - log_p_fwd
+        return success
+
+    def _try_propose_reference(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         eps_sigma2 = self.current.global_params["eps_sigma2"][0]
@@ -516,6 +723,63 @@ class MultiSwap(Swap):
         super().__init__(current, trees_changed, possible_thresholds, tol, **kwargs)
 
     def try_propose(self, proposed, generator):
+        if not FAST_MTM_SCORING:
+            return self._try_propose_reference(proposed, generator)
+        k = _kernels()
+        tree = proposed.trees[self.trees_changed[0]]
+        residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
+        eps_sigma2 = self.current.global_params["eps_sigma2"][0]
+        all_candidates = [
+            (parent_id, 2 * parent_id + lr)
+            for parent_id in tree.nonterminal_split_nodes
+            for lr in [1, 2]
+            if tree.vars[2 * parent_id + lr] != -1
+        ]
+        n_samples = self.get_n_samples(tree)
+        f_sigma2 = self.likelihood.f_sigma2
+        ls_resids = k.residual_sum_sq(residuals)
+        index = k.RowIndex(tree, residuals)
+
+        pairs = np.array(all_candidates, dtype=np.int64).reshape(-1, 2)
+        picks, log_bwd_weights = k.swap_candidates(
+            generator, n_samples, tree.dataX, tree.vars, tree.thresholds, index.offsets, index.rows, tree.n, index.sums,
+            pairs, residuals, ls_resids, eps_sigma2, f_sigma2, self.temp)
+        candidates = [(*all_candidates[p], w) for p, w in zip(picks, log_bwd_weights)]
+        if np.all(log_bwd_weights == -np.inf):
+            return False
+
+        max_log_bwd = np.max(log_bwd_weights)
+        bwd_weights = np.exp(log_bwd_weights - max_log_bwd)
+        idx = fast_choice_with_weights(generator, np.arange(len(candidates)), bwd_weights)
+        parent_id, child_id, _ = candidates[idx]
+        log_weight_yj = log_bwd_weights[[idx]]
+        log_p_bwd = log_weight_yj + np.log(bwd_weights.sum()) + max_log_bwd
+
+        success = tree.swap_split(parent_id, child_id)
+
+        index = k.RowIndex(tree, residuals)
+        log_fwd_weights = []
+        # Swapping the same pair back restores the current tree, so it is valid
+        valid, log_pi = k.swap_candidate(
+            tree.dataX, tree.vars, tree.thresholds, index.offsets, index.rows, tree.n, index.sums,
+            parent_id, child_id, residuals, ls_resids, eps_sigma2, f_sigma2, self.temp)
+        if not valid:
+            raise RuntimeError("Reverse swap produced an empty node.")
+        log_fwd_weights.append(0.5*float(log_pi))
+
+        _, other_weights = k.swap_candidates(
+            generator, max(n_samples - 1, 0), tree.dataX, tree.vars, tree.thresholds, index.offsets, index.rows,
+            tree.n, index.sums, pairs, residuals, ls_resids, eps_sigma2, f_sigma2, self.temp)
+        log_fwd_weights = np.concatenate([log_fwd_weights, other_weights])
+        log_weight_x = log_fwd_weights[[0]]
+        max_log_fwd = np.max(log_fwd_weights)
+        fwd_weights = np.exp(log_fwd_weights - max_log_fwd)
+        log_p_fwd = log_weight_x + np.log(fwd_weights.sum()) + max_log_fwd
+
+        self.log_tran_ratio = log_p_bwd - log_p_fwd
+        return success
+
+    def _try_propose_reference(self, proposed, generator):
         tree = proposed.trees[self.trees_changed[0]]
         residuals = self.data_y - proposed.evaluate(all_except=self.trees_changed)
         eps_sigma2 = self.current.global_params["eps_sigma2"][0]

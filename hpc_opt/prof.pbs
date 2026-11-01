@@ -1,0 +1,17 @@
+#!/bin/bash
+#PBS -q auto_free
+#PBS -N pt_profile
+#PBS -j oe
+#PBS -l walltime=04:00:00
+#PBS -l select=1:ncpus=40:mpiprocs=1:ompthreads=1:mem=160gb
+cd "$PBS_O_WORKDIR" || exit 1
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 NUMBA_NUM_THREADS=1
+PY=~/bart-playground/.venv/bin/python
+OUT=/scratch/e1377027/opt/profile
+mkdir -p $OUT
+echo "host=$(hostname) cpu=$(lscpu | sed -n "s/^Model name:[[:space:]]*//p") commit=$(git rev-parse --short HEAD)" | tee $OUT/driver.log
+$PY -W ignore -c "import arviz"
+for d in concrete seoul_bike; do
+  $PY -u hpc_opt/prof_pt.py $d 2000 $OUT > $OUT/${d}.log 2>&1
+  echo "$d exit=$? at $(date -Is)" | tee -a $OUT/driver.log
+done

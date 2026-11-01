@@ -1,0 +1,13 @@
+#!/bin/bash
+#PBS -q auto_free
+#PBS -N bench_a
+#PBS -j oe
+#PBS -l walltime=02:00:00
+#PBS -l select=1:ncpus=4:mpiprocs=1:ompthreads=1:mem=16gb
+cd ~/bart-opt
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 NUMBA_NUM_THREADS=1
+PY=~/bart-playground/.venv/bin/python
+O=/scratch/e1377027/opt/bench
+echo "host=$(hostname) commit=$(git rev-parse --short HEAD) dirty" > $O/bench_a.log
+$PY -W ignore /scratch/e1377027/opt/bench_a.py concrete 500 >> $O/bench_a.log 2>&1
+$PY -W ignore /scratch/e1377027/opt/bench_a.py seoul_bike 200 >> $O/bench_a.log 2>&1

@@ -28,8 +28,8 @@ varies between runs.
 Default's own stored short run caps the budget at one. ``extend_default.py``
 reruns Default alone at 10^5 iterations under the short-chain seeds, and this
 script reads that output when it is present, checks the overlap against the
-stored short run and uses it in place of it, which lifts the ceiling to the
-point where some other method runs out of draws instead.
+stored short run and uses it in place of it. Every setting is analysed on the
+same budget grid, which ends at $b=2.5$.
 """
 from __future__ import annotations
 
@@ -72,6 +72,7 @@ TIMING_TAG = {
     "fixed100_FriedmanSparseDir_p100": "fixed100_FriedmanSparseDir",
     "fixed100_FriedmanSparseDir_p200": "fixed100_FriedmanSparseDirP200K5",
     "fixed100_SeoulBike": "fixed100_SeoulBike",
+    "fixed100_Superconduct_subsample5000": "fixed100_Superconduct_subsample5000",
 }
 DISPLAY = {
     "fixed100_Abalone": "Abalone", "fixed100_Airfoil": "Airfoil",
@@ -82,6 +83,7 @@ DISPLAY = {
     "fixed100_FriedmanSparseDir_p100": "DART $d=100$",
     "fixed100_FriedmanSparseDir_p200": "DART $d=200$",
     "fixed100_SeoulBike": "SeoulBike",
+    "fixed100_Superconduct_subsample5000": "Superconduct",
 }
 PRODUCTION_ITERS = 10_000
 # the resolving group of settings first, then the persistent one
@@ -89,7 +91,8 @@ ORDER = ["fixed100_FriedmanSparseDir_p20", "fixed100_FriedmanSparseDir_p200",
          "fixed100_FriedmanSparseDir_p100", "fixed100_Abalone",
          "fixed100_Friedman", "fixed100_Concrete",
          "fixed100_CalHousing_subsample5000", "fixed100_Airfoil",
-         "fixed100_CCPP", "fixed100_CPUAct", "fixed100_SeoulBike"]
+         "fixed100_CCPP", "fixed100_CPUAct",
+         "fixed100_Superconduct_subsample5000", "fixed100_SeoulBike"]
 NAMES = ["Default", "MTMH", "Default+PT", "MTMH+PT"]
 STYLE = {"Default": dict(color="#1f77b4", marker="o"),
          "MTMH": dict(color="#2ca02c", marker="s"),
@@ -113,7 +116,7 @@ def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
                              "timing benchmark of the same run, so the two must match; "
                              "timing exists for run 0 only.")
     parser.add_argument("--budgets", nargs="+", type=float,
-                        default=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0, 2.5, 3.0])
+                        default=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0, 2.5])
     parser.add_argument("--warmup-fraction", type=float, default=0.3)
     parser.add_argument("--min-draws", type=int, default=150,
                         help="Skip a budget point if any method retains fewer draws.")

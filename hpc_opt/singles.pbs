@@ -1,0 +1,18 @@
+#!/bin/bash
+#PBS -q auto_free
+#PBS -N ae_singles
+#PBS -j oe
+#PBS -l walltime=24:00:00
+#PBS -l select=1:ncpus=20:mpiprocs=1:ompthreads=1:mem=120gb
+# default + mtmh single chains (5 runs x 4 chains) for every dataset, into the ae_baseline store.
+cd ~/bart-opt || exit 1
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 NUMBA_NUM_THREADS=1
+PY=~/bart-playground/.venv/bin/python
+echo "host=$(hostname) commit=$CODE_COMMIT start=$(date -Is)"
+$PY -W ignore -c "import arviz"
+for d in ${DATASETS:-concrete seoul_bike abalone airfoil calhousing ccpp}; do
+  $PY -u -W ignore hpc_opt/run_variant.py --dataset $d --variant ae_baseline --ladder baseline --fast --batched \
+      --methods default mtmh --n-jobs 20
+  echo "$d exit=$? at $(date -Is)"
+done
+echo "end=$(date -Is)"

@@ -1,0 +1,36 @@
+#!/bin/bash
+#PBS -j oe
+#PBS -l walltime=08:00:00
+# qsub -q QUEUE -l select=1:ncpus=N:mem=..gb -v MODE=serial|parallel timing.pbs
+cd ~/bart-opt || exit 1
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 NUMBA_NUM_THREADS=1
+PY=~/bart-playground/.venv/bin/python
+O=/scratch/e1377027/opt/timing_$MODE
+mkdir -p $O
+echo "host=$(hostname) cpu=$(lscpu | sed -n "s/^Model name:[[:space:]]*//p") commit=$(git rev-parse --short HEAD) start=$(date -Is)"
+$PY -W ignore -c "import arviz"
+run() { $PY -u -W ignore hpc_opt/run_variant.py --runs 0 --chains 1 --n-jobs 1 --ladder baseline --out $O "$@" > $O/$(echo "$@" | tr " " "_" | tr -d "-").log 2>&1; }
+if [ "$MODE" = serial ]; then
+  for d in concrete seoul_bike; do
+    n=1000; [ $d = seoul_bike ] && n=500
+    run --dataset $d --variant ref_mtmhpt --no-fast --no-batched --methods mtmh_pt --ndpost $n &
+    run --dataset $d --variant a_mtmhpt --fast --no-batched --methods mtmh_pt --ndpost $n &
+    run --dataset $d --variant ae_mtmhpt --fast --batched --methods mtmh_pt --ndpost $n &
+    ( run --dataset $d --variant ref_dpt --no-fast --no-batched --methods default_pt --ndpost $n
+      run --dataset $d --variant ae_dpt --fast --batched --methods default_pt --ndpost $n
+      run --dataset $d --variant ref_mtmh --no-fast --methods mtmh --ndpost $n
+      run --dataset $d --variant a_mtmh --fast --methods mtmh --ndpost $n ) &
+  done
+  wait
+else
+  for d in concrete seoul_bike; do
+    for v in "ref --no-fast --no-batched" "ae --fast --batched"; do
+      set -- $v
+      for m in default_pt mtmh_pt; do
+        run --dataset $d --variant ${1}_$m ${@:2} --methods $m --ndpost 1000 --pt-n-jobs 0
+      done
+    done
+  done
+fi
+echo "end=$(date -Is)"
+grep -h "all tasks done" $O/*.log
