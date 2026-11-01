@@ -100,8 +100,46 @@ rather than retrying its split rules or imposing a depth cutoff. The variance
 is drawn from its data-calibrated inverse gamma prior, or held at
 `fixed_eps_sigma2` on the preprocessed response scale. The evidence is relative
 to this calibrated prior and transformed response, not the original response
-units. Mutation uses single-attempt tree proposals and refreshes every tree's
-leaves even if its structure proposal fails.
+units. Mutation now calls the original `DefaultSampler` with `tol=1`, including
+its original variance floor. The earlier implementation added a full leaf
+Gibbs sweep and removed that floor; those modifications have been removed.
+Historical result folders are not regenerated or relabelled by this change.
+
+#### Conditional SMC / Particle Gibbs
+
+`ConditionalSMCBART` uses the original Default kernel and retains one complete
+reference annealing trajectory in each conditional particle sweep. All other
+particles are regenerated, and a terminal index selects the next reference
+trajectory. **One selected endpoint per iteration** is the Markov-chain output;
+the whole auxiliary population is not a collection of posterior draws.
+
+An independent adaptive SMC pilot fixes the temperature and resampling
+schedules before Particle Gibbs begins (or supply explicit `betas` and an
+optional Boolean `resampling_schedule`). The pilot uses the old CESS 0.8 /
+ESS 0.5 rules. Conditional updates use multinomial resampling: the reference
+ancestor is fixed, and other ancestors are independent categorical draws.
+Systematic resampling followed by manually inserting a reference is not used.
+The usual posterior-invariance argument assumes invariant mutation kernels;
+the inherited Default numerical variance floor is recorded, not suppressed.
+
+```python
+from bart_playground import ConditionalSMCBART
+model = ConditionalSMCBART(n_particles=50, n_trees=100, n_mcmc_steps=2)
+model.fit(X, y, quietly=True)
+endpoint = model.step()  # one Particle Gibbs update
+```
+
+The local validation runner uses four independent chains, one CPU each:
+
+```bash
+python diagnosis/run_conditional_smc.py --datasets abalone seoul_bike --output diagnosis/store_smc/conditional_run000 --n-particles 50 --burn 10 --draws 40 --jobs 4
+```
+
+This is a short implementation test, not a replacement for a 7,000-draw
+experiment. It saves predictions, variances, feature counts, full reference
+checkpoints and common-axis PCA plots. A checkpoint resumes with `--resume`.
+PCA location and low between-chain disagreement alone do not establish
+posterior bias or its removal. See [Andrieu, Doucet and Holenstein (2010)](https://doi.org/10.1111/j.1467-9868.2009.00736.x).
 
 Annealing is serial within each population. The implementation supports Gaussian regression with uniform
 split-variable probabilities. It does not implement classification, sparse

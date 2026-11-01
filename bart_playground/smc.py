@@ -1,6 +1,7 @@
 """Likelihood-tempered, resample-move SMC for Gaussian regression BART.
 
 The targets are p(theta) p(y | theta)**beta, from beta=0 to beta=1.
+Mutation uses the unchanged DefaultSampler and its original variance law.
 See Del Moral, Doucet and Jasra (2006), Sequential Monte Carlo Samplers,
 https://doi.org/10.1111/j.1467-9868.2006.00553.x.
 """
@@ -21,7 +22,7 @@ from threadpoolctl import threadpool_limits
 from .bart import BART, DefaultBART, _compress_state_for_trace, resolve_pt_workers
 from .moves import contrary_moves
 from .params import Parameters, Tree
-from .priors import ComprehensivePrior, GlobalParamPrior
+from .priors import ComprehensivePrior
 from .samplers import DefaultSampler, default_proposal_probs
 from .util import Dataset, DefaultPreprocessor
 
@@ -119,7 +120,7 @@ def _posterior_particle_path(task, context):
     prior = deepcopy(context["prior"])
     prior.tree_prior.generator = rng
     prior.global_prior.generator = rng
-    sampler = _SMCMutationSampler(prior, context["proposals"], rng, tol=1)
+    sampler = DefaultSampler(prior, context["proposals"], rng, tol=1)
     sampler.add_data(context["data"])
     sampler.add_thresholds(context["preprocessor"].thresholds)
     state = _restore_particle(initial, context["data"].X)
@@ -147,38 +148,6 @@ def _posterior_particle_path(task, context):
 
 def _run_posterior_worker(task):
     return _posterior_particle_path(task, _POSTERIOR_CONTEXT)
-
-
-class _SMCGlobalParamPrior(GlobalParamPrior):
-    def _sample_eps_sigma2(self, residuals, temp=1.0):
-        # SMC importance weights require the same variance law in initialization
-        # and mutation. Clipping tiny inverse gamma draws would introduce a point
-        # mass absent from the prior and from the weighting likelihood.
-        residuals = np.asarray(residuals, dtype=float)
-        return invgamma.rvs(
-            a=self.eps_nu / 2 + len(residuals) / (2 * temp),
-            scale=self.eps_nu * self.eps_lambda / 2 + residuals @ residuals / (2 * temp),
-            size=1, random_state=self.generator,
-        )
-
-
-class _SMCMutationSampler(DefaultSampler):
-    """Existing tempered structure kernel followed by a full leaf Gibbs sweep.
-
-    tol=1 leaves invalid proposals as self transitions. Retrying until a valid
-    split is found would require additional proposal normalization factors.
-    """
-
-    def one_iter(self, current, temp, return_trace=False):
-        if return_trace:
-            raise NotImplementedError("SMC mutation stores particle populations, not substeps.")
-        state = super().one_iter(current, temp=temp)
-        for tree_id in range(state.n_trees):
-            values = self.tree_prior.resample_leaf_vals(
-                state, self.data.y, [tree_id], temp=temp,
-            )
-            state.update_leaf_vals([tree_id], values)
-        return state
 
 
 class SMCBART(BART):
@@ -271,11 +240,7 @@ class SMCBART(BART):
             specification, rng, False, quick_decay=quick_decay,
             s_alpha=1.0, fixed_eps_sigma2=fixed_eps_sigma2,
         )
-        prior.global_prior = _SMCGlobalParamPrior(
-            eps_q, eps_nu, specification, rng, False, s_alpha=1.0,
-            fixed_eps_sigma2=fixed_eps_sigma2,
-        )
-        sampler = _SMCMutationSampler(prior, proposals, rng, tol=1)
+        sampler = DefaultSampler(prior, proposals, rng, tol=1)
         super().__init__(self.preprocessor_class(max_bins=max_bins), sampler, ndpost, nskip=0)
         self.particles_ = []
         self.weights_ = np.empty(0)
@@ -534,7 +499,7 @@ class SMCBART(BART):
         prior = deepcopy(self.sampler.prior)
         prior.tree_prior.generator = rng
         prior.global_prior.generator = rng
-        sampler = _SMCMutationSampler(prior, dict(self.sampler.proposals), rng, tol=1)
+        sampler = DefaultSampler(prior, dict(self.sampler.proposals), rng, tol=1)
         sampler.add_data(self.data)
         sampler.add_thresholds(self.preprocessor.thresholds)
         log_weights = np.full(self.n_particles, -np.inf)
@@ -702,5 +667,5 @@ class SMCBART(BART):
             "n_mcmc_steps": self.n_mcmc_steps,
             "betas": None if self.betas is None else self.betas.tolist(),
             "max_stages": self.max_stages, "max_prior_attempts": self.max_prior_attempts,
-            "n_jobs": self.n_jobs,
+            "n_jobs": self.n_jobs, "mutation_kernel": "DefaultSampler_tol1_v2",
         }

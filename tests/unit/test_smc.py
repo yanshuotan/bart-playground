@@ -145,24 +145,24 @@ def test_constant_features_match_gaussian_analytic_posterior_and_evidence():
     assert model.log_evidence_ == pytest.approx(exact_log_evidence, abs=0.2)
 
 
-def test_mutation_refreshes_leaf_values_when_no_structure_move_is_possible():
+def test_mutation_matches_default_when_no_structure_move_is_possible():
     model = SMCBART(n_particles=2, n_trees=1, proposal_probs={"change": 1.0},
                     fixed_eps_sigma2=0.1)
     prepare_prior(model, np.zeros((10, 1)), np.linspace(0, 1, 10))
     state = model._sample_prior_state()
     before = state.trees[0].leaf_vals[0]
     updated = model.sampler.one_iter(state, temp=2)
-    assert updated.trees[0].leaf_vals[0] != before
+    assert updated.trees[0].leaf_vals[0] == before
     assert updated.trees[0].n_leaves == 1
 
 
-def test_noise_prior_draw_and_mutation_are_not_clipped():
+def test_noise_mutation_uses_original_default_floor():
     model = SMCBART(n_trees=1, tree_alpha=0.2)
     prepare_prior(model, np.zeros((10, 1)), np.zeros(10))
     prior_sigma2 = model._sample_prior_state().global_params["eps_sigma2"][0]
     mutation_sigma2 = model.sampler.global_prior._sample_eps_sigma2(np.zeros(10))[0]
     assert 0 < prior_sigma2 < 1e-8
-    assert 0 < mutation_sigma2 < 1e-8
+    assert mutation_sigma2 == 1e-8
 
 
 def test_two_observations_match_enumerated_structure_posterior():
@@ -253,7 +253,9 @@ def test_posterior_population_keeps_every_particle_and_genuinely_updates():
         snapshots.append(np.array([state.evaluate(X).copy() for state in population]))
     assert np.array(snapshots).shape == (4, 5, 30)
     assert progress == [(i, 6) for i in range(1, 7)]
-    assert np.all(np.any(np.diff(snapshots, axis=0) != 0, axis=2))
+    # Original Default permits legitimate self-transitions; every prediction
+    # vector need not change at every sweep.
+    assert np.any(np.diff(snapshots, axis=0) != 0)
     assert len(smc.posterior_population_) == 5
     assert sum(smc.population_sampler_.move_selected_counts.values()) == 6 * 5 * 3
     np.testing.assert_array_equal(original, smc.posterior_f(X))
@@ -272,7 +274,9 @@ def test_terminal_resampling_restores_equal_weight_population_without_aliasing()
     assert len({id(state) for state in states}) == 4
     for left, right in zip(states, states[1:]):
         assert not np.shares_memory(left.trees[0].leaf_vals, right.trees[0].leaf_vals)
-    assert len({float(state.trees[0].leaf_vals[state.trees[0].leaves][0]) for state in states}) > 1
+    before=states[1].trees[0].leaf_vals.copy()
+    states[0].trees[0].leaf_vals[states[0].trees[0].leaves] += 1
+    np.testing.assert_array_equal(states[1].trees[0].leaf_vals,before)
 
 
 @pytest.mark.parametrize("kwargs", [
