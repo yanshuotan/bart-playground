@@ -8,6 +8,7 @@ https://doi.org/10.1111/j.1467-9868.2006.00553.x.
 
 from copy import deepcopy
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import ExitStack
 import multiprocessing as mp
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -150,6 +151,59 @@ def _run_posterior_worker(task):
     return _posterior_particle_path(task, _POSTERIOR_CONTEXT)
 
 
+def _gaussian_log_likelihood(state, y):
+    # Include the Gaussian constant for the evidence estimate. Accumulate
+    # squared residuals in float64, including when the tree cache is float32.
+    variance = float(state.global_params["eps_sigma2"][0])
+    residuals = y.astype(float) - state.evaluate().astype(float)
+    return -0.5 * (len(y) * np.log(2 * np.pi * variance) + residuals @ residuals / variance)
+
+
+_ANNEAL_CONTEXT = None
+
+
+def _init_anneal_worker(folder, config):
+    global _ANNEAL_CONTEXT
+    arrays = {name: np.load(Path(folder) / f"{name}.npy", mmap_mode="r") for name in ("X", "y")}
+    _ANNEAL_CONTEXT = {**config, "data": Dataset(arrays["X"], arrays["y"])}
+
+
+def _anneal_mutation(task, context):
+    """Mutate one particle at one temperature with its own (stage, particle) stream.
+
+    The worker keeps one DefaultSampler and only swaps its random stream, so a
+    result depends on the task alone, not on which worker ran it.
+    """
+    index, state, temp, n_steps, seed = task
+    sampler = context.get("sampler")
+    if sampler is None:
+        sampler = DefaultSampler(deepcopy(context["prior"]), context["proposals"],
+                                 np.random.default_rng(0), tol=1)
+        sampler.add_data(context["data"])
+        sampler.add_thresholds(context["thresholds"])
+        context["sampler"] = sampler
+    rng = np.random.default_rng(seed)
+    sampler.generator = sampler.tree_prior.generator = sampler.global_prior.generator = rng
+    sampler.moves_str_cache = sampler.moves_cache_iterator = None
+    for counts in (sampler.move_selected_counts, sampler.move_success_counts,
+                   sampler.move_accepted_counts):
+        for key in counts:
+            counts[key] = 0
+    state = _restore_particle(state, context["data"].X)
+    with threadpool_limits(limits=1):
+        for _ in range(n_steps):
+            state = sampler.one_iter(state, temp=temp)
+    sampler.accepted_moves_logmh.clear()
+    counts = {name: getattr(sampler, name).copy() for name in (
+        "move_selected_counts", "move_success_counts", "move_accepted_counts")}
+    return (index, _transport_particle(state),
+            _gaussian_log_likelihood(state, context["data"].y), counts)
+
+
+def _run_anneal_worker(task):
+    return _anneal_mutation(task, _ANNEAL_CONTEXT)
+
+
 class SMCBART(BART):
     """Annealed SMC over complete BART ensembles for Gaussian regression.
 
@@ -171,8 +225,12 @@ class SMCBART(BART):
     ``fixed_eps_sigma2`` is expressed on that preprocessed response scale.
     Classification, sparse Dirichlet split priors and seeded forests are not
     supported by this class. ``update_fit`` refits the combined data with SMC.
-    ``n_jobs`` defaults to 1 and only controls ``sample_posterior``: annealing
-    and the legacy ``iter_posterior_populations`` iterator remain serial.
+    ``n_jobs`` defaults to 1 and controls the annealing mutations and
+    ``sample_posterior``; the legacy ``iter_posterior_populations`` iterator
+    remains serial. With ``n_jobs=1`` annealing uses the sampler's single random
+    stream. Otherwise every (stage, particle) mutation has its own stream, so a
+    seeded fit is the same for every worker count above one but differs from
+    the serial fit. Both run the same mutation kernel and target.
     """
 
     preprocessor_class = DefaultPreprocessor
@@ -309,14 +367,7 @@ class SMCBART(BART):
         return Parameters(trees, {"eps_sigma2": np.array([sigma2], dtype=float)})
 
     def _log_likelihoods(self, particles):
-        # Include the Gaussian constant for the evidence estimate. Accumulate
-        # squared residuals in float64, including when the tree cache is float32.
-        result = []
-        for state in particles:
-            variance = float(state.global_params["eps_sigma2"][0])
-            residuals = self.data.y.astype(float) - state.evaluate().astype(float)
-            result.append(-0.5 * (self.data.n * np.log(2 * np.pi * variance) + residuals @ residuals / variance))
-        result = np.asarray(result)
+        result = np.asarray([_gaussian_log_likelihood(state, self.data.y) for state in particles])
         if not np.all(np.isfinite(result)):
             raise FloatingPointError("SMC encountered a non-finite particle log likelihood.")
         return result
@@ -365,13 +416,20 @@ class SMCBART(BART):
                        self.sampler.move_accepted_counts):
             for key in counts:
                 counts[key] = 0
+        workers = resolve_smc_workers(self.n_jobs, self.n_particles)
         particles = [self._sample_prior_state() for _ in range(self.n_particles)]
+        log_likelihoods = self._log_likelihoods(particles)
         log_weights = np.full(self.n_particles, -np.log(self.n_particles))
+        origins = np.arange(self.n_particles)
         beta = 0.0
         log_evidence = 0.0
-        with tqdm(total=1.0, desc="SMC beta", disable=quietly) as progress:
+        with ExitStack() as stack:
+            if workers == 1:
+                mutate = self._mutate_serial
+            else:
+                mutate = self._mutate_parallel(stack, workers)
+            progress = stack.enter_context(tqdm(total=1.0, desc="SMC beta", disable=quietly))
             for stage in range(self.max_stages):
-                log_likelihoods = self._log_likelihoods(particles)
                 next_beta = (float(self.betas[stage + 1]) if self.betas is not None
                              else self._next_beta(beta, log_weights, log_likelihoods))
                 log_weights, increment = _normalize_log_weights(
@@ -383,15 +441,21 @@ class SMCBART(BART):
                 ancestors = np.arange(self.n_particles)
                 if resampled:
                     ancestors = _systematic_resample(log_weights, self.sampler.generator)
-                    particles = [_copy_particle(particles[index]) for index in ancestors]
+                    # Workers receive pickled copies; the serial path must copy here.
+                    particles = [_copy_particle(particles[index]) if workers == 1
+                                 else particles[index] for index in ancestors]
+                    origins = origins[ancestors]
                     log_weights = np.full(self.n_particles, -np.log(self.n_particles))
-                for index, particle in enumerate(particles):
-                    for _ in range(self.n_mcmc_steps):
-                        particle = self.sampler.one_iter(particle, temp=1.0 / next_beta)
-                    particles[index] = particle
+                selected = sum(self.sampler.move_selected_counts.values())
+                accepted = sum(self.sampler.move_accepted_counts.values())
+                particles, log_likelihoods = mutate(stage, particles, 1.0 / next_beta)
+                selected = sum(self.sampler.move_selected_counts.values()) - selected
+                accepted = sum(self.sampler.move_accepted_counts.values()) - accepted
                 self.stage_diagnostics_.append({
                     "beta": next_beta, "ess": ess, "resampled": resampled,
                     "ancestors": ancestors.copy(), "log_evidence_increment": increment,
+                    "acceptance": accepted / selected if selected else np.nan,
+                    "distinct_origins": int(len(np.unique(origins))),
                 })
                 self.beta_history_.append(next_beta)
                 progress.update(next_beta - beta)
@@ -400,6 +464,8 @@ class SMCBART(BART):
                     break
             else:
                 raise RuntimeError("SMC did not reach beta=1; increase max_stages.")
+        if workers > 1:
+            particles = [_restore_particle(state, self.data.X) for state in particles]
 
         self.weights_ = np.exp(log_weights)
         self.particles_ = [_copy_particle(state, compress=True) for state in particles]
@@ -410,6 +476,51 @@ class SMCBART(BART):
         self.log_evidence_ = float(log_evidence)
         self.is_fitted = True
         return self
+
+    def _mutate_serial(self, stage, particles, temp):
+        for index, particle in enumerate(particles):
+            for _ in range(self.n_mcmc_steps):
+                particle = self.sampler.one_iter(particle, temp=temp)
+            particles[index] = particle
+        self.sampler.accepted_moves_logmh.clear()
+        return particles, self._log_likelihoods(particles)
+
+    def _mutate_parallel(self, stack, workers):
+        """Start one worker pool for the whole fit and return its mutation step.
+
+        Particles cross the process boundary cache-free; the parent never
+        rebuilds training caches until the final population is stored.
+        """
+        folder = stack.enter_context(TemporaryDirectory(prefix="bart-smc-"))
+        for name, array in (("X", self.data.X), ("y", self.data.y)):
+            np.save(Path(folder) / f"{name}.npy", array, allow_pickle=False)
+        config = {"prior": self.sampler.prior, "proposals": dict(self.sampler.proposals),
+                  "thresholds": self.preprocessor.thresholds}
+        executor = stack.enter_context(ProcessPoolExecutor(
+            max_workers=workers, mp_context=mp.get_context("spawn"),
+            initializer=_init_anneal_worker, initargs=(folder, config)))
+        entropy = self.sampler.generator.integers(0, 2**32, size=4, dtype=np.uint32)
+        chunksize = max(1, self.n_particles // (4 * workers))
+
+        def mutate(stage, particles, temp):
+            # Only the prior draws still carry caches; returned states are cache-free.
+            tasks = [(index, state if state.trees[0].dataX is None else _transport_particle(state),
+                      temp, self.n_mcmc_steps,
+                      np.random.SeedSequence(entropy, spawn_key=(stage, index)))
+                     for index, state in enumerate(particles)]
+            states = [None] * len(particles)
+            log_likelihoods = np.empty(len(particles))
+            for index, state, log_likelihood, counts in executor.map(
+                    _run_anneal_worker, tasks, chunksize=chunksize):
+                states[index], log_likelihoods[index] = state, log_likelihood
+                for name, moves in counts.items():
+                    for move, value in moves.items():
+                        getattr(self.sampler, name)[move] += value
+            if not np.all(np.isfinite(log_likelihoods)):
+                raise FloatingPointError("SMC encountered a non-finite particle log likelihood.")
+            return states, log_likelihoods
+
+        return mutate
 
     def predict(self, X):
         """Weighted particle posterior mean, without final resampling noise."""

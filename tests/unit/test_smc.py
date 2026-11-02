@@ -124,14 +124,15 @@ def test_prior_tree_frequencies_match_enumerated_admissible_prior():
     assert all(np.all(tree.n[tree.leaves] > 0) for tree in trees)
 
 
-def test_constant_features_match_gaussian_analytic_posterior_and_evidence():
+@pytest.mark.parametrize("n_jobs", [1, 2])
+def test_constant_features_match_gaussian_analytic_posterior_and_evidence(n_jobs):
     # Admissible trees are stumps: f is exactly a scalar Gaussian prior.
     X = np.zeros((10, 1))
     y = np.linspace(-0.2, 0.5, len(X))
     sigma2 = 0.1
     model = SMCBART(n_particles=1024, n_trees=1, tree_alpha=0.2,
                     fixed_eps_sigma2=sigma2, random_state=831,
-                    resample_threshold=1).fit(X, y, quietly=True)
+                    resample_threshold=1, n_jobs=n_jobs).fit(X, y, quietly=True)
     scaled_y = model.data.y.astype(float)
     prior_var = model.sampler.tree_prior.f_sigma2
     post_var = 1 / (1 / prior_var + len(y) / sigma2)

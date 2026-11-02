@@ -76,7 +76,7 @@ f_draws = model.posterior_f(X)       # latent f, equally weighted resampled draw
 y_draws = model.posterior_predict(X) # draws with observation noise
 
 print(model.beta_history_)           # includes 0 and ends at 1
-print(model.stage_diagnostics_)      # beta, ESS before resampling, ancestry, evidence increments
+print(model.stage_diagnostics_)      # beta, ESS, ancestry, evidence increments, acceptance, distinct origins
 print(model.weights_)               # normalized final population weights
 print(model.log_evidence_)           # log evidence on the transformed response scale
 ```
@@ -100,10 +100,10 @@ rather than retrying its split rules or imposing a depth cutoff. The variance
 is drawn from its data-calibrated inverse gamma prior, or held at
 `fixed_eps_sigma2` on the preprocessed response scale. The evidence is relative
 to this calibrated prior and transformed response, not the original response
-units. Mutation now calls the original `DefaultSampler` with `tol=1`, including
-its original variance floor. The earlier implementation added a full leaf
-Gibbs sweep and removed that floor; those modifications have been removed.
-Historical result folders are not regenerated or relabelled by this change.
+units. Mutation calls the original `DefaultSampler` with `tol=1`, including
+its variance floor, so every SMC mutation is exactly one Default sweep at
+temperature `1/beta`. `distinct_origins` in the stage diagnostics counts how
+many initial prior particles still have descendants.
 
 #### Conditional SMC / Particle Gibbs
 
@@ -142,7 +142,7 @@ checkpoints and common-axis PCA plots. A checkpoint resumes with `--resume`.
 PCA location and low between-chain disagreement alone do not establish
 posterior bias or its removal. See [Andrieu, Doucet and Holenstein (2010)](https://doi.org/10.1111/j.1467-9868.2009.00736.x).
 
-Annealing is serial within each population. The implementation supports Gaussian regression with uniform
+`n_jobs` also parallelizes the annealing mutations over particles (see below). The implementation supports Gaussian regression with uniform
 split-variable probabilities. It does not implement classification, sparse
 Dirichlet split priors, or seeded forests. `update_fit` runs a fresh annealed
 SMC fit on all accumulated observations using the existing response scaling;
@@ -170,7 +170,7 @@ For optional **posterior particle parallelism**, use the numeric collector:
 # Put process-launching code inside this guard in standalone scripts.
 if __name__ == "__main__":
     model = SMCBART(n_particles=50, n_trees=100, random_state=2024, n_jobs=8)
-    model.fit(X, y, quietly=True)  # Annealing settings and execution are unchanged.
+    model.fit(X, y, quietly=True)  # Annealing mutations also run on the 8 workers.
     draws = model.sample_posterior(
         X_test, n_sweeps=1000, burn_sweeps=0, random_state=20261016
     )
@@ -184,7 +184,13 @@ if __name__ == "__main__":
 `n_jobs=1` is the default and starts no child processes. Like PT, `None` uses
 one process per particle, `-1` uses available physical cores, `-2` all but one,
 and positive values request that many processes, capped only at the particle
-count. This setting affects `sample_posterior` only. Each task runs an entire
+count. During `fit`, each stage sends every particle's cache-free forest to a
+worker for its `n_mcmc_steps` sweeps; each (stage, particle) pair has its own
+random stream, so a seeded fit is identical for every worker count above one,
+while `n_jobs=1` keeps the sampler's single stream and gives a different (equally
+valid) realization. The gain grows with `n_mcmc_steps`: on Abalone (48
+particles, 4 workers) annealing took 32 s against 39 s serially with two sweeps,
+and 82 s against 195 s with ten. In `sample_posterior` each task runs an entire
 particle path, including warm-up, with one BLAS thread; particles' sequential
 tree backfitting and within-particle sweep order are preserved. Prediction and
 variance/variable-count extraction happen in the worker. Shared read-only file

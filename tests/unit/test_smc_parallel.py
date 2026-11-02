@@ -79,7 +79,9 @@ def test_duplicate_ancestors_have_distinct_offspring_streams_and_burn_is_a_prefi
     for name in tail:
         np.testing.assert_array_equal(all_draws[name][10:], tail[name])
     assert_endpoints_equal(final, model.posterior_population_)
-    assert len(np.unique(all_draws["preds"][:5, 0])) == 5
+    # Default may keep every tree of a copy (self-transitions), but the noise
+    # variance is redrawn each sweep, so distinct streams give distinct draws.
+    assert len(np.unique(all_draws["sigmas"][:5])) == 5
     assert not np.shares_memory(final[0].global_params["eps_sigma2"], final[1].global_params["eps_sigma2"])
 
 
@@ -173,3 +175,23 @@ def test_collection_requires_fit_and_valid_shapes(fitted):
             model.sample_posterior(bad_X)
     with pytest.raises(ValueError, match="outputs"):
         model.sample_posterior(X, 2, outputs={"preds": np.zeros((10, 7), dtype=np.float32)})
+
+
+def test_parallel_annealing_is_invariant_to_worker_count():
+    rng = np.random.default_rng(5)
+    X = rng.normal(size=(40, 2))
+    y = X[:, 0] + rng.normal(size=len(X)) * .3
+    fits = [SMCBART(n_particles=6, n_trees=3, random_state=21, resample_threshold=.9,
+                    n_jobs=workers).fit(X, y, quietly=True) for workers in (2, 3)]
+    for left, right in zip(*[fit.stage_diagnostics_ for fit in fits]):
+        np.testing.assert_array_equal(left["ancestors"], right["ancestors"])
+    assert fits[0].beta_history_ == fits[1].beta_history_
+    np.testing.assert_array_equal(fits[0].weights_, fits[1].weights_)
+    np.testing.assert_array_equal(fits[0].posterior_f(X), fits[1].posterior_f(X))
+    assert fits[0].log_evidence_ == fits[1].log_evidence_
+    assert any(stage["resampled"] for stage in fits[0].stage_diagnostics_)
+    selected = sum(fits[0].sampler.move_selected_counts.values())
+    assert selected == 6 * 3 * 2 * (len(fits[0].beta_history_) - 1)
+    # Parallel fits store the same cache-free population as serial fits.
+    for state in fits[0].particles_ + fits[0].trace:
+        assert state.cache is None and state.trees[0].dataX is not None
