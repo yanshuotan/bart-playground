@@ -194,12 +194,22 @@ def is_chain(reps):
     return 'chain' in json.loads(str(reps[0]['config']))
 
 
-# Labelled populations (config name, further beta=1 sweeps) -> label offset in points.
-LABEL_OFFSETS = {('N50_K2', 0): (-12, 8), ('N400_K2', 0): (6, -12),
-                 ('N16_K10_ess05_mtmh', 0): (-36, -14), ('N100_K10_ess05', 0): (-10, 8),
-                 ('N50_K10', 0): (5, 6), ('N50_adaptive', 0): (-40, -14),
-                 ('N16_K50_ess05', 0): (5, 6), ('N50_K2', 1000): (-30, -14),
-                 ('N50_K10', 1000): (5, 6)}
+# Per dataset: y-range of the figure and labelled populations
+# (config name, further beta=1 sweeps) -> label offset in points.
+FIGURE_LAYOUT = {
+    'abalone': {'ylim': (4.9, 6.0), 'labels': {
+        ('N50_K2', 0): (-12, 8), ('N400_K2', 0): (6, -12),
+        ('N16_K10_ess05_mtmh', 0): (-36, -14), ('N100_K10_ess05', 0): (-10, 8),
+        ('N50_K10', 0): (5, 6), ('N50_adaptive', 0): (-40, -14),
+        ('N16_K50_ess05', 0): (5, 6), ('N50_K2', 1000): (-30, -14),
+        ('N50_K10', 1000): (5, 6)}},
+    'seoul_bike': {'ylim': (1.3, 4.2), 'height': 4.4, 'legend': 'center left', 'labels': {
+        ('N50_K2', 0): (5, 5), ('N400_K2', 0): (-60, -12),
+        ('N16_K10_ess05_mtmh', 0): (-98, -3), ('N100_K10_ess05', 0): (-10, 8),
+        ('N50_K10', 0): (5, 6), ('N50_adaptive', 0): (-40, -30),
+        ('N16_K50_ess05', 0): (5, 6), ('N50_K2', 1000): (-72, -14),
+        ('N50_K10', 1000): (8, -4)}},
+}
 
 
 def figure(output, dataset, store, path, burn=3000):
@@ -209,9 +219,10 @@ def figure(output, dataset, store, path, burn=3000):
     import matplotlib.pyplot as plt
     from fixed100_support import DATASET_CONFIGS
     tag = DATASET_CONFIGS[dataset]['dataset_tag']
+    layout = FIGURE_LAYOUT[dataset]
     long = load_baseline(store, tag, 'default_long', 'sigmas')[:, burn:].ravel() * 1e3
     colors = {'default': '#2a78d6', 'mtmh': '#1baf7a'}
-    fig, ax = plt.subplots(figsize=(6.4, 3.6))
+    fig, ax = plt.subplots(figsize=(6.4, layout.get('height', 3.6)))
     ax.axhspan(long.mean() - long.std(), long.mean() + long.std(), color='#d9d8d4', lw=0)
     ax.axhline(long.mean(), color='#8a8984', lw=1)
     ax.text(55, long.mean() + long.std() + 0.01, r'long Default ($10^7$ iterations) $\pm$1 sd',
@@ -226,8 +237,6 @@ def figure(output, dataset, store, path, burn=3000):
         if is_chain(reps):
             continue
         cfg = json.loads(str(reps[0]['config']))
-        if 'leaf' in cfg and cfg['leaf']:
-            continue  # the earlier, modified Default sweep is not an SMC of this code
         kernel = cfg.get('kernel', 'default')
         sweeps = np.mean([r['stages'][:, 5].sum() for r in reps])
         snaps = sorted(int(k[4:]) for k in reps[0].files if k.startswith('sig_'))
@@ -237,20 +246,24 @@ def figure(output, dataset, store, path, burn=3000):
                     mec='white', mew=1.5, ls='none')
             text = (f"N={cfg['N']}, " + ('adaptive K' if 'adapt' in cfg else f"K={cfg['K']}")
                     + (', MTMH' if kernel == 'mtmh' else '') + (f', +{s}' if s else ''))
-            if (name, s) in LABEL_OFFSETS:
-                ax.annotate(text, (sweeps + s, value), xytext=LABEL_OFFSETS[name, s],
-                            textcoords='offset points', fontsize=7, color='#52514e')
+            if (name, s) in layout['labels']:
+                offset = layout['labels'][name, s]
+                # A label set well away from its point gets a hairline leader.
+                leader = (dict(arrowstyle='-', color='#b0afa9', lw=0.6, shrinkA=1, shrinkB=4)
+                          if np.hypot(*offset) > 45 else None)
+                ax.annotate(text, (sweeps + s, value), xytext=offset, textcoords='offset points',
+                            fontsize=7, color='#52514e', arrowprops=leader)
     ax.plot([], [], 'o', mfc='#52514e', mec='white', ls='none', label='SMC population at beta=1')
     ax.plot([], [], 's', mfc='#52514e', mec='white', ls='none', label='... after further beta=1 sweeps')
     ax.set_xscale('log')
     ax.set_xlim(50, 1.1e4)
-    ax.set_ylim(4.9, 6.0)
+    ax.set_ylim(*layout['ylim'])
     ax.set_xlabel('sweeps per chain or per particle lineage')
     ax.set_ylabel(r'mean $\sigma^2$ (transformed scale, $\times10^{-3}$)')
     for side in ('top', 'right'):
         ax.spines[side].set_visible(False)
     ax.grid(axis='y', color='#ecebe8', lw=0.8)
-    ax.legend(frameon=False, fontsize=7.5, loc='upper right')
+    ax.legend(frameon=False, fontsize=7.5, loc=layout.get('legend', 'upper right'))
     fig.tight_layout()
     fig.savefig(path, dpi=200)
 
