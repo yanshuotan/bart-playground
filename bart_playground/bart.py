@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from joblib import effective_n_jobs
 
-from .samplers import Sampler, DefaultSampler, MultiSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs, mtmh_proposal_probs
+from .samplers import Sampler, DefaultSampler, MultiSampler, PGSampler, ProbitSampler, LogisticSampler, TemperatureSchedule, default_proposal_probs, mtmh_proposal_probs
 from .priors import ComprehensivePrior, ProbitPrior, LogisticPrior
 from .util import Preprocessor, DefaultPreprocessor, ClassificationPreprocessor, Dataset
 from .params import Parameters
@@ -2021,6 +2021,53 @@ class MultiBART(BART):
         prob_1 = np.clip(self.predict(X).reshape(-1, 1), 0.0, 1.0)
         prob_0 = 1 - prob_1
         return np.column_stack([prob_0, prob_1])
+
+class PGBART(BART):
+    """
+    BART fitted with the Particle Gibbs sampler of Lakshminarayanan, Roy and
+    Teh (2015): every tree is redrawn whole by conditional SMC with
+    `n_particles` particles. Same model and prior as DefaultBART.
+    """
+    preprocessor_class = DefaultPreprocessor
+
+    def __init__(self, ndpost=1000, nskip=100, n_trees=200, tree_alpha: float=0.95,
+                 tree_beta: float=2.0, f_k=2.0, eps_q: float=0.9,
+                 eps_nu: float=3, specification="linear", max_bins=100,
+                 random_state=42, temperature=1.0, n_particles: int = 10, max_stages: int = 5000,
+                 dirichlet_prior=False, quick_decay: bool = False,
+                 s_alpha: float = 1.0, fixed_eps_sigma2: Optional[float] = None,
+                 init_trees=None, init_sigma2=None):
+        if max_bins is None:
+            max_bins = 100
+        preprocessor = self.preprocessor_class(max_bins=max_bins)
+        rng = np.random.default_rng(random_state)
+        prior = ComprehensivePrior(n_trees, tree_alpha, tree_beta, f_k, eps_q,
+                             eps_nu, specification, rng, dirichlet_prior, quick_decay=quick_decay, s_alpha=s_alpha,
+                             fixed_eps_sigma2=fixed_eps_sigma2, init_sigma2=init_sigma2)
+        temp_schedule = self._check_temperature(temperature)
+        sampler = PGSampler(prior=prior, generator=rng, temp_schedule=temp_schedule,
+                            n_particles=n_particles, max_stages=max_stages, init_trees=init_trees)
+        super().__init__(preprocessor, sampler, ndpost, nskip)
+
+    def get_params(self) -> Dict[str, Any]:
+        """Get all effective parameters for this model instance."""
+        return {
+            "model_type": "PGBART",
+            "ndpost": self.ndpost,
+            "nskip": self.nskip,
+            "n_trees": self.sampler.tree_prior.n_trees,
+            "tree_alpha": self.sampler.tree_prior.alpha,
+            "tree_beta": self.sampler.tree_prior.beta,
+            "f_k": self.sampler.tree_prior.f_k,
+            "eps_nu": self.sampler.prior.global_prior.eps_nu,
+            "eps_q": self.sampler.prior.global_prior.eps_q,
+            "specification": self.sampler.prior.global_prior.specification,
+            "dirichlet_prior": self.sampler.prior.global_prior.dirichlet_prior,
+            "quick_decay": self.sampler.tree_prior.quick_decay,
+            "n_particles": self.sampler.n_particles,
+            "max_stages": self.sampler.max_stages,
+            "fixed_eps_sigma2": self.sampler.prior.global_prior.fixed_eps_sigma2
+        }
 
 class PipelineBART(BART):
     """

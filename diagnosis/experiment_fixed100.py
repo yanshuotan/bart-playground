@@ -4,6 +4,7 @@ import csv
 import gc
 import json
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ import numpy as np
 from joblib import Parallel, delayed
 from sklearn.metrics import root_mean_squared_error
 
-from bart_playground import DefaultBART, MultiBART, ParallelTemperingBART
+from bart_playground import DefaultBART, MultiBART, PGBART, ParallelTemperingBART
 from bart_playground.samplers import default_proposal_probs, mtmh_proposal_probs
 
 # Seeds; fixed100_support re-exports these. diagnosis/store was made with them.
@@ -25,6 +26,8 @@ GLOBAL_BASE_CHAIN_SEED = 2024
 
 
 METHODS_SHORT = ["default", "default_pt", "mtmh", "mtmh_pt"]
+# Fitted only when asked for by name; not part of the paper's four-method runs.
+METHODS_EXTRA = ["pg"]
 METHODS_ALL = ["default", "default_pt", "mtmh", "mtmh_pt", "default_long"]
 
 
@@ -429,9 +432,10 @@ def run_short_method(
     dirichlet_prior: bool = False,
     s_alpha: float = 1.0,
     pt_n_jobs: int | None = 1,
+    pg_particles: int = 10,
     store_preds=True,
 ):
-    """Run one of the four short methods for one chain.
+    """Run one of the short methods for one chain.
 
     Each model is seeded with chain_seed alone, so running the methods as
     separate tasks gives the same draws as the sequential run_short_chain.
@@ -476,10 +480,24 @@ def run_short_method(
             **pt,
             **common,
         )
+    elif method == "pg":
+        pg_common = {k: v for k, v in common.items() if k != "tol"}
+        model = PGBART(
+            tree_alpha=tree_alpha,
+            tree_beta=tree_beta,
+            n_particles=pg_particles,
+            **pg_common,
+        )
     else:
         raise ValueError(f"Unknown short method: {method}")
+    fit_start = time.perf_counter()
     model.fit(X_train, y_train)
+    fit_seconds = time.perf_counter() - fit_start
     result = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
+    result["fit_seconds"] = np.array([fit_seconds])
+    if method == "pg":
+        # Trees whose structure changed in each sweep, out of n_trees.
+        result["tree_changes"] = np.asarray(model.sampler.changed_per_iter[nskip:], dtype=float)
     del model
     gc.collect()
     return {"chain_id": chain_id, "chain_seed": chain_seed, "method": method, "result": result}
@@ -517,6 +535,12 @@ def save_short_run(
                 store_root / dataset_tag / "preds" / f"{dataset_tag}__run{run_id:03d}__{method}__preds.csv",
                 preds_all_chains,
             )
+        for kind in ("fit_seconds", "tree_changes"):
+            if kind in chain_results[0][method]:
+                _save_numeric_csv(
+                    store_root / dataset_tag / kind / f"{dataset_tag}__run{run_id:03d}__{method}__{kind}.csv",
+                    np.array([r[method][kind] for r in chain_results]),
+                )
         if "vars_histogram" in chain_results[0][method]:
             _save_numeric_csv(
                 store_root / dataset_tag / "vars_histogram"
@@ -905,11 +929,12 @@ def run_fixed100_dataset(
     s_alpha: float = 1.0,
     parallel_methods: bool = False,
     short_methods=None,
+    pg_particles: int = 10,
 ):
     short_methods = list(METHODS_SHORT if short_methods is None else short_methods)
-    unknown = [m for m in short_methods if m not in METHODS_SHORT]
+    unknown = [m for m in short_methods if m not in METHODS_SHORT + METHODS_EXTRA]
     if unknown:
-        raise ValueError(f"Unknown short methods {unknown}; choices={METHODS_SHORT}")
+        raise ValueError(f"Unknown short methods {unknown}; choices={METHODS_SHORT + METHODS_EXTRA}")
     if not run_short and not run_long:
         raise ValueError("At least one of run_short or run_long must be True.")
     if proposal_probs_default is None:
@@ -1046,6 +1071,7 @@ def run_fixed100_dataset(
                 pt_n_jobs=pt_n_jobs,
                 dirichlet_prior=dirichlet_prior,
                 s_alpha=s_alpha,
+                pg_particles=pg_particles,
                 store_preds=store_preds,
             )
             if parallel_methods:
@@ -1108,6 +1134,7 @@ def run_fixed100_dataset(
                     "swap_interval": swap_interval,
                     "pt_n_jobs": pt_n_jobs,
                     "multi_tries": multi_tries,
+                    "pg_particles": pg_particles,
                     "n_trees": n_trees,
                     "dirichlet_prior": dirichlet_prior,
                     "s_alpha": s_alpha,

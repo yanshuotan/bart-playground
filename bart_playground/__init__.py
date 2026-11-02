@@ -1,9 +1,9 @@
-from .bart import BART, DefaultBART, ProbitBART, LogisticBART, MultiBART, PipelineBART, ParallelTemperingBART
+from .bart import BART, DefaultBART, ProbitBART, LogisticBART, MultiBART, PGBART, PipelineBART, ParallelTemperingBART
 from .DataGenerator import DataGenerator
 from .moves import all_moves, Change, Grow, Prune, Swap, MultiGrow, MultiPrune, MultiChange, MultiSwap
 from .params import Tree, Parameters
 from .priors import TreesPrior, GlobalParamPrior, BARTLikelihood, ComprehensivePrior
-from .samplers import Sampler, DefaultSampler, TemperatureSchedule, all_moves, all_samplers, ProbitSampler, LogisticSampler, MultiSampler
+from .samplers import Sampler, DefaultSampler, TemperatureSchedule, all_moves, all_samplers, ProbitSampler, LogisticSampler, MultiSampler, PGSampler
 from .util import DefaultPreprocessor, Dataset
 from .visualization import visualize_tree
 from .xgb_init import fit_and_init_trees, _xgb_json_to_tree
@@ -12,11 +12,11 @@ from .random_init import generate_data_from_defaultbart_prior
 import logging
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
-__all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART", "MultiBART", "PipelineBART", "ParallelTemperingBART",
+__all__ = ["BART", "DefaultBART", "ProbitBART", "LogisticBART", "MultiBART", "PGBART", "PipelineBART", "ParallelTemperingBART",
            "Change", "Grow", "Prune", "Swap", 
            "MultiGrow", "MultiPrune", "MultiChange", "MultiSwap",
            "TreesPrior", "GlobalParamPrior", "BARTLikelihood", "ComprehensivePrior",
            "DataGenerator", "all_moves", "Tree", "Parameters", 
-           "Sampler", "DefaultSampler", "ProbitSampler", "LogisticSampler", "MultiSampler",
+           "Sampler", "DefaultSampler", "ProbitSampler", "LogisticSampler", "MultiSampler", "PGSampler",
            "TemperatureSchedule", "all_samplers", "DefaultPreprocessor", "Dataset", "visualize_tree", 
            "fit_and_init_trees", "_xgb_json_to_tree", "generate_data_from_defaultbart_prior"]

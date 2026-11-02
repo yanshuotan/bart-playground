@@ -78,7 +78,11 @@ class Sampler(ABC):
         self.move_accepted_counts = {k: 0 for k in self.proposals}
 
         self.accepted_moves_logmh = [] # log MH ratios of accepted moves
-        
+
+        # Stored trace states keep each tree's per-row outputs (`evals`) unless
+        # a subclass turns this off; the forest-level `cache` is kept either way.
+        self.trace_keeps_tree_outputs = True
+
     @property
     def data(self) -> Dataset:
         assert self._data, "Data has not been added yet."
@@ -143,6 +147,9 @@ class Sampler(ABC):
                     backup_current = [c.copy(copy_cache=False) for c in current_state]
                 elif isinstance(current_state, Parameters):
                     backup_current = current_state.copy(copy_cache=False)
+                    if not self.trace_keeps_tree_outputs:
+                        for tree in backup_current.trees:
+                            tree.evals = None
                 else:
                     raise ValueError("Invalid current state type")
 
@@ -577,6 +584,113 @@ class MultiSampler(Sampler):
             return iter_current
     
     
+class PGSampler(DefaultSampler):
+    """
+    Particle Gibbs sampler (Lakshminarayanan, Roy and Teh, 2015).
+
+    Each tree is redrawn whole by a conditional SMC run with `n_particles`
+    particles, one of which replays the current tree (see `pg_kernels`); its
+    leaf values are then drawn from their conditional, and the sweep ends with
+    the Default update of the global parameters. It targets the same posterior
+    as `DefaultSampler`.
+    """
+    def __init__(
+        self,
+        prior: ComprehensivePrior,
+        generator: np.random.Generator,
+        temp_schedule=TemperatureSchedule(),
+        n_particles: int = 10,
+        max_stages: int = 5000,
+        init_trees: Optional[list[Tree]] = None,
+    ):
+        if n_particles < 1:
+            raise ValueError("n_particles must be at least 1")
+        # The single "pg" entry keeps the move statistics: selected counts
+        # tree updates, accepted counts those that changed the tree.
+        super().__init__(prior, {"pg": 1.0}, generator, temp_schedule, tol=1, init_trees=init_trees)
+        self.n_particles = int(n_particles)
+        self.max_stages = int(max_stages)
+        # Every sweep redraws the leaves of every tree, so every tree gets a new
+        # `evals` array; keeping them in the trace costs n_trees * N floats per
+        # stored state (15 GB for 10^4 draws of Superconduct).
+        self.trace_keeps_tree_outputs = False
+        self.reference_selected_count = 0
+        self.stages_count = 0
+        self.changed_per_iter = []
+
+    def add_data(self, data: Dataset):
+        super().add_data(data)
+        self._XT = np.ascontiguousarray(data.X.T)
+
+    def add_thresholds(self, thresholds):
+        super().add_thresholds(thresholds)
+        float_dtype = self.data.X.dtype
+        grids = [np.asarray(thresholds[v], dtype=float_dtype) for v in range(len(thresholds))]
+        self._thr_len = np.array([len(g) for g in grids], dtype=np.int64)
+        self._thr_start = np.zeros(len(grids), dtype=np.int64)
+        np.cumsum(self._thr_len[:-1], out=self._thr_start[1:])
+        self._thr_vals = np.concatenate(grids)
+
+    def one_iter(self, current, temp, return_trace=False):
+        """
+        Perform one iteration of the sampler.
+        """
+        from .pg_kernels import pg_tree_csmc
+
+        iter_current = current.copy()
+        iter_trace = [(0, iter_current)]
+        sigma2_t = float(temp * iter_current.global_params["eps_sigma2"][0])
+        s_cumsum = iter_current.global_params.get("s_cumsum", None)
+        var_cumsum = np.empty(0, dtype=np.float64) if s_cumsum is None else np.asarray(s_cumsum, dtype=np.float64)
+        log_alpha = float(np.log(self.tree_prior.alpha))
+        n_changed = 0
+        for k in range(self.tree_prior.n_trees):
+            old = iter_current.trees[k]
+            resid = self.data.y - iter_current.evaluate(all_except=[k])
+            vars_, thresholds, n, leaf_ids, selected, changed, n_stages = pg_tree_csmc(
+                self._XT, resid, sigma2_t, float(self.tree_prior.f_sigma2),
+                log_alpha, float(self.tree_prior.beta), bool(self.tree_prior.quick_decay),
+                var_cumsum, self._thr_vals, self._thr_start, self._thr_len,
+                old.vars.astype(np.int64), old.thresholds.astype(self._thr_vals.dtype),
+                self.n_particles, self.max_stages, int(self.generator.integers(0, 2**31 - 1)),
+            )
+            # Keep the old tree's outputs as `evals`, so update_leaf_vals
+            # moves the forest cache by the difference.
+            new_tree = Tree(
+                old.dataX, vars_.astype(old.vars.dtype), thresholds,
+                np.full(len(vars_), np.nan, dtype=old.leaf_vals.dtype),
+                n, leaf_ids, old.evals,
+            )
+            iter_current.trees[k] = new_tree
+            new_leaf_vals = self.tree_prior.resample_leaf_vals(
+                iter_current,
+                data_y=self.data.y,
+                tree_ids=[k],
+                temp=temp,
+            )
+            iter_current.update_leaf_vals([k], new_leaf_vals)
+            self.move_selected_counts["pg"] += 1
+            self.move_success_counts["pg"] += 1
+            self.reference_selected_count += int(selected == 0)
+            self.stages_count += int(n_stages)
+            if changed:
+                self.move_accepted_counts["pg"] += 1
+                n_changed += 1
+            if return_trace:
+                iter_trace.append((k+1, iter_current.copy()))
+        self.changed_per_iter.append(n_changed)
+        iter_current.global_params = self.global_prior.resample_global_params(
+            iter_current,
+            data_y=self.data.y,
+            temp=temp,
+        )
+        if return_trace:
+            return iter_trace
+        else:
+            del iter_trace
+            return iter_current
+
+
 class LogisticSampler(Sampler):
     """
     Logistic sampler for BART.
@@ -710,7 +824,7 @@ class LogisticSampler(Sampler):
             del iter_trace
             return iter_current
 
-all_samplers = {"default" : DefaultSampler, "multi": MultiSampler, "binary": ProbitSampler, "logistic": LogisticSampler}
+all_samplers = {"default" : DefaultSampler, "multi": MultiSampler, "pg": PGSampler, "binary": ProbitSampler, "logistic": LogisticSampler}
 
 default_proposal_probs = {"grow" : 0.25,
                           "prune" : 0.25,

@@ -68,9 +68,12 @@ def _common_arguments(parser):
                              "the same draws.")
     parser.add_argument(
         "--short-methods", nargs="+",
-        choices=("default", "default_pt", "mtmh", "mtmh_pt"), default=None,
+        choices=("default", "default_pt", "mtmh", "mtmh_pt", "pg"), default=None,
         help="Short-chain methods to fit; each is seeded on its own, so a subset "
-             "matches what a full run would have produced for those methods.")
+             "matches what a full run would have produced for those methods. "
+             "Particle Gibbs (pg) runs only when named.")
+    parser.add_argument("--pg-particles", type=int, default=10,
+                        help="Particles per conditional SMC tree update of the pg method.")
     parser.add_argument("--ladder-tmax", type=float, default=100.0)
     parser.add_argument("--ladder-init-size", type=int, default=10)
     parser.add_argument("--ladder-max-temperatures", type=int, default=0, help="Cap on the ladder size; 0 leaves it uncapped.")
@@ -175,6 +178,7 @@ def _fit_arguments(args, X, y, dataset_tag, store_root, *, long_ndpost, long_sto
         run_long=run_long, dirichlet_prior=dirichlet_prior,
         s_alpha=float(s_alpha), parallel_methods=args.parallel_methods,
         short_methods=args.short_methods,
+        pg_particles=args.pg_particles,
     )
 
 
