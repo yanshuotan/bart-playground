@@ -194,10 +194,12 @@ def is_chain(reps):
     return 'chain' in json.loads(str(reps[0]['config']))
 
 
-# Labelled points (N, K, further beta=1 sweeps) -> label offset in points.
-LABEL_OFFSETS = {(50, 2, 0): (-12, 8), (400, 2, 0): (6, -12), (16, 10, 0): (-36, -14),
-                 (100, 10, 0): (-10, 8), (50, 10, 0): (5, 6), (16, 50, 0): (5, 6),
-                 (50, 2, 1000): (-30, -14), (50, 10, 1000): (5, 6)}
+# Labelled populations (config name, further beta=1 sweeps) -> label offset in points.
+LABEL_OFFSETS = {('N50_K2', 0): (-12, 8), ('N400_K2', 0): (6, -12),
+                 ('N16_K10_ess05_mtmh', 0): (-36, -14), ('N100_K10_ess05', 0): (-10, 8),
+                 ('N50_K10', 0): (5, 6), ('N50_adaptive', 0): (-40, -14),
+                 ('N16_K50_ess05', 0): (5, 6), ('N50_K2', 1000): (-30, -14),
+                 ('N50_K10', 1000): (5, 6)}
 
 
 def figure(output, dataset, store, path, burn=3000):
@@ -233,9 +235,10 @@ def figure(output, dataset, store, path, burn=3000):
             value = np.mean([r[f'w_{s}'] @ r[f'sig_{s}'] for r in reps]) * 1e3
             ax.plot(sweeps + s, value, 'o' if s == 0 else 's', ms=6, mfc=colors[kernel],
                     mec='white', mew=1.5, ls='none')
-            text = f"N={cfg['N']}, K={cfg['K']}" + (', MTMH' if kernel == 'mtmh' else '') + (f', +{s}' if s else '')
-            if (cfg['N'], cfg['K'], s) in LABEL_OFFSETS:
-                ax.annotate(text, (sweeps + s, value), xytext=LABEL_OFFSETS[cfg['N'], cfg['K'], s],
+            text = (f"N={cfg['N']}, " + ('adaptive K' if 'adapt' in cfg else f"K={cfg['K']}")
+                    + (', MTMH' if kernel == 'mtmh' else '') + (f', +{s}' if s else ''))
+            if (name, s) in LABEL_OFFSETS:
+                ax.annotate(text, (sweeps + s, value), xytext=LABEL_OFFSETS[name, s],
                             textcoords='offset points', fontsize=7, color='#52514e')
     ax.plot([], [], 'o', mfc='#52514e', mec='white', ls='none', label='SMC population at beta=1')
     ax.plot([], [], 's', mfc='#52514e', mec='white', ls='none', label='... after further beta=1 sweeps')
@@ -264,11 +267,15 @@ def summarize(output, dataset, store, burn=3000):
     for method in ('default', 'default_pt', 'mtmh', 'mtmh_pt'):
         draws = load_baseline(store, tag, method, 'preds')[:, :, burn:]
         means = draws.mean(2)
+        try:  # Some stores keep no split counts for the PT arms.
+            counts = f'{load_baseline(store, tag, method, "vars_histogram")[:, burn:].sum(-1).mean():.1f}'
+        except FileNotFoundError:
+            counts = 'n/a'
         print(f'{method} chains: distance {np.linalg.norm(means - mean, axis=1).mean():.2f} '
               f'(pooled {np.linalg.norm(means.mean(0) - mean):.2f})  '
-              f'R_BW {means.var(0, ddof=1).mean() / draws.var(2).mean():.3f}  '
+              f'B/W {means.var(0, ddof=1).mean() / draws.var(2).mean():.3f}  '
               f'sigma2 {load_baseline(store, tag, method, "sigmas")[:, burn:].mean():.6f}  '
-              f'splits {load_baseline(store, tag, method, "vars_histogram")[:, burn:].sum(-1).mean():.1f}')
+              f'splits {counts}')
     runs = load_runs(output)
     for name, reps in runs.items():
         if is_chain(reps):
@@ -294,7 +301,7 @@ def summarize(output, dataset, store, burn=3000):
             means, within = np.array(means), np.array(within)
             print(f'  sweep {s:5d}: distance {np.linalg.norm(means - mean, axis=1).mean():.2f} '
                   f'(pooled {np.linalg.norm(means.mean(0) - mean):.2f})  '
-                  f'R_BW {means.var(0, ddof=1).mean() / within.mean():.3f}  '
+                  f'B/W {means.var(0, ddof=1).mean() / within.mean():.3f}  '
                   f'sd ratio {np.sqrt(within.mean(0)).mean() / sd.mean():.3f}  '
                   f'sigma2 {np.mean(sigmas):.6f}  splits {np.mean(counts):.1f}')
 

@@ -189,8 +189,8 @@ worker for its `n_mcmc_steps` sweeps; each (stage, particle) pair has its own
 random stream, so a seeded fit is identical for every worker count above one,
 while `n_jobs=1` keeps the sampler's single stream and gives a different (equally
 valid) realization. The gain grows with `n_mcmc_steps`: on Abalone (48
-particles, 4 workers) annealing took 32 s against 39 s serially with two sweeps,
-and 82 s against 195 s with ten. In `sample_posterior` each task runs an entire
+particles, one Vanda node) annealing took 52 s serially, 34 s with 4 workers and
+21 s with 8 at two sweeps per stage, and 258 s, 86 s and 48 s at ten. In `sample_posterior` each task runs an entire
 particle path, including warm-up, with one BLAS thread; particles' sequential
 tree backfitting and within-particle sweep order are preserved. Prediction and
 variance/variable-count extraction happen in the worker. Shared read-only file
