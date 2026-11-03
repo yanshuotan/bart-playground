@@ -5,9 +5,9 @@ Reads the paper's store (default, default_pt, mtmh, mtmh_pt, default_long) and
 the store written by the pg jobs (pg with C = 10, beside a same-node Default
 rerun that serves as the timing baseline and must equal the stored Default
 draws). Every chain statistic is the one section 6 of the paper computes, on
-the same post-burn draws; on top of those, each method's draws are compared
-with the long Default run. Also summarises the particle-count study and the
-Hypercube-D study when their outputs are given.
+the same post-burn draws, and the equal-time table uses the paper's budget
+b = 2.5. Also summarises the particle-count study and the Hypercube-D study
+when their outputs are given.
 
     python diagnosis/pg/compare_pg.py --pg-store diagnosis/store_pg \
         --pg-c-stores 2=... 5=... 20=... 50=... --hypercube DIR
@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from core import load_with_shape, long_predictions, pointwise_rhat_summary  # noqa: E402
+from core import load_with_shape, pointwise_rhat_summary  # noqa: E402
 from section6_methods import (DATASETS, PREDICTIVE_NOISE_SEED, chain_geometry,  # noqa: E402
                               full_draw_rhat, full_target_vector, predictive_baselines,
                               predictive_metrics, training_targets, y_test)
@@ -65,50 +65,31 @@ def sigmas_of(store: Path, dataset: str, run: int, method: str) -> np.ndarray:
     return np.asarray(raw, dtype=float).reshape(raw.shape[0], -1)
 
 
-def splits_of(store: Path, dataset: str, run: int, method: str) -> np.ndarray:
-    """Splits per forest, (chain, draw)."""
-    return stored(store, dataset, run, method, "vars_histogram").sum(axis=-1)
-
-
-def reference(args, dataset: str, run: int) -> dict:
-    long = long_predictions(args.store_root, dataset, run, args.long_burn)
+def long_sigma2(args, dataset: str, run: int) -> tuple[float, float]:
+    """Mean and sd of the long Default run's noise variance."""
     sig = sigmas_of(args.store_root, dataset, run, "default_long")[:, args.long_burn:]
-    try:
-        splits = splits_of(args.store_root, dataset, run, "default_long")[:, args.long_burn:]
-    except FileNotFoundError:
-        splits = None
-    flat = long.reshape(-1, long.shape[-1])
-    return {"mean": flat.mean(axis=0), "sd": flat.std(axis=0),
-            "sigma2": float(sig.mean()), "sigma2_sd": float(sig.std()),
-            "splits": float(splits.mean()) if splits is not None else np.nan}
+    return float(sig.mean()), float(sig.std())
 
 
-def method_row(args, dataset, run, method, ref, truth, baseline, y_scale) -> dict:
-    store = args.pg_store if method == "pg" else args.store_root
+def run_inputs(args, dataset: str, run: int):
+    """Test targets, predictive baselines and response range of one run."""
+    full_targets = full_target_vector(args.store_root, dataset)
+    truth = y_test(args.store_root, dataset, run)
+    train = training_targets(args.store_root, dataset, run, full_targets, truth)
+    return truth, predictive_baselines(train, truth), float(np.max(train) - np.min(train))
+
+
+def chain_stats(args, store: Path, dataset: str, run: int, method: str, truth, baseline, y_scale) -> dict:
     post = draws_of(store, dataset, run, method)[:, args.short_burn:, :]
     sig = sigmas_of(store, dataset, run, method)[:, args.short_burn:]
     rmse, crps = predictive_metrics(post, sig, truth, y_scale, PREDICTIVE_NOISE_SEED + run)
-    pooled = post.mean(axis=(0, 1))
-    chain_means = post.mean(axis=1)
-    row = {
-        "dataset": dataset, "run": run, "method": NAMES[method],
+    return {
         **full_draw_rhat(post, args.n_segments),
         **chain_geometry(post),
         "rmse": rmse, "crps": crps,
         "relative_rmse": rmse / baseline["naive_rmse"],
         "relative_crps": crps / baseline["climatology_crps"],
-        "ref_distance_pooled": float(np.linalg.norm(pooled - ref["mean"])),
-        "ref_distance_chain": float(np.mean([np.linalg.norm(m - ref["mean"]) for m in chain_means])),
-        "ref_z_rms": float(np.sqrt(np.mean(((pooled - ref["mean"]) / ref["sd"]) ** 2))),
-        "sigma2": float(sig.mean()),
-        "sigma2_z": (float(sig.mean()) - ref["sigma2"]) / ref["sigma2_sd"],
-        "splits": float(splits_of(store, dataset, run, method)[:, args.short_burn:].mean()),
-        "ref_splits": ref["splits"],
     }
-    if method == "pg":
-        changes = stored(args.pg_store, dataset, run, "pg", "tree_changes")
-        row["tree_change_rate"] = float(changes[:, args.short_burn:].mean()) / args.n_trees
-    return row
 
 
 def timing_and_identity(args, dataset: str, run: int) -> dict:
@@ -131,17 +112,17 @@ def extended_default_draws(args, dataset: str, run: int) -> np.ndarray | None:
         return archive["predictions"].transpose(0, 2, 1)
 
 
-def equal_time(args, dataset: str, budget: float) -> list[dict]:
+def equal_time(args, dataset: str, budget: float, pg_ratio: float) -> list[dict]:
     """Run 0 at a per-chain budget of `budget` Default production runs."""
     ratios = cost_ratios(args.timing_dir, dataset)
-    ratios["pg"] = budget  # PG spends the whole budget on its 10^4 iterations
+    ratios["pg"] = pg_ratio
     draws = {m: draws_of(args.pg_store if m == "pg" else args.store_root, dataset, 0, m)
              for m in METHODS}
     ext = extended_default_draws(args, dataset, 0)
     if ext is not None:
         draws["default"] = ext
     iters = {m: int(budget * 10_000 / ratios[m]) for m in METHODS}
-    iters["pg"] = 10_000
+    # PG has 10^4 iterations, fewer than its share where it costs under b
     iters = {m: min(n, draws[m].shape[1]) for m, n in iters.items()}
     keep = min(n - int(round(args.warmup_fraction * n)) for n in iters.values())
     rows = []
@@ -150,8 +131,7 @@ def equal_time(args, dataset: str, budget: float) -> list[dict]:
         summary = pointwise_rhat_summary(sample)
         rows.append({"dataset": dataset, "method": NAMES[m], "budget": budget,
                      "cost_ratio": ratios[m], "iterations": iters[m], "draws_compared": keep,
-                     "rhat_median": summary["median"], "rhat_q90": summary["q90"],
-                     "between_within_ratio": chain_geometry(sample)["between_within_ratio"]})
+                     "rhat_median": summary["median"], "rhat_q90": summary["q90"]})
     return rows
 
 
@@ -162,7 +142,7 @@ def sigma2_figure(args, datasets, path: Path):
     fig, axes = plt.subplots(rows, cols, figsize=(3.4 * cols, 2.6 * rows), squeeze=False)
     edges = np.unique(np.geomspace(1, 10_000, 40).astype(int))
     for ax, dataset in zip(axes.ravel(), datasets):
-        ref = reference(args, dataset, 0)
+        mean, sd = long_sigma2(args, dataset, 0)
         for m in METHODS:
             store = args.pg_store if m == "pg" else args.store_root
             trace = sigmas_of(store, dataset, 0, m).mean(axis=0)
@@ -170,7 +150,7 @@ def sigma2_figure(args, datasets, path: Path):
             values = [trace[a - 1:b].mean() for a, b in zip(edges[:-1], edges[1:])]
             ax.plot(centers, np.asarray(values) * 1e3, color=COLORS[m], lw=1.6 if m == "pg" else 1.0,
                     label=NAMES[m])
-        lo, hi = (ref["sigma2"] - ref["sigma2_sd"]) * 1e3, (ref["sigma2"] + ref["sigma2_sd"]) * 1e3
+        lo, hi = (mean - sd) * 1e3, (mean + sd) * 1e3
         ax.axhspan(lo, hi, color="0.8", zorder=0)
         ax.set_xscale("log")
         ax.set_ylim(lo - 6 * (hi - lo), hi + 10 * (hi - lo))
@@ -194,19 +174,9 @@ def particle_study(args) -> pd.DataFrame:
         for dataset in ("fixed100_Abalone", "fixed100_SeoulBike"):
             if not (store / dataset).exists():
                 continue
-            ref = reference(args, dataset, 0)
-            post = draws_of(store, dataset, 0, "pg")[:, args.short_burn:, :]
-            sig = sigmas_of(store, dataset, 0, "pg")[:, args.short_burn:]
-            pooled = post.mean(axis=(0, 1))
-            rows.append({
-                "dataset": dataset, "particles": C,
-                "seconds_per_chain": float(stored(store, dataset, 0, "pg", "fit_seconds").mean()),
-                "tree_change_rate": float(stored(store, dataset, 0, "pg", "tree_changes")[:, args.short_burn:].mean()) / args.n_trees,
-                **{k: v for k, v in full_draw_rhat(post, args.n_segments).items() if k.startswith("cross")},
-                "between_within_ratio": chain_geometry(post)["between_within_ratio"],
-                "ref_distance_pooled": float(np.linalg.norm(pooled - ref["mean"])),
-                "sigma2_z": (float(sig.mean()) - ref["sigma2"]) / ref["sigma2_sd"],
-            })
+            rows.append({"dataset": dataset, "particles": C,
+                         "seconds_per_chain": float(stored(store, dataset, 0, "pg", "fit_seconds").mean()),
+                         **chain_stats(args, store, dataset, 0, "pg", *run_inputs(args, dataset, 0))})
     return pd.DataFrame(rows)
 
 
@@ -268,7 +238,7 @@ def main() -> int:
     parser.add_argument("--short-burn", type=int, default=3000)
     parser.add_argument("--long-burn", type=int, default=3000)
     parser.add_argument("--n-segments", type=int, default=4)
-    parser.add_argument("--n-trees", type=int, default=100)
+    parser.add_argument("--budget", type=float, default=2.5)
     parser.add_argument("--warmup-fraction", type=float, default=0.3)
     parser.add_argument("--dpi", type=int, default=150)
     args = parser.parse_args()
@@ -278,15 +248,12 @@ def main() -> int:
 
     rows, timing = [], []
     for dataset in args.datasets:
-        full_targets = full_target_vector(args.store_root, dataset)
         for run in args.runs:
-            truth = y_test(args.store_root, dataset, run)
-            train = training_targets(args.store_root, dataset, run, full_targets, truth)
-            baseline = predictive_baselines(train, truth)
-            y_scale = float(np.max(train) - np.min(train))
-            ref = reference(args, dataset, run)
+            inputs = run_inputs(args, dataset, run)
             for method in METHODS:
-                rows.append(method_row(args, dataset, run, method, ref, truth, baseline, y_scale))
+                store = args.pg_store if method == "pg" else args.store_root
+                rows.append({"dataset": dataset, "run": run, "method": NAMES[method],
+                             **chain_stats(args, store, dataset, run, method, *inputs)})
             timing.append(timing_and_identity(args, dataset, run))
             print(f"[pg] {dataset} run {run:03d}", flush=True)
     run_frame = pd.DataFrame(rows)
@@ -307,8 +274,8 @@ def main() -> int:
 
     budget_rows = []
     for dataset in args.datasets:
-        budget = float(timing_frame[(timing_frame.dataset == dataset) & (timing_frame.run == 0)].pg_cost_ratio.iloc[0])
-        budget_rows += equal_time(args, dataset, budget)
+        pg_ratio = float(timing_frame[(timing_frame.dataset == dataset) & (timing_frame.run == 0)].pg_cost_ratio.iloc[0])
+        budget_rows += equal_time(args, dataset, args.budget, pg_ratio)
     pd.DataFrame(budget_rows).to_csv(tables / "pg_equal_time.csv", index=False)
 
     sigma2_figure(args, args.datasets, figures / "pg_sigma2_traces.png")
