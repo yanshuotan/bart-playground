@@ -11,7 +11,8 @@ configured dataset uses runs `000` through `004`.
 | `section6_methods.py` | four-method factorial tables, rolling and projection figures | Figures 4--5, §6 tables |
 | `section6_equal_time.py` | equal-wall-time curves and the pooled-estimator baseline | §6 wall-time figure and tables |
 | `section7_costs.py` | pooling, decomposition, coverage, ESS; scalar-quantity diagnostics | §7 tables and figure |
-| `section7_feature_use.py` | split-use shares, inclusion probabilities and their chain agreement (`feature_use_*.csv`) | `tab:feature-use` |
+| `section7_feature_use.py` | split-use shares, inclusion probabilities and their chain agreement (`feature_use_*.csv`) | `tab:feature-use`, `tab:feature-use-active` |
+| `section7_inclusion_figure.py` | per-chain inclusion probabilities of every predictor for one DART run | `fig:inclusion` |
 | `long_tail_tables.py` | long and contiguous-tail Default records scored as methods (`*_tail_as_method_*.csv`) | `long`/`tail` columns of §7 tables, tail rows of the appendix tables |
 | `long_tail_note.py` | contiguous-tail comparison | supporting figures and CSVs for the outline's tail analysis |
 | `core.py` | shared loading, pointwise R-hat, between/within directions | imported, not run |
@@ -33,6 +34,7 @@ first one, so existing invocations still work.
 .\.venv\Scripts\python.exe diagnosis\paper\section6_equal_time.py curves
 .\.venv\Scripts\python.exe diagnosis\paper\section6_equal_time.py baselines
 .\.venv\Scripts\python.exe diagnosis\paper\section7_feature_use.py
+.\.venv\Scripts\python.exe diagnosis\paper\section7_inclusion_figure.py
 ```
 
 
