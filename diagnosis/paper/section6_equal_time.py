@@ -30,6 +30,11 @@ reruns Default alone at 10^5 iterations under the short-chain seeds, and this
 script reads that output when it is present, checks the overlap against the
 stored short run and uses it in place of it. Every setting is analysed on the
 same budget grid, which ends at $b=2.5$.
+
+The dashed reference line in each panel is the cross-chain median of the
+thinned long Default record ($10^7$ iterations, $b=1000$) for the same run, read
+from the ``*_tail_as_method_run_level.csv`` tables of ``long_tail_tables.py`` so
+that it matches the long-budget table of Section 3. Run that script first.
 """
 from __future__ import annotations
 
@@ -120,9 +125,6 @@ def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--warmup-fraction", type=float, default=0.3)
     parser.add_argument("--min-draws", type=int, default=150,
                         help="Skip a budget point if any method retains fewer draws.")
-    parser.add_argument("--long-fractions", nargs="+", type=float,
-                        default=[0.05, 0.1, 0.25, 0.5, 1.0])
-    parser.add_argument("--long-draws", type=int, default=350)
     parser.add_argument("--dpi", type=int, default=200)
     return parser.parse_args(supplied)
 
@@ -182,7 +184,7 @@ def curves_main(args) -> int:
     args.table_dir.mkdir(parents=True, exist_ok=True)
     args.figure_dir.mkdir(parents=True, exist_ok=True)
 
-    rows, long_rows = [], []
+    rows = []
     for dataset in args.datasets:
         ratios = cost_ratios(args.timing_dir, dataset)
         for run in [args.run]:
@@ -210,33 +212,10 @@ def curves_main(args) -> int:
                         "rhat_median": summary["median"], "rhat_q90": summary["q90"],
                     })
             del draws
-
-            long_hits = sorted((args.store_root / dataset / "preds").glob(
-                f"*__run{run:03d}__default_long__preds.csv"))
-            if long_hits:
-                long_draws = load_with_shape(long_hits[0]).transpose(0, 2, 1)
-                stored = long_draws.shape[1]
-                for fraction in args.long_fractions:
-                    count = int(round(fraction * stored))
-                    if count - int(round(args.warmup_fraction * count)) < args.long_draws:
-                        continue
-                    sample = thinned_tail(long_draws, count, args.warmup_fraction,
-                                          args.long_draws)
-                    summary = pointwise_rhat_summary(sample)
-                    long_rows.append({
-                        "dataset": dataset, "run": run, "method": "Default (long)",
-                        "budget": fraction * 1000.0, "cost_ratio": 1.0,
-                        "iterations": int(fraction * 10_000_000),
-                        "draws_compared": args.long_draws,
-                        "rhat_median": summary["median"], "rhat_q90": summary["q90"],
-                    })
-                del long_draws
             print(f"[equal-time] {dataset} run {run:03d}", flush=True)
 
-    frame = pd.DataFrame(rows + long_rows)
-    frame.to_csv(args.table_dir / "equal_time_budget.csv", index=False)
-
     short = pd.DataFrame(rows)
+    short.to_csv(args.table_dir / "equal_time_budget.csv", index=False)
     reached = set.intersection(*(set(g.budget) for _, g in short.groupby("dataset")))
     headline = max(reached)
     summary = short[short.budget.eq(headline)][
@@ -247,7 +226,7 @@ def curves_main(args) -> int:
     order = [d for d in ORDER if d in set(short.dataset)]
     median = summary.pivot(index="dataset", columns="method", values="rhat_median")
     q90 = summary.pivot(index="dataset", columns="method", values="rhat_q90")
-    draw_curves(args, frame, order)
+    draw_curves(args, short, long_reference(args.table_dir, args.run), order)
 
     pd.set_option("display.width", 200)
     wide = median.loc[order]
@@ -268,11 +247,20 @@ def curves_main(args) -> int:
     return 0
 
 
-def draw_curves(args: argparse.Namespace, frame: pd.DataFrame, order) -> None:
+def long_reference(table_dir: Path, run: int) -> pd.Series:
+    """Cross-chain median of the thinned long Default record, per setting."""
+    paths = [table_dir / f"{name}_tail_as_method_run_level.csv" for name in ("long", "dart")]
+    missing = [p.name for p in paths if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"{missing} not found; run long_tail_tables.py first")
+    table = pd.concat([pd.read_csv(p) for p in paths])
+    rows = table[table.run.eq(run) & table.method.eq("default_long")]
+    return rows.set_index("dataset")["cross_rhat_median"]
+
+
+def draw_curves(args: argparse.Namespace, short: pd.DataFrame, floor: pd.Series,
+                order) -> None:
     """One panel per setting: agreement against wall time, all on one grid."""
-    short = frame[frame.method.ne("Default (long)")]
-    floor = (frame[frame.method.eq("Default (long)") & frame.budget.eq(1000.0)]
-             .set_index("dataset")["rhat_median"])
     fig, axes = plt.subplots(3, 4, figsize=(11.2, 7.4), sharex=True)
     flat = axes.ravel()
     for ax, dataset in zip(flat, order):

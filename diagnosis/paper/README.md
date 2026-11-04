@@ -27,11 +27,11 @@ first one, so existing invocations still work.
 .\.venv\Scripts\python.exe diagnosis\paper\section3_long_budget.py figures
 .\.venv\Scripts\python.exe diagnosis\paper\section3_scaling.py
 .\.venv\Scripts\python.exe diagnosis\paper\section6_methods.py
-.\.venv\Scripts\python.exe diagnosis\paper\section6_equal_time.py curves
-.\.venv\Scripts\python.exe diagnosis\paper\section6_equal_time.py baselines
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py costs --long
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py scalar
 .\.venv\Scripts\python.exe diagnosis\paper\long_tail_tables.py
+.\.venv\Scripts\python.exe diagnosis\paper\section6_equal_time.py curves
+.\.venv\Scripts\python.exe diagnosis\paper\section6_equal_time.py baselines
 .\.venv\Scripts\python.exe diagnosis\paper\section7_feature_use.py
 ```
 
