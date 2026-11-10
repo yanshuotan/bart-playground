@@ -479,23 +479,30 @@ def scalar_main(args):
                 rows.extend(result['rows']); chains.extend(result['chains'])
             figure = figs/f'{dataset}_run000.png'
             if run == 0 and not (all_cached and figure.is_file()):
-                fig, axes = plt.subplots(2, 4, figsize=(14, 6), layout='constrained')
+                fig, axes = plt.subplots(2, 4, figsize=(11.2, 5.0), sharex=True,
+                                         layout='constrained')
+                labels = {'panel_mean_f': 'panel-average prediction',
+                          'noise_variance_y': 'noise variance (log scale)'}
                 for column, method in enumerate(['default', 'mtmh', 'default_pt', 'mtmh_pt']):
                     for qindex, row in enumerate(results[method]['rows']):
                         quantity = row['quantity']
                         x, series = results[method]['traces'][quantity]
                         ax = axes[qindex, column]
                         for c, trace in enumerate(series):
-                            ax.plot(x, trace, lw=.5, alpha=.7, label=f'chain {c}')
+                            ax.plot(x, trace, lw=.5, alpha=.75, label=f'chain {c + 1}')
                         ax.axvline(args.burn, color='black', ls='--', lw=.8)
-                        ax.set_title(f'{METHOD_NAMES[method]} | R-hat {row["rhat"]:.3f}')
-                        ax.set_ylabel(quantity); ax.set_xlabel('stored draw')
+                        ax.set_title(rf'{METHOD_NAMES[method]}, $\widehat{{R}}={row["rhat"]:.3f}$',
+                                     fontsize=9)
+                        ax.tick_params(labelsize=7.5)
                         if quantity == 'noise_variance_y':
                             ax.set_yscale('log')
-                            ax.set_ylabel('noise variance (outcome scale; log axis)')
-                axes[0, 0].legend(fontsize=6)
-                fig.suptitle(f'{dataset}, run 0; dashed line ends warm-up')
-                fig.savefig(figure, dpi=150); plt.close(fig)
+                            ax.set_xlabel('iteration', fontsize=8)
+                        if column == 0:
+                            ax.set_ylabel(labels[quantity], fontsize=8)
+                handles, names = axes[0, 0].get_legend_handles_labels()
+                fig.legend(handles, names, loc='outside upper center', ncol=4,
+                           fontsize=8, frameon=False)
+                fig.savefig(figure, dpi=200); plt.close(fig)
             print(f'[scalar] {dataset} run {run}', flush=True)
     print(f'[scalar] cache: {cache.hits} reused, {cache.misses} computed', flush=True)
     if args.plots_only:
