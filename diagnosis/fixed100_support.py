@@ -116,8 +116,8 @@ DATASET_CONFIGS = {
     },
 
     "calhousing": {
-        "dataset_tag": "fixed100_CalHousing_subsample5000",
-        "subsample_n": 5000,
+        "dataset_tag": "fixed100_CalHousing_subsample10000",
+        "subsample_n": 10000,
         "subsample_seed": 42,
         "long_ndpost": 10_000_000,
         "long_store_every": 1000,
@@ -126,11 +126,11 @@ DATASET_CONFIGS = {
     "superconduct": {
         # 21,263 rows and 81 numeric predictors of critical temperature, with
         # no missing values and no categorical columns. Subsampled to the same
-        # 5,000 rows as CalHousing so that the two differ in predictor count
+        # 10,000 rows as CalHousing so that the two differ in predictor count
         # and not in sample size.
-        "dataset_tag": "fixed100_Superconduct_subsample5000",
+        "dataset_tag": "fixed100_Superconduct_subsample10000",
         "uci_id": 464,
-        "subsample_n": 5000,
+        "subsample_n": 10000,
         "subsample_seed": 42,
         "long_ndpost": 10_000_000,
         "long_store_every": 1000,

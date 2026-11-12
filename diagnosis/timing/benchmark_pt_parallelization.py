@@ -126,8 +126,8 @@ DART = {"dirichlet_prior": True, "s_alpha": 1.0}
 SOURCES = {
     "abalone": _Source("fixed100_Abalone", "fixed100_Abalone", _named("abalone")),
     "airfoil": _Source("fixed100_Airfoil", "fixed100_Airfoil", _named("airfoil")),
-    "calhousing": _Source("fixed100_CalHousing_subsample5000",
-                          "fixed100_CalHousing_subsample5000", _named("calhousing")),
+    "calhousing": _Source("fixed100_CalHousing_subsample10000",
+                          "fixed100_CalHousing_subsample10000", _named("calhousing")),
     "ccpp": _Source("fixed100_CCPP", "fixed100_CCPP", _named("ccpp")),
     "concrete": _Source("fixed100_Concrete", "fixed100_Concrete", _named("concrete")),
     "cpu_act": _Source("fixed100_CPUAct", "fixed100_CPUAct", _named("cpu_act")),
@@ -141,8 +141,8 @@ SOURCES = {
                              "fixed100_FriedmanSparseDirP200K5", _sparse("friedman_p200_k5"),
                              DART),
     "seoul_bike": _Source("fixed100_SeoulBike", "fixed100_SeoulBike", _named("seoul_bike")),
-    "superconduct": _Source("fixed100_Superconduct_subsample5000",
-                            "fixed100_Superconduct_subsample5000", _named("superconduct")),
+    "superconduct": _Source("fixed100_Superconduct_subsample10000",
+                            "fixed100_Superconduct_subsample10000", _named("superconduct")),
 }
 DATASETS = tuple(SOURCES)
 # (label, method, backend) in execution order within a chain. Serial and

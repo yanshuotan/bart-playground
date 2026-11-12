@@ -71,25 +71,25 @@ TIMING_TAG = {
     "fixed100_Airfoil": "fixed100_Airfoil",
     "fixed100_CCPP": "fixed100_CCPP",
     "fixed100_CPUAct": "fixed100_CPUAct",
-    "fixed100_CalHousing_subsample5000": "fixed100_CalHousing_subsample5000",
+    "fixed100_CalHousing_subsample10000": "fixed100_CalHousing_subsample10000",
     "fixed100_Concrete": "fixed100_Concrete",
     "fixed100_Friedman": "fixed100_Friedman",
     "fixed100_FriedmanSparseDir_p20": "fixed100_FriedmanSparseDirP20K5",
     "fixed100_FriedmanSparseDir_p100": "fixed100_FriedmanSparseDir",
     "fixed100_FriedmanSparseDir_p200": "fixed100_FriedmanSparseDirP200K5",
     "fixed100_SeoulBike": "fixed100_SeoulBike",
-    "fixed100_Superconduct_subsample5000": "fixed100_Superconduct_subsample5000",
+    "fixed100_Superconduct_subsample10000": "fixed100_Superconduct_subsample10000",
 }
 DISPLAY = {
     "fixed100_Abalone": "Abalone", "fixed100_Airfoil": "Airfoil",
     "fixed100_CCPP": "CCPP", "fixed100_CPUAct": "CPU activity",
-    "fixed100_CalHousing_subsample5000": "CalHousing",
+    "fixed100_CalHousing_subsample10000": "CalHousing",
     "fixed100_Concrete": "Concrete", "fixed100_Friedman": "Friedman",
     "fixed100_FriedmanSparseDir_p20": "DART $d=20$",
     "fixed100_FriedmanSparseDir_p100": "DART $d=100$",
     "fixed100_FriedmanSparseDir_p200": "DART $d=200$",
     "fixed100_SeoulBike": "SeoulBike",
-    "fixed100_Superconduct_subsample5000": "Superconduct",
+    "fixed100_Superconduct_subsample10000": "Superconduct",
 }
 # store folder -> how to rebuild the design so that the noise-free signal is known
 SYNTHETIC = {

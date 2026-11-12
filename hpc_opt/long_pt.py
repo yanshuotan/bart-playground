@@ -37,7 +37,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "diagnosis"))
 
 TAGS = {"concrete": "fixed100_Concrete", "seoul_bike": "fixed100_SeoulBike", "abalone": "fixed100_Abalone",
-        "airfoil": "fixed100_Airfoil", "calhousing": "fixed100_CalHousing_subsample5000", "ccpp": "fixed100_CCPP"}
+        "airfoil": "fixed100_Airfoil", "calhousing": "fixed100_CalHousing_subsample10000", "ccpp": "fixed100_CCPP"}
 SHORT_STORE = Path("/scratch/e1377027/rerun_ae")
 LONG_SEED_OFFSET = 100_000  # run_fixed100.py: long chains add 100000 to the chain seed
 

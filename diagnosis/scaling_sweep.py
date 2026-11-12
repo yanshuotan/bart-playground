@@ -81,7 +81,7 @@ def load_source(args: argparse.Namespace, noise: float) -> tuple[np.ndarray, np.
                   "n_samples": args.n_generated, "noise": noise}
         return _load_generator_dataset(config, "friedman1")
     if args.source == "calhousing":
-        # the full design rather than the 5,000-row subsample the main
+        # the full design rather than the 10,000-row subsample the main
         # experiment uses, so the sweep has room above that size
         from sklearn.datasets import fetch_california_housing
 

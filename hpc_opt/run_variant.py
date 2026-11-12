@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "diagnosis"))
 
 TAGS = {"concrete": "fixed100_Concrete", "seoul_bike": "fixed100_SeoulBike", "abalone": "fixed100_Abalone",
-        "airfoil": "fixed100_Airfoil", "calhousing": "fixed100_CalHousing_subsample5000", "ccpp": "fixed100_CCPP"}
+        "airfoil": "fixed100_Airfoil", "calhousing": "fixed100_CalHousing_subsample10000", "ccpp": "fixed100_CCPP"}
 BASELINE = Path("/scratch/e1377027/share_pt")
 METHOD_ORDER = ("default", "default_pt", "mtmh", "mtmh_pt")
 

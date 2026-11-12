@@ -30,7 +30,7 @@ DATASETS = (
     "fixed100_Abalone",
     "fixed100_Airfoil",
     "fixed100_CCPP",
-    "fixed100_CalHousing_subsample5000",
+    "fixed100_CalHousing_subsample10000",
     "fixed100_Concrete",
     "fixed100_CPUAct",
     "fixed100_Friedman",
@@ -38,7 +38,7 @@ DATASETS = (
     "fixed100_FriedmanSparseDir_p100",
     "fixed100_FriedmanSparseDir_p200",
     "fixed100_SeoulBike",
-    "fixed100_Superconduct_subsample5000",
+    "fixed100_Superconduct_subsample10000",
 )
 RUNS = tuple(range(5))
 # Bump when a per-method calculation below changes, so cached results are redone.
@@ -95,13 +95,13 @@ TARGET_LOADERS = {
     "fixed100_Abalone": "abalone",
     "fixed100_Airfoil": "airfoil",
     "fixed100_CCPP": "ccpp",
-    "fixed100_CalHousing_subsample5000": "calhousing",
+    "fixed100_CalHousing_subsample10000": "calhousing",
     "fixed100_CPUAct": "cpu_act",
     "fixed100_Concrete": "concrete",
     "fixed100_Friedman": "friedman",
     "fixed100_FriedmanSparseDir_p100": "friedman_sparse_dir",
     "fixed100_SeoulBike": "seoul_bike",
-    "fixed100_Superconduct_subsample5000": "superconduct",
+    "fixed100_Superconduct_subsample10000": "superconduct",
 }
 SPARSE_TARGET_LOADERS = {
     "fixed100_FriedmanSparseDir_p20": "friedman_p20_k5",
