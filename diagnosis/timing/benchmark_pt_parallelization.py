@@ -144,6 +144,10 @@ SOURCES = {
     "superconduct": _Source("fixed100_Superconduct_subsample10000",
                             "fixed100_Superconduct_subsample10000", _named("superconduct")),
 }
+# Every other configured dataset is stored under its own tag.
+for _key, _cfg in DATASET_CONFIGS.items():
+    if _key not in SOURCES and _key not in ("friedman_sparse_dir",):
+        SOURCES[_key] = _Source(_cfg["dataset_tag"], _cfg["dataset_tag"], _named(_key))
 DATASETS = tuple(SOURCES)
 # (label, method, backend) in execution order within a chain. Serial and
 # parallel runs of a PT method are adjacent so both see similar node conditions.

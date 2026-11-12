@@ -98,7 +98,7 @@ def parse_args(argv=None):
     sub = parser.add_subparsers(dest="experiment", required=True)
     fixed = sub.add_parser("fixed", help="Run the retained named datasets")
     _common_arguments(fixed)
-    fixed.add_argument("--datasets", nargs="+", choices=("abalone", "airfoil", "calhousing", "ccpp", "concrete", "cpu_act", "friedman", "friedman_sparse_dir", "seoul_bike", "superconduct"), default=["abalone", "concrete", "friedman"])
+    fixed.add_argument("--datasets", nargs="+", choices=tuple(DATASET_CONFIGS), default=["abalone", "concrete", "friedman"])
     fixed.add_argument("--run-ids", nargs="+", help="Only these run IDs, e.g. 2 3 4 or 2-4")
     fixed.add_argument("--skip-short", action="store_true")
     fixed.add_argument("--skip-long", action="store_true")

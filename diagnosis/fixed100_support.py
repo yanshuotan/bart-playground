@@ -141,6 +141,43 @@ DATASET_CONFIGS = {
 }
 
 
+def _openml_setting(tag: str, openml_id: int, subsample_n: int | None = None) -> dict:
+    """An OpenML regression setting processed like every other real dataset:
+    the OpenML default target, OpenML's ignored columns left out, categorical
+    columns one-hot, rows with non-finite values dropped, and a fixed random
+    subset of 10,000 rows when there are more."""
+    cfg = {
+        "dataset_tag": tag,
+        "openml_id": openml_id,
+        "long_ndpost": 10_000_000,
+        "long_store_every": 1000,
+        "drop_columns": [],
+        "categorical_columns": "auto",
+        "target_column": None,
+    }
+    if subsample_n is not None:
+        cfg.update(subsample_n=subsample_n, subsample_seed=42)
+    return cfg
+
+
+# Added 2026-11. Original OpenML versions only; none is a preprocessed
+# benchmark copy.
+DATASET_CONFIGS.update({
+    "protein": _openml_setting("fixed100_Protein_subsample10000", 44963, 10000),
+    "diamonds": _openml_setting("fixed100_Diamonds_subsample10000", 44979, 10000),
+    "sarcos": _openml_setting("fixed100_Sarcos_subsample10000", 44976, 10000),
+    "miami_housing": _openml_setting("fixed100_MiamiHousing_subsample10000", 44983, 10000),
+    "space_ga": _openml_setting("fixed100_SpaceGA", 45402),
+    "video_transcoding": _openml_setting("fixed100_VideoTranscoding_subsample10000", 44974, 10000),
+    "cps88wages": _openml_setting("fixed100_CPS88Wages_subsample10000", 44984, 10000),
+    "munich_rent": _openml_setting("fixed100_MunichRent", 46772),
+    "black_friday": _openml_setting("fixed100_BlackFriday_subsample10000", 41540, 10000),
+    "buzz_twitter": _openml_setting("fixed100_BuzzTwitter_subsample10000", 4549, 10000),
+    "qsar_fish": _openml_setting("fixed100_QSARFishToxicity", 44970),
+    "cars": _openml_setting("fixed100_Cars", 44994),
+})
+
+
 GENERATOR_SCENARIOS = {
     "friedman": "friedman1",
     "friedman_sparse_dir": "friedman1",
@@ -256,26 +293,53 @@ UCI_CACHE_DIR = Path(__file__).resolve().parent / "store" / "uci_cache"
 OPENML_CACHE_DIR = Path(__file__).resolve().parent / "store" / "openml_cache"
 
 
+def _write_frame_cache(cache_dir: Path, name: str, features, targets):
+    """Write the frames, and which feature columns are categorical.
+
+    A CSV keeps no dtypes, so a categorical column coded with numbers (a zip
+    code, a month) would come back as a plain number and escape the one-hot
+    encoding. The sidecar list restores it.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    features.to_csv(cache_dir / f"{name}__features.csv", index=False)
+    targets.to_csv(cache_dir / f"{name}__targets.csv", index=False)
+    categorical = list(features.select_dtypes(include=["object", "category", "bool"]).columns)
+    (cache_dir / f"{name}__categorical.json").write_text(json.dumps(categorical))
+
+
+def _read_frame_cache(cache_dir: Path, name: str):
+    """The cached frames, or None. Caches written before the categorical
+    sidecar existed are read as plain CSV, as they always were."""
+    features_path = cache_dir / f"{name}__features.csv"
+    targets_path = cache_dir / f"{name}__targets.csv"
+    if not (features_path.is_file() and targets_path.is_file()):
+        return None
+    features, targets = pd.read_csv(features_path), pd.read_csv(targets_path)
+    sidecar = cache_dir / f"{name}__categorical.json"
+    if sidecar.is_file():
+        for col in json.loads(sidecar.read_text()):
+            values = features[col]
+            # missing stays missing, as it does for an object column
+            features[col] = values.where(values.isna(), values.astype(str)).astype("category")
+    return features, targets
+
+
 def _fetch_uci_frames(name: str, uci_id: int):
     """Raw UCI features/targets, from a local cache when one exists.
 
     Cluster compute nodes generally have no outbound network, so the first call
     on a machine that does have one writes the frames to disk and later calls
     read them back. Populate the cache on a login node before submitting a
-    batch job.
+    batch job. A fresh download is returned through the cache too, so the first
+    load and every later one see the same frames.
     """
-    features_path = UCI_CACHE_DIR / f"{name}__features.csv"
-    targets_path = UCI_CACHE_DIR / f"{name}__targets.csv"
-    if features_path.is_file() and targets_path.is_file():
-        return pd.read_csv(features_path), pd.read_csv(targets_path)
+    cached = _read_frame_cache(UCI_CACHE_DIR, name)
+    if cached is not None:
+        return cached
 
     ds = fetch_ucirepo(id=uci_id)
-    features = ds.data.features.copy()
-    targets = ds.data.targets.copy()
-    UCI_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    features.to_csv(features_path, index=False)
-    targets.to_csv(targets_path, index=False)
-    return features, targets
+    _write_frame_cache(UCI_CACHE_DIR, name, ds.data.features.copy(), ds.data.targets.copy())
+    return _read_frame_cache(UCI_CACHE_DIR, name)
 
 
 def _fetch_openml_frames(name: str, data_id: int):
@@ -286,20 +350,17 @@ def _fetch_openml_frames(name: str, data_id: int):
     columns. Same offline story as `_fetch_uci_frames`: populate the cache on a
     login node before submitting a batch job.
     """
-    features_path = OPENML_CACHE_DIR / f"{name}__features.csv"
-    targets_path = OPENML_CACHE_DIR / f"{name}__targets.csv"
-    if features_path.is_file() and targets_path.is_file():
-        return pd.read_csv(features_path), pd.read_csv(targets_path)
+    cached = _read_frame_cache(OPENML_CACHE_DIR, name)
+    if cached is not None:
+        return cached
 
     from sklearn.datasets import fetch_openml
 
     bunch = fetch_openml(data_id=data_id, as_frame=True)
     features = bunch.data.copy()
     targets = bunch.target.to_frame() if hasattr(bunch.target, "to_frame") else pd.DataFrame(bunch.target)
-    OPENML_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    features.to_csv(features_path, index=False)
-    targets.to_csv(targets_path, index=False)
-    return features, targets
+    _write_frame_cache(OPENML_CACHE_DIR, name, features, targets)
+    return _read_frame_cache(OPENML_CACHE_DIR, name)
 
 
 def load_dataset(name: str):
