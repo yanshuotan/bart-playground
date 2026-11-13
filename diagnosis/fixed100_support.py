@@ -161,7 +161,7 @@ def _openml_setting(tag: str, openml_id: int, subsample_n: int | None = None) ->
 
 
 # Added 2026-11. Original OpenML versions only; none is a preprocessed
-# benchmark copy.
+# benchmark copy. All are real data except kin8nm, a simulator output.
 DATASET_CONFIGS.update({
     "protein": _openml_setting("fixed100_Protein_subsample10000", 44963, 10000),
     "diamonds": _openml_setting("fixed100_Diamonds_subsample10000", 44979, 10000),
@@ -174,6 +174,8 @@ DATASET_CONFIGS.update({
     "qsar_fish": _openml_setting("fixed100_QSARFishToxicity", 44970),
     "cars": _openml_setting("fixed100_Cars", 44994),
     "fiat500": _openml_setting("fixed100_Fiat500", 43828),
+    # Simulated: forward kinematics of an 8-link robot arm with added noise (Delve).
+    "kin8nm": _openml_setting("fixed100_Kin8nm", 189),
 })
 
 
