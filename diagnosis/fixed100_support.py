@@ -170,11 +170,10 @@ DATASET_CONFIGS.update({
     "space_ga": _openml_setting("fixed100_SpaceGA", 45402),
     "video_transcoding": _openml_setting("fixed100_VideoTranscoding_subsample10000", 44974, 10000),
     "cps88wages": _openml_setting("fixed100_CPS88Wages_subsample10000", 44984, 10000),
-    "munich_rent": _openml_setting("fixed100_MunichRent", 46772),
     "black_friday": _openml_setting("fixed100_BlackFriday_subsample10000", 41540, 10000),
-    "buzz_twitter": _openml_setting("fixed100_BuzzTwitter_subsample10000", 4549, 10000),
     "qsar_fish": _openml_setting("fixed100_QSARFishToxicity", 44970),
     "cars": _openml_setting("fixed100_Cars", 44994),
+    "fiat500": _openml_setting("fixed100_Fiat500", 43828),
 })
 
 
