@@ -73,7 +73,7 @@ def _common_arguments(parser):
              "matches what a full run would have produced for those methods.")
     parser.add_argument("--ladder-tmax", type=float, default=100.0)
     parser.add_argument("--ladder-init-size", type=int, default=10)
-    parser.add_argument("--ladder-max-temperatures", type=int, default=0, help="Cap on the ladder size; 0 leaves it uncapped.")
+    parser.add_argument("--ladder-max-temperatures", type=int, default=60, help="Cap on the ladder size (default 60, the most a 64-core node can time with one worker per temperature; every ladder before the cap was added had at most 60); 0 leaves it uncapped.")
     parser.add_argument("--ladder-target-rate", type=float, default=0.4)
     parser.add_argument("--ladder-max-rounds", type=int, default=10)
     parser.add_argument("--ladder-ndpost", type=int, default=500,

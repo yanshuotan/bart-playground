@@ -239,6 +239,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ladder-init-size", type=int, default=10)
     parser.add_argument("--ladder-target-rate", type=float, default=0.4)
     parser.add_argument("--ladder-max-rounds", type=int, default=10)
+    parser.add_argument("--ladder-max-temperatures", type=int, default=60,
+                        help="Cap on the searched ladder size, as in run_fixed100.py; 0 leaves it uncapped.")
     parser.add_argument("--ladder-ndpost", type=int, default=500)
     parser.add_argument("--ladder-nskip", type=int, default=500)
     parser.add_argument("--ladder-search-points", type=int, default=1000)
@@ -349,7 +351,8 @@ def timed_ladder_search(name: str, split: dict[str, Any], args) -> dict[str, Any
             n_trees=args.n_trees, tree_alpha=args.tree_alpha, tree_beta=args.tree_beta,
             proposal_probs=default_proposal_probs,
             target_rate=args.ladder_target_rate, max_rounds=args.ladder_max_rounds,
-            max_temperatures=None, ndpost=args.ladder_ndpost, nskip=args.ladder_nskip,
+            max_temperatures=args.ladder_max_temperatures if args.ladder_max_temperatures > 0 else None,
+            ndpost=args.ladder_ndpost, nskip=args.ladder_nskip,
             random_state=args.ladder_random_state + 10000 * args.run_id,
             swap_interval=args.swap_interval, post_swap_repair_steps=0,
             initial_temperatures=initial_temperatures(args),
