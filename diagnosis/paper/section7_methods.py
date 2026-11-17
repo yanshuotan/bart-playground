@@ -313,31 +313,26 @@ def predictive_baselines(train_targets: np.ndarray, truth: np.ndarray) -> dict[s
     }
 
 
-def plot_rhat_comparison(within_frames: dict[str, pd.DataFrame], title: str) -> plt.Figure:
-    """Within-chain segment R-hat through the run, one line per method.
+def plot_rhat_comparison(cross_frames: dict[str, pd.DataFrame], title: str) -> plt.Figure:
+    """Rolling cross-chain pointwise R-hat through the run, one line per method.
 
-    The cross-chain panel that used to sit beside this is dropped: the
-    factorial table already ranks the methods on cross-chain agreement using
-    every retained draw, and placing the two side by side invited reading one
-    against the other even though they answer different questions.
+    The line is the median over test inputs and the band the interquartile
+    range; windows start at initialization.
     """
     fig, ax = plt.subplots(1, 1, figsize=(7.2, 4.8), layout="constrained")
     for method in METHODS:
-        within = within_frames[method]
-        # the band spans the four chains, the line is their median
-        reduced = within.groupby("window_end")["median"].agg(
-            center="median", low="min", high="max"
-        ).reset_index()
-        ax.plot(reduced["window_end"], reduced["center"], color=METHOD_COLORS[method],
+        cross = cross_frames[method].sort_values("window_end")
+        ax.plot(cross["window_end"], cross["median"], color=METHOD_COLORS[method],
                 linewidth=1.8, label=METHOD_NAMES[method])
-        ax.fill_between(reduced["window_end"], reduced["low"], reduced["high"],
-                        color=METHOD_COLORS[method], alpha=0.10)
+        ax.fill_between(cross["window_end"], cross["q25"], cross["q75"],
+                        color=METHOD_COLORS[method], alpha=0.12)
     ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1)
     ax.set_xlabel("window end")
     ax.set_ylabel("rank-split R-hat")
     ax.grid(alpha=0.2)
     ax.legend(fontsize=8)
-    fig.suptitle(title)
+    if title:
+        fig.suptitle(title)
     return fig
 
 
@@ -614,7 +609,7 @@ def parse_args() -> argparse.Namespace:
 
 def method_results(args, dataset: str, run: int, method: str, truth: np.ndarray,
                    baseline: dict[str, float], y_scale: float) -> dict:
-    """Everything section 6 derives from one method's draws in one run."""
+    """Everything section 7 derives from one method's draws in one run."""
     all_draws = predictions(args.store_root, dataset, run, method, 0)
     post_burn = all_draws[:, args.short_burn:, :]
     worst = worst_direction_summary(post_burn, args.ridge_fraction)
@@ -719,7 +714,7 @@ def main() -> int:
         print(f"[comparison:{update_kind}] updated tables: {table_dir}", flush=True)
         return 0
 
-    cache = ResultCache("section6_methods", {
+    cache = ResultCache("section7_methods", {
         "version": CACHE_VERSION, "window": args.window, "step": args.step,
         "segment_length": args.segment_length, "n_segments": args.n_segments,
         "short_burn": args.short_burn, "ridge_fraction": args.ridge_fraction,
@@ -769,9 +764,9 @@ def main() -> int:
             if all_cached and rhat_path.is_file() and worst_path.is_file():
                 continue
             rhat_fig = plot_rhat_comparison(
-                within_by_method,
-                f"{dataset} | run {run:03d} | within-chain segment R-hat: "
-                f"median and chain range",
+                cross_by_method,
+                f"{dataset} | run {run:03d} | rolling cross-chain R-hat: "
+                f"median and interquartile range over test inputs",
             )
             rhat_fig.savefig(rhat_path, dpi=args.dpi, bbox_inches="tight")
             plt.close(rhat_fig)

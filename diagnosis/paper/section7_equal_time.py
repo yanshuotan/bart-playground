@@ -34,7 +34,7 @@ same budget grid, which ends at $b=2.5$.
 The dashed reference line in each panel is the cross-chain median of the
 thinned long Default record ($10^7$ iterations, $b=1000$) for the same run, read
 from the ``*_tail_as_method_run_level.csv`` tables of ``long_tail_tables.py`` so
-that it matches the long-budget table of Section 3. Run that script first.
+that it matches the long-budget table of Section 4. Run that script first.
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ import xarray as xr
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
 from core import load_with_shape, pointwise_rhat_summary  # noqa: E402
-from section6_methods import (full_target_vector, predictive_baselines,  # noqa: E402
+from section7_methods import (full_target_vector, predictive_baselines,  # noqa: E402
                               predictive_metrics, residual_variances, split_indices)
 from section7_costs import scalar_summary, targets  # noqa: E402
 

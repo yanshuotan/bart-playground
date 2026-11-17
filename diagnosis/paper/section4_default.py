@@ -95,13 +95,13 @@ def plot_diagnosis(
     short_post_burn: np.ndarray,
     worst: dict[str, np.ndarray | float],
     cross: pd.DataFrame,
-    within: pd.DataFrame,
     short_burn: int,
     plot_draws: int,
     title: str,
 ) -> plt.Figure:
-    fig, axes = plt.subplots(2, 2, figsize=(13.2, 8.6), layout="constrained")
-    trace_ax, direction_ax, cross_ax, within_ax = axes.flat
+    fig, axd = plt.subplot_mosaic([["a", "b"], ["c", "c"]], figsize=(13.2, 8.2),
+                                  layout="constrained")
+    trace_ax, direction_ax, cross_ax = axd["a"], axd["b"], axd["c"]
     projected = np.asarray(worst["projected"])
     iterations = np.arange(short_burn, short_all.shape[1])
     for chain_id in range(projected.shape[0]):
@@ -120,17 +120,6 @@ def plot_diagnosis(
     cross_ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1, label="1.01")
     cross_ax.set(title="(c) Cross-chain pointwise rank-split R-hat", xlabel="window end", ylabel="R-hat")
     cross_ax.legend(fontsize=8)
-
-    for chain_id, frame in within.groupby("original_chain"):
-        frame = frame.sort_values("window_end")
-        x = frame["window_end"].to_numpy()
-        color = CHAIN_COLORS[int(chain_id)]
-        within_ax.plot(x, frame["median"], color=color, linewidth=1.5,
-                       label=f"chain {int(chain_id) + 1}")
-        within_ax.fill_between(x, frame["q25"], frame["q75"], color=color, alpha=0.08)
-    within_ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1, label="1.01")
-    within_ax.set(title="(d) Within-chain segment rank-split R-hat", xlabel="window end", ylabel="R-hat")
-    within_ax.legend(ncol=3, fontsize=8)
 
     # the fitted first half is left out of the scatter; the trace shows both halves
     short_coords = np.asarray(worst["projected_2d"])[:, int(worst["fit_draws"]):, :]
@@ -152,7 +141,7 @@ def plot_diagnosis(
         ylabel=ylabel,
     )
     direction_ax.legend(ncol=2, fontsize=7.5)
-    for ax in axes.flat:
+    for ax in axd.values():
         ax.grid(alpha=0.2)
     fig.suptitle(title, fontsize=14)
     return fig
@@ -257,7 +246,7 @@ def main() -> int:
             })
 
             fig = plot_diagnosis(
-                short_all, short_post_burn, worst, cross, within,
+                short_all, short_post_burn, worst, cross,
                 args.short_burn, args.plot_draws,
                 f"{dataset} | run {run:03d} | Default sampler diagnosis",
             )

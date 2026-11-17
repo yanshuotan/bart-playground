@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Long-Default records scored as methods: the `long` and `tail` columns.
 
-Three records of Default are scored with the definitions of sections 6 and 7:
+Three records of Default are scored with the definitions of section7_methods and section7_costs:
 
 * ``default``: the production chains, iterations 3,001--10,000;
 * ``default_long``: the 10^7-iteration chains read through their stride-1,000
@@ -11,7 +11,7 @@ Three records of Default are scored with the definitions of sections 6 and 7:
 
 Every record keeps 7,000 draws per chain after the common 3,000-draw warm-up.
 Pointwise and segment R-hat, R_B/W, relative RMSE and CRPS come from
-section6_methods; ESS, the chain-specific MSE share, the between-chain variance
+section7_methods; ESS, the chain-specific MSE share, the between-chain variance
 share and latent-f containment come from section7_costs.score; the scalar
 R-hat values apply section7_costs.scalar_summary to the panel-average
 prediction and the response-scale noise variance. Results are written as
@@ -30,7 +30,7 @@ HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
 sys.path.insert(0, str(DIAG))
 from core import ResultCache, run_inputs  # noqa: E402
-from section6_methods import (PREDICTIVE_NOISE_SEED, chain_geometry,  # noqa: E402
+from section7_methods import (PREDICTIVE_NOISE_SEED, chain_geometry,  # noqa: E402
                               full_draw_rhat, full_target_vector, predictions,
                               predictive_baselines, predictive_metrics,
                               residual_variances, training_targets, y_test)

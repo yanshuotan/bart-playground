@@ -1,19 +1,23 @@
 # Paper analysis
 
-One script per part of the paper, each named for the section it feeds. Every
-configured dataset uses runs `000` through `004`.
+One script per part of the paper, each named for the paper section it was
+written for (Section 4 diagnoses Default, Section 7 compares the four
+samplers). A script whose output also appears in the other section keeps the
+name of the first one it was written for; the last column lists every place.
+Every configured dataset uses runs `000` through `004`.
 
 | Script | Produces | Where it lands |
 |---|---|---|
-| `section3_default.py` | Default-only diagnosis figure and tables | Figure 1 |
-| `section3_long_budget.py` | two-budget R-hat table, long-chain projection figures | `tab:rhat-budgets`, Figure 2, appendix pages |
-| `section3_scaling.py` | sample-size and noise sweep | §3.5 figure and tables |
-| `section6_methods.py` | four-method factorial tables, rolling and projection figures | Figures 4--5, §6 tables |
-| `section6_equal_time.py` | equal-wall-time curves and the pooled-estimator baseline | §6 wall-time figure and tables |
-| `section7_costs.py` | pooling, decomposition, coverage, ESS; scalar-quantity diagnostics | §7 tables and figure |
-| `section7_feature_use.py` | split-use shares, inclusion probabilities and their chain agreement (`feature_use_*.csv`) | `tab:feature-use`, `tab:feature-use-active` |
-| `section7_inclusion_figure.py` | per-chain inclusion probabilities of every predictor for one DART run | `fig:inclusion` |
-| `long_tail_tables.py` | long and contiguous-tail Default records scored as methods (`*_tail_as_method_*.csv`) | `long`/`tail` columns of §7 tables, tail rows of the appendix tables |
+| `section4_default.py` | Default-only diagnosis figure and tables | `fig:default-diagnostic` (4.1) |
+| `section4_long_budget.py` | two-budget R-hat table, long-chain projection figures | `tab:rhat-budgets`, `fig:long-chains` (4.2), `fig:appendix-long-*` |
+| `section4_scaling.py` | sample-size and noise sweep | `fig:scaling` (4.3), size and noise appendix |
+| `section4_worst_input.py` | per-chain densities of latent $f$ and of $f+\sigma\varepsilon$ at the input with the largest pointwise R-hat, one row per record or method | 4.4 Friedman figure, 7.3 sampler figure, appendix overview |
+| `section7_methods.py` | four-method factorial tables, rolling and projection figures | `tab:rhat-ablation`, `tab:joint-ablation`, `tab:prediction-ablation`, `fig:worst-direction-full` (7.2), `fig:representative-rhat`, `tab:appendix-all-methods` |
+| `section7_equal_time.py` | equal-wall-time curves and the pooled-estimator baseline | `tab:production-cost`, `tab:equal-time`, `fig:equal-time` (7.5) |
+| `section7_costs.py` | pooling, decomposition, coverage, ESS; scalar-quantity diagnostics | `tab:default-coverage` (4.4), `tab:coverage` (7.3), ESS, chain-choice and scalar appendix tables |
+| `section7_feature_use.py` | split-use shares, inclusion probabilities and their chain agreement (`feature_use_*.csv`) | 4.4 and 7.4 text, `tab:feature-use`, `tab:feature-use-active` |
+| `section7_inclusion_figure.py` | per-chain inclusion probabilities of every predictor for one DART run | `fig:inclusion-default` (4.4), `fig:inclusion` (7.4) |
+| `long_tail_tables.py` | long and contiguous-tail Default records scored as methods (`*_tail_as_method_*.csv`) | `long`/`tail` columns of the Section 4 and 7 tables, tail rows of the appendix tables |
 | `long_tail_note.py` | contiguous-tail comparison | supporting figures and CSVs for the outline's tail analysis |
 | `core.py` | shared loading, pointwise R-hat, between/within directions | imported, not run |
 
@@ -23,18 +27,22 @@ first one, so existing invocations still work.
 ## Run from the repository root
 
 ```powershell
-.\.venv\Scripts\python.exe diagnosis\paper\section3_default.py
-.\.venv\Scripts\python.exe diagnosis\paper\section3_long_budget.py table
-.\.venv\Scripts\python.exe diagnosis\paper\section3_long_budget.py figures
-.\.venv\Scripts\python.exe diagnosis\paper\section3_scaling.py
-.\.venv\Scripts\python.exe diagnosis\paper\section6_methods.py
+.\.venv\Scripts\python.exe diagnosis\paper\section4_default.py
+.\.venv\Scripts\python.exe diagnosis\paper\section4_long_budget.py table
+.\.venv\Scripts\python.exe diagnosis\paper\section4_long_budget.py figures
+.\.venv\Scripts\python.exe diagnosis\paper\section4_scaling.py
+.\.venv\Scripts\python.exe diagnosis\paper\section7_methods.py
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py costs --long
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py scalar
 .\.venv\Scripts\python.exe diagnosis\paper\long_tail_tables.py
-.\.venv\Scripts\python.exe diagnosis\paper\section6_equal_time.py curves
-.\.venv\Scripts\python.exe diagnosis\paper\section6_equal_time.py baselines
+.\.venv\Scripts\python.exe diagnosis\paper\section7_equal_time.py curves
+.\.venv\Scripts\python.exe diagnosis\paper\section7_equal_time.py baselines
 .\.venv\Scripts\python.exe diagnosis\paper\section7_feature_use.py
 .\.venv\Scripts\python.exe diagnosis\paper\section7_inclusion_figure.py
+.\.venv\Scripts\python.exe diagnosis\paper\section4_worst_input.py --datasets fixed100_Friedman --records default default_long --suffix _long
+.\.venv\Scripts\python.exe diagnosis\paper\section4_worst_input.py --datasets fixed100_Friedman --records default mtmh default_pt mtmh_pt --suffix _methods
+.\.venv\Scripts\python.exe diagnosis\paper\section4_worst_input.py --overview --suffix _default
+.\.venv\Scripts\python.exe diagnosis\paper\section4_worst_input.py --overview --records mtmh_pt --suffix _mtmh_pt
 ```
 
 
@@ -42,7 +50,7 @@ Every script accepts `--help`.
 
 ## Caching
 
-`section6_methods.py`, `section7_costs.py costs`, `section7_costs.py scalar`,
+`section7_methods.py`, `section7_costs.py costs`, `section7_costs.py scalar`,
 `long_tail_tables.py` and `section7_feature_use.py` keep one result per (dataset, run, method) under `diagnosis/paper/cache/<script>/`
 (ignored by git). An entry is reused while the analysis settings, the script's
 `CACHE_VERSION` and the size and mtime of every store file it reads (that
@@ -53,15 +61,15 @@ redrawn only when one of its inputs was recomputed or the file is missing.
 
 Bump `CACHE_VERSION` in a script whenever its per-method calculation changes;
 `--no-cache` recomputes everything and rewrites the entries. The
-`section3_long_budget.py table` cache (`tables/budget_comparison_cache.csv`)
+`section4_long_budget.py table` cache (`tables/budget_comparison_cache.csv`)
 checks the same input signature per run.
 
 ## Notes on individual parts
 
-`section3_long_budget.py figures` reads the table that `... table` writes, so
+`section4_long_budget.py figures` reads the table that `... table` writes, so
 run the table first after any change to the stored draws.
 
-`section3_scaling.py --figure-only` redraws from the stored table without
+`section4_scaling.py --figure-only` redraws from the stored table without
 rescoring the draws.
 
 `section7_costs.py costs --long --reuse-ess` reuses ESS from a cache entry with
@@ -75,7 +83,7 @@ arms plus long Default. It writes run-level and chain-level CSVs, a summary, and
 full run-0 traces with the warm-up boundary. Single-chain R-hat there compares
 temporal halves; it does not measure independent-chain agreement.
 
-`long_tail_tables.py` scores three Default records with the section 6 and 7
+`long_tail_tables.py` scores three Default records with the section7_methods and section7_costs
 definitions: production `default`, the stride-1,000 `default_long` record and
 the contiguous `default_long_tail` record of the final 10,000 iterations. Each
 keeps 7,000 draws per chain after the 3,000-draw warm-up. Standard-BART settings
@@ -90,7 +98,7 @@ records. Split-use shares and inclusion indicators follow the package's
 posterior means `(a/d + c_v)/(a + sum c)` with `a = 1`, computed from the same
 counts.
 
-`section6_equal_time.py baselines` uses run 0 and production wall time only.
+`section7_equal_time.py baselines` uses run 0 and production wall time only.
 Each single-chain estimator gets the full budget and its four stored chains are
 repeated realizations for scoring; four **sequential** pooled Default chains
 divide that budget equally.
@@ -123,6 +131,7 @@ the terminal-window versus long-span comparison.
 
 `core.py` holds the pieces every section needs, including the cross-fitted
 between/within eigenproblem behind all the projection figures. That function was
-previously duplicated verbatim in the section 3 and section 6 scripts, so the
-maths behind Figure 1 and Figure 5 could drift apart silently. There is now one
+previously duplicated verbatim in the section 4 and section 7 scripts, so the
+maths behind `fig:default-diagnostic` and `fig:worst-direction-full` could drift
+apart silently. There is now one
 copy.

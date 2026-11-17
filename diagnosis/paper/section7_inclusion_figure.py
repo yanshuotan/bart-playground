@@ -24,8 +24,8 @@ sys.path.insert(0, str(DIAG))
 from core import load_with_shape  # noqa: E402
 from section7_feature_use import ACTIVE, histogram_path  # noqa: E402
 
-RECORDS = [("default", "Default"), ("mtmh_pt", "MTMH+PT"),
-           ("default_long", r"Default, thinned $10^7$-iteration record")]
+RECORDS = {"default": "Default", "mtmh_pt": "MTMH+PT",
+           "default_long": r"Default, thinned $10^7$-iteration record"}
 CHAIN_STYLE = [dict(color="#1b9e77", marker="o"), dict(color="#d95f02", marker="s"),
                dict(color="#7570b3", marker="^"), dict(color="#e7298a", marker="D")]
 
@@ -40,6 +40,10 @@ def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--label-above", type=float, default=0.5,
                         help="Label nuisance predictors whose inclusion probability "
                              "exceeds this value in some chain.")
+    parser.add_argument("--records", nargs="+", choices=list(RECORDS),
+                        default=list(RECORDS), help="Records to plot, one panel each, in order.")
+    parser.add_argument("--suffix", default="",
+                        help="Appended to the output file name.")
     parser.add_argument("--dpi", type=int, default=200)
     return parser.parse_args(supplied)
 
@@ -57,8 +61,11 @@ def inclusion(store_root: Path, dataset: str, run: int, method: str, burn: int) 
 def main(supplied: list[str] | None = None) -> int:
     args = parse_args(supplied)
     args.figure_dir.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(len(RECORDS), 1, figsize=(7.2, 6.0), sharex=True, sharey=True)
-    for ax, (method, title) in zip(axes, RECORDS):
+    records = [(m, RECORDS[m]) for m in args.records]
+    fig, axes = plt.subplots(len(records), 1, figsize=(7.2, 2.0 * len(records)),
+                             sharex=True, sharey=True, squeeze=False)
+    axes = axes[:, 0]
+    for ax, (method, title) in zip(axes, records):
         pip = inclusion(args.store_root, args.dataset, args.run, method, args.burn)
         chains, predictors = pip.shape
         index = np.arange(1, predictors + 1)
@@ -83,8 +90,8 @@ def main(supplied: list[str] | None = None) -> int:
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, fontsize=7.5, frameon=False, ncol=4,
                loc="upper center", bbox_to_anchor=(0.5, 1.0))
-    fig.tight_layout(rect=(0, 0, 1, 0.965))
-    name = f"inclusion_{args.dataset}_run{args.run:03d}.png"
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.105 / len(records)))
+    name = f"inclusion_{args.dataset}_run{args.run:03d}{args.suffix}.png"
     fig.savefig(args.figure_dir / name, dpi=args.dpi, bbox_inches="tight")
     plt.close(fig)
     print(f"[inclusion] wrote {args.figure_dir / name}", flush=True)

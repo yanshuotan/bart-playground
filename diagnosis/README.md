@@ -39,8 +39,8 @@ written only after the final chunk, so a run that stops early leaves none. Use
 ## Paper analysis
 
 ```bash
-python diagnosis/paper/section3_default.py
-python diagnosis/paper/section6_methods.py
+python diagnosis/paper/section4_default.py
+python diagnosis/paper/section7_methods.py
 ```
 
 The scripts analyze five paired runs of every registered setting. They write CSV
@@ -52,9 +52,9 @@ window is 1,000 draws and the step is 100.
 | Directory | Read by | Holds |
 |---|---|---|
 | `store/` | every section script | the main runs |
-| `store_default_ext/` | `section6_equal_time` | the extended Default runs |
-| `store_scaling/` | `section3_scaling` | the sample-size and noise sweep |
-| `timing/` | `section3_long_budget` `section6_*` `section7_costs` | run-0 wall-clock summaries |
+| `store_default_ext/` | `section7_equal_time` | the extended Default runs |
+| `store_scaling/` | `section4_scaling` | the sample-size and noise sweep |
+| `timing/` | `section4_long_budget` `section7_*` | run-0 wall-clock summaries |
 
 Each script takes the matching path as its `--store-root` (or `--extended-store`,
 `--timing-dir`) default, so running one without arguments reads the directory

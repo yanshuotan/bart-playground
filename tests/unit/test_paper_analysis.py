@@ -6,8 +6,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'diagnosis'/'paper'))
 from section7_costs import score
 from section7_costs import scalar_summary
-from section6_equal_time import budget_configurations, evaluate
-from section6_methods import predictive_metrics
+from section7_equal_time import budget_configurations, evaluate
+from section7_methods import predictive_metrics
 from core import prediction_variance_terms
 
 def test_finite_mixture_decomposition_and_rmse_conventions():

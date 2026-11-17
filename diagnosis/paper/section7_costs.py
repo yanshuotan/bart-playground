@@ -45,7 +45,7 @@ HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
 sys.path.insert(0, str(DIAG))
 from core import ResultCache, load_with_shape, prediction_variance_terms, run_inputs  # noqa: E402
-from section6_methods import (full_target_vector, predictions,  # noqa: E402
+from section7_methods import (full_target_vector, predictions,  # noqa: E402
                               residual_variances, split_indices)
 from fixed100_support import (  # noqa: E402
     DATASET_CONFIGS,

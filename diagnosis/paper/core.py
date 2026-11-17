@@ -3,8 +3,9 @@
 One copy of the pieces the section scripts all need: reading a stored run,
 pointwise R-hat, and the cross-fitted between/within directions behind every
 projection figure. That last one was previously duplicated verbatim in the
-section 3 and section 6 scripts, which meant the eigenproblem behind Figure 1
-and the one behind Figures 4-5 could drift apart without anything failing.
+section 4 and section 7 scripts, which meant the eigenproblem behind the Default
+diagnostic figure and the one behind the sampler figures could drift apart
+without anything failing.
 """
 
 from __future__ import annotations

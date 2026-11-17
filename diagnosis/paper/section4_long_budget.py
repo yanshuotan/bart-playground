@@ -6,8 +6,8 @@ stored as roughly 10^4 draws. Modern rank-normalized split R-hat is computed at
 each fixed test point using the same number of post-burn draws per chain, so the
 two budgets differ only in the span of iterations behind the stored draws.
 
-    .venv/Scripts/python diagnosis/paper/section3_long_budget.py table
-    .venv/Scripts/python diagnosis/paper/section3_long_budget.py figures
+    .venv/Scripts/python diagnosis/paper/section4_long_budget.py table
+    .venv/Scripts/python diagnosis/paper/section4_long_budget.py figures
 """
 
 from __future__ import annotations
