@@ -24,7 +24,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-from core import (dataset_tag, input_signature, load_with_shape,  # noqa: E402
+from core import (OPENML_SETTINGS, dataset_tag, input_signature, load_with_shape,  # noqa: E402
                   long_predictions, long_runs, pointwise_rhat_summary, run_inputs,
                   worst_directions)
 
@@ -41,6 +41,7 @@ DISPLAY = {
     "fixed100_FriedmanSparseDir_p200": "Friedman-S p200",
     "fixed100_SeoulBike": "SeoulBike",
     "fixed100_Superconduct_subsample10000": "Superconduct",
+    **{tag: name for tag, (name, _) in OPENML_SETTINGS.items()},
 }
 
 
@@ -165,6 +166,7 @@ DISPLAY = {
     "fixed100_FriedmanSparseDir_p200": "Friedman-S p200",
     "fixed100_SeoulBike": "SeoulBike",
     "fixed100_Superconduct_subsample10000": "Superconduct",
+    **{tag: name for tag, (name, _) in OPENML_SETTINGS.items()},
 }
 
 

@@ -42,7 +42,7 @@ from scipy.stats import gaussian_kde
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
 sys.path.insert(0, str(DIAG))
-from core import pointwise_rhat  # noqa: E402
+from core import OPENML_SETTINGS, pointwise_rhat  # noqa: E402
 from section7_methods import (full_target_vector, predictions,  # noqa: E402
                               residual_variances, training_targets, y_test)
 from section7_costs import DISPLAY, SYNTHETIC, targets  # noqa: E402
@@ -53,6 +53,7 @@ DATASETS = (
     "fixed100_SeoulBike", "fixed100_Superconduct_subsample10000", "fixed100_Friedman",
     "fixed100_FriedmanSparseDir_p20", "fixed100_FriedmanSparseDir_p100",
     "fixed100_FriedmanSparseDir_p200",
+    *OPENML_SETTINGS,
 )
 RECORDS = {
     "default": "Default",

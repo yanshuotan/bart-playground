@@ -24,6 +24,22 @@ import xarray as xr
 from scipy.linalg import eigh
 
 
+# OpenML regression datasets added in November 2026: store directory -> (display
+# name, key in fixed100_support.DATASET_CONFIGS). The store directory is also
+# the tag the timing summaries use. Each section script appends these to its own
+# list of the original twelve settings.
+OPENML_SETTINGS = {
+    "fixed100_Protein_subsample10000": ("Protein", "protein"),
+    "fixed100_SpaceGA": ("SpaceGA", "space_ga"),
+    "fixed100_QSARFishToxicity": ("QSAR fish", "qsar_fish"),
+    "fixed100_Cars": ("Cars", "cars"),
+    "fixed100_CPS88Wages_subsample10000": ("CPS88 wages", "cps88wages"),
+    "fixed100_BlackFriday_subsample10000": ("Black Friday", "black_friday"),
+    "fixed100_Fiat500": ("Fiat 500", "fiat500"),
+    "fixed100_Kin8nm": ("Kin8nm", "kin8nm"),
+}
+
+
 def load_with_shape(path: Path) -> np.ndarray:
     with path.open("r", encoding="utf-8") as stream:
         header = stream.readline().strip()

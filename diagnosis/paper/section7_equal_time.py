@@ -53,7 +53,7 @@ import xarray as xr
 
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
-from core import load_with_shape, pointwise_rhat_summary  # noqa: E402
+from core import OPENML_SETTINGS, load_with_shape, pointwise_rhat_summary  # noqa: E402
 from section7_methods import (full_target_vector, predictive_baselines,  # noqa: E402
                               predictive_metrics, residual_variances, split_indices)
 from section7_costs import scalar_summary, targets  # noqa: E402
@@ -78,6 +78,7 @@ TIMING_TAG = {
     "fixed100_FriedmanSparseDir_p200": "fixed100_FriedmanSparseDirP200K5",
     "fixed100_SeoulBike": "fixed100_SeoulBike",
     "fixed100_Superconduct_subsample10000": "fixed100_Superconduct_subsample10000",
+    **{tag: tag for tag in OPENML_SETTINGS},
 }
 DISPLAY = {
     "fixed100_Abalone": "Abalone", "fixed100_Airfoil": "Airfoil",
@@ -89,6 +90,7 @@ DISPLAY = {
     "fixed100_FriedmanSparseDir_p200": "DART $d=200$",
     "fixed100_SeoulBike": "SeoulBike",
     "fixed100_Superconduct_subsample10000": "Superconduct",
+    **{tag: name for tag, (name, _) in OPENML_SETTINGS.items()},
 }
 PRODUCTION_ITERS = 10_000
 # the resolving group of settings first, then the persistent one
@@ -97,7 +99,8 @@ ORDER = ["fixed100_FriedmanSparseDir_p20", "fixed100_FriedmanSparseDir_p200",
          "fixed100_Friedman", "fixed100_Concrete",
          "fixed100_CalHousing_subsample10000", "fixed100_Airfoil",
          "fixed100_CCPP", "fixed100_CPUAct",
-         "fixed100_Superconduct_subsample10000", "fixed100_SeoulBike"]
+         "fixed100_Superconduct_subsample10000", "fixed100_SeoulBike",
+         *OPENML_SETTINGS]
 NAMES = ["Default", "MTMH", "Default+PT", "MTMH+PT"]
 STYLE = {"Default": dict(color="#1f77b4", marker="o"),
          "MTMH": dict(color="#2ca02c", marker="s"),

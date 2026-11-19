@@ -8,10 +8,8 @@ scripts in ``diagnosis/exploratory``.
 from __future__ import annotations
 
 import argparse
-import ast
 from pathlib import Path
 
-import arviz as az
 import matplotlib
 
 matplotlib.use("Agg")
@@ -21,7 +19,6 @@ from core import (dataset_tag, load_with_shape, markdown_table,
                   pointwise_rhat, summarize_rhat, worst_direction_summary)
 import numpy as np
 import pandas as pd
-import xarray as xr
 
 
 DATASETS = ("fixed100_Abalone", "fixed100_Concrete", "fixed100_Friedman")
@@ -46,44 +43,6 @@ def rolling_cross_rhat(draws: np.ndarray, window: int, step: int) -> pd.DataFram
         rows.append({"window_start": start, "window_end": start + window,
                      **summarize_rhat(pointwise_rhat(draws[:, start:start + window]))})
     return pd.DataFrame(rows)
-
-
-def rolling_within_rhat(
-    draws: np.ndarray,
-    segment_length: int,
-    n_segments: int,
-    step: int,
-) -> pd.DataFrame:
-    rows = []
-    block_length = segment_length * n_segments
-    for start in range(0, draws.shape[1] - block_length + 1, step):
-        block = draws[:, start:start + block_length]
-        segments = block.reshape(draws.shape[0], n_segments, segment_length, draws.shape[2])
-        pseudo = segments.transpose(1, 2, 0, 3)
-        data = xr.DataArray(
-            pseudo,
-            dims=("chain", "draw", "original_chain", "test_point"),
-            name="prediction",
-        )
-        values = np.asarray(az.rhat(data, method="rank")["prediction"].values)
-        for chain_id, chain_values in enumerate(values):
-            rows.append({
-                "original_chain": chain_id,
-                "window_start": start,
-                "window_end": start + block_length,
-                **summarize_rhat(chain_values),
-            })
-    return pd.DataFrame(rows)
-
-
-def mean_pairwise_centroid_distance(draws: np.ndarray) -> float:
-    centers = draws.mean(axis=1)
-    distances = [
-        np.linalg.norm(centers[left] - centers[right])
-        for left in range(len(centers))
-        for right in range(left + 1, len(centers))
-    ]
-    return float(np.mean(distances))
 
 
 def spaced_indices(size: int, count: int) -> np.ndarray:
@@ -171,7 +130,6 @@ def write_summary(path: Path, settings: dict[str, int | float], dataset_summary:
     lines.extend(["", "## Dataset-level results", ""])
     columns = [
         "dataset", "worst_lambda_max_mean", "cross_rhat_median_mean",
-        "within_rhat_median_mean", "short_centroid_distance_mean",
         "long_rhat_median_mean",
     ]
     view = dataset_summary[columns].copy()
@@ -194,8 +152,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runs", nargs="+", type=int, default=list(RUNS))
     parser.add_argument("--window", type=int, default=1000)
     parser.add_argument("--step", type=int, default=100)
-    parser.add_argument("--segment-length", type=int, default=1000)
-    parser.add_argument("--n-segments", type=int, default=4)
     parser.add_argument("--short-burn", type=int, default=3000)
     parser.add_argument("--long-burn", type=int, default=3000)
     parser.add_argument("--plot-draws", type=int, default=750)
@@ -213,7 +169,7 @@ def main() -> int:
     figure_dir.mkdir(parents=True, exist_ok=True)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
-    run_rows, cross_frames, within_frames = [], [], []
+    run_rows, cross_frames = [], []
     for dataset in args.datasets:
         for run in args.runs:
             print(f"[diagnosis] {dataset} run {run:03d}", flush=True)
@@ -224,12 +180,10 @@ def main() -> int:
 
             worst = worst_direction_summary(short_all[:, args.short_burn:, :], args.ridge_fraction)
             cross = rolling_cross_rhat(short_all, args.window, args.step)
-            within = rolling_within_rhat(short_all, args.segment_length, args.n_segments, args.step)
             long_values = pointwise_rhat(long_post_burn)
             long_summary = summarize_rhat(long_values)
 
             cross_frames.append(cross.assign(dataset=dataset, run=run))
-            within_frames.append(within.assign(dataset=dataset, run=run))
             run_rows.append({
                 "dataset": dataset,
                 "run": run,
@@ -238,9 +192,6 @@ def main() -> int:
                 "worst_eigen_gap": worst["eigen_gap"],
                 "cross_rhat_median": cross["median"].median(),
                 "cross_rhat_q90": cross["q90"].median(),
-                "within_rhat_median": within["median"].median(),
-                "within_rhat_q90": within["q90"].median(),
-                "short_centroid_distance": mean_pairwise_centroid_distance(short_post_burn),
                 "long_rhat_median": long_summary["median"],
                 "long_rhat_q90": long_summary["q90"],
             })
@@ -259,14 +210,11 @@ def main() -> int:
     run_frame.to_csv(table_dir / "diagnosis_run_summary.csv", index=False)
     dataset_frame.to_csv(table_dir / "diagnosis_dataset_summary.csv", index=False)
     pd.concat(cross_frames, ignore_index=True).to_csv(table_dir / "diagnosis_cross_chain_rhat_windows.csv", index=False)
-    pd.concat(within_frames, ignore_index=True).to_csv(table_dir / "diagnosis_within_chain_rhat_windows.csv", index=False)
 
     settings = {
         "runs_per_dataset": len(args.runs),
         "cross_chain_window": args.window,
         "rolling_step": args.step,
-        "segment_length": args.segment_length,
-        "segments_per_block": args.n_segments,
         "short_burn": args.short_burn,
         "long_burn": args.long_burn,
     }
