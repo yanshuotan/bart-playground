@@ -1,0 +1,95 @@
+Writing outputs to: /scratch/e1377027/bart_store_newds
+Seeds: fixed_test=42 base_train=2026 base_chain=2024
+[LOAD] video_transcoding: X=(10000, 24), y=(10000,), removed_nonfinite_rows=0, categorical_columns_encoded=['codec', 'o_codec'], features=['duration', 'width', 'height', 'bitrate', 'framerate', 'i', 'p', 'b', 'frames', 'i_size', 'p_size', 'size', 'o_bitrate', 'o_framerate', 'o_width', 'o_height', 'codec_flv', 'codec_h264', 'codec_mpeg4', 'codec_vp8', 'o_codec_flv', 'o_codec_h264', 'o_codec_mpeg4', 'o_codec_vp8']
+[fixed100_VideoTranscoding_subsample10000 RUN 000] fixed test n=100, train n=7425
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] start: n_points=1000, rounds<=10, iterations/round=500 burn-in + 500 counted, target_rate=0.4, max_temperatures=disabled, init_temps=[1.0, 1.668101, 2.782559, 4.641589, 7.742637, 12.915497, 21.544347, 35.938137, 59.948425, 100.0]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 1/10: n_temps=10, rates=[0.0, 0.0, 0.0, 0.0, 0.0, 0.1778, 0.5111, 0.7556, 0.9111]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 2/10: n_temps=16, rates=[0.0, 0.0, 0.0533, 0.0, 0.1867, 0.1067, 0.0267, 0.0, 0.36, 0.1067, 0.56, 0.4933, 0.44, 0.72, 0.6533]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 3/10: n_temps=26, rates=[0.064, 0.032, 0.0, 0.0, 0.152, 0.432, 0.0, 0.0, 0.392, 0.032, 0.328, 0.12, 0.112, 0.344, 0.248, 0.168, 0.576, 0.576, 0.672, 0.472, 0.552, 0.592, 0.544, 0.696, 0.76]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 4/10: n_temps=41, rates=[0.43, 0.195, 0.24, 0.24, 0.095, 0.07, 0.355, 0.1, 0.37, 0.665, 0.245, 0.15, 0.12, 0.59, 0.02, 0.655, 0.61, 0.59, 0.155, 0.51, 0.57, 0.63, 0.485, 0.695, 0.65, 0.465, 0.35, 0.55, 0.48, 0.52, 0.48, 0.53, 0.56, 0.64, 0.675, 0.505, 0.64, 0.55, 0.625, 0.76]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 5/10: n_temps=55, rates=[0.1074, 0.6296, 0.6296, 0.6037, 0.5852, 0.5889, 0.4815, 0.3481, 0.6852, 0.5037, 0.2704, 0.6704, 0.7222, 0.537, 0.4778, 0.737, 0.8148, 0.1, 0.4407, 0.4407, 0.3185, 0.5926, 0.7296, 0.7111, 0.0481, 0.6815, 0.6741, 0.5741, 0.5111, 0.5333, 0.6, 0.7222, 0.4741, 0.4926, 0.3963, 0.4481, 0.637, 0.6926, 0.6963, 0.8111, 0.7815, 0.3407, 0.3593, 0.5481, 0.663, 0.5444, 0.5593, 0.5, 0.5741, 0.5259, 0.5741, 0.537, 0.5963, 0.7852]
+WARNING:bart_playground.priors:float32 SVD of the (1000, 250) leaf basis failed (Internal algorithm failed to converge.); retrying in float64
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 6/10: n_temps=64, rates=[0.7302, 0.5492, 0.4222, 0.3587, 0.5238, 0.6825, 0.6254, 0.5111, 0.727, 0.6667, 0.5397, 0.6349, 0.7302, 0.8127, 0.5206, 0.4222, 0.5873, 0.6794, 0.7905, 0.7778, 0.8063, 0.7048, 0.5937, 0.0857, 0.746, 0.5905, 0.6095, 0.6127, 0.5333, 0.619, 0.4635, 0.5206, 0.7365, 0.6222, 0.4698, 0.4762, 0.781, 0.7206, 0.527, 0.5048, 0.6571, 0.7333, 0.4159, 0.619, 0.6127, 0.5429, 0.727, 0.781, 0.7524, 0.6952, 0.7079, 0.7048, 0.5619, 0.4921, 0.581, 0.5587, 0.6222, 0.5714, 0.5587, 0.6032, 0.4889, 0.5587, 0.7587]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 7/10: n_temps=66, rates=[0.4431, 0.6708, 0.5723, 0.7723, 0.7415, 0.4246, 0.6154, 0.6431, 0.3877, 0.6738, 0.7385, 0.6462, 0.6123, 0.7262, 0.5292, 0.44, 0.7231, 0.7169, 0.5046, 0.6369, 0.7292, 0.8308, 0.7292, 0.2769, 0.5662, 0.2492, 0.7415, 0.8277, 0.6123, 0.6708, 0.5569, 0.52, 0.5631, 0.5785, 0.6031, 0.7015, 0.5323, 0.2677, 0.7446, 0.7846, 0.52, 0.3662, 0.7323, 0.8, 0.4985, 0.5292, 0.6308, 0.6862, 0.7785, 0.7108, 0.6615, 0.68, 0.7231, 0.6646, 0.5508, 0.5108, 0.5723, 0.4677, 0.6615, 0.6708, 0.64, 0.6092, 0.5569, 0.6123, 0.7846]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 8/10: n_temps=71, rates=[0.7229, 0.6886, 0.6486, 0.8229, 0.8943, 0.6914, 0.2886, 0.4771, 0.7714, 0.7914, 0.7857, 0.7057, 0.4886, 0.4371, 0.7229, 0.7486, 0.3429, 0.5371, 0.6029, 0.5743, 0.6686, 0.7343, 0.6743, 0.7257, 0.74, 0.6343, 0.3943, 0.6829, 0.7486, 0.7714, 0.7286, 0.6257, 0.5886, 0.7257, 0.72, 0.6657, 0.2371, 0.7143, 0.64, 0.4914, 0.7429, 0.7114, 0.56, 0.7114, 0.3943, 0.7714, 0.7857, 0.7514, 0.7371, 0.5486, 0.6286, 0.6171, 0.6543, 0.7657, 0.7343, 0.6143, 0.7114, 0.6829, 0.7171, 0.58, 0.6, 0.5257, 0.56, 0.5257, 0.6571, 0.6057, 0.5943, 0.4714, 0.6829, 0.7057]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 9/10: n_temps=76, rates=[0.336, 0.672, 0.6293, 0.7813, 0.7867, 0.5573, 0.7147, 0.7147, 0.5813, 0.8027, 0.8293, 0.752, 0.76, 0.4507, 0.1947, 0.8507, 0.8827, 0.808, 0.824, 0.4507, 0.464, 0.6293, 0.7653, 0.7573, 0.704, 0.664, 0.7547, 0.6187, 0.648, 0.6907, 0.7387, 0.7573, 0.7173, 0.7387, 0.6747, 0.6587, 0.608, 0.4613, 0.6, 0.7493, 0.792, 0.5333, 0.4933, 0.4293, 0.7787, 0.784, 0.6693, 0.6187, 0.672, 0.7547, 0.736, 0.7467, 0.7467, 0.632, 0.52, 0.68, 0.688, 0.584, 0.72, 0.728, 0.8, 0.7413, 0.696, 0.7547, 0.6027, 0.6587, 0.608, 0.4907, 0.576, 0.5147, 0.4853, 0.6533, 0.632, 0.696, 0.864]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] round 10/10: n_temps=78, rates=[0.7818, 0.3844, 0.626, 0.7377, 0.8416, 0.826, 0.5221, 0.7325, 0.7377, 0.4727, 0.7065, 0.7896, 0.7662, 0.7792, 0.4701, 0.7065, 0.6909, 0.7065, 0.7351, 0.7325, 0.6805, 0.5325, 0.5766, 0.4883, 0.6545, 0.7221, 0.6857, 0.7143, 0.6052, 0.5948, 0.7143, 0.7818, 0.7636, 0.8026, 0.7688, 0.7169, 0.4571, 0.4364, 0.5792, 0.7091, 0.7195, 0.8052, 0.7377, 0.4909, 0.5896, 0.4831, 0.6805, 0.7481, 0.7481, 0.6182, 0.6571, 0.7091, 0.7636, 0.6805, 0.6805, 0.6727, 0.5169, 0.6805, 0.6857, 0.6312, 0.7558, 0.7506, 0.7195, 0.7299, 0.6909, 0.6935, 0.4753, 0.4727, 0.5636, 0.6312, 0.5688, 0.6597, 0.5169, 0.6935, 0.4545, 0.6597, 0.7896]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] [LADDER] done: final n_temps=79
+[fixed100_VideoTranscoding_subsample10000 RUN 000] ladder selected temps=[1.0, 1.0127, 1.0191, 1.0257, 1.0527, 1.0812, 1.096, 1.1113, 1.1431, 1.1597, 1.1767, 1.2125, 1.2311, 1.2504, 1.2703, 1.2908, 1.3339, 1.3566, 1.38, 1.4042, 1.4294, 1.4554, 1.4824, 1.5395, 1.6012, 1.6681, 1.7109, 1.756, 1.8035, 1.8537, 1.9068, 1.9629, 1.9923, 2.0225, 2.0537, 2.0858, 2.119, 2.1532, 2.2251, 2.302, 2.3843, 2.4728, 2.5681, 2.6185, 2.671, 2.7826, 2.9292, 3.0922, 3.1807, 3.2743, 3.3737, 3.4793, 3.5917, 3.7117, 3.8399, 3.9773, 4.1249, 4.2838, 4.6416, 4.8862, 5.1581, 5.4619, 5.6277, 5.8039, 5.9914, 6.1914, 6.4053, 6.6345, 7.1459, 7.7426, 8.6042, 9.6814, 11.067, 12.9155, 16.1496, 21.5443, 35.9381, 59.9484, 100.0]
+[fixed100_VideoTranscoding_subsample10000 RUN 000] short methods start: n_chains=4, n_jobs=4, parallel_methods=False
+[Parallel(n_jobs=4)]: Using backend LokyBackend with 4 concurrent workers.
+[bar done] Iterations: 100%|██████████| 10000/10000 [02:20<00:00, 71.02it/s]
+[last bar] Iterations: 100%|██████████| 10000/10000 [02:20<00:00, 71.02it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [02:23<00:00, 69.52it/s]
+[last bar] Iterations: 100%|██████████| 10000/10000 [02:23<00:00, 69.52it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [02:34<00:00, 64.66it/s]
+[last bar] Iterations: 100%|██████████| 10000/10000 [02:34<00:00, 64.66it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [02:45<00:00, 56.22it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [02:45<00:00, 60.51it/s]
+[last bar] Iterations: 100%|██████████| 10000/10000 [02:45<00:00, 60.51it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [11:46<00:00, 14.50it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [11:46<00:00, 14.15it/s]
+[last bar] Iterations: 100%|██████████| 10000/10000 [11:46<00:00, 14.15it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [11:45<00:00, 14.18it/s]
+[last bar] Iterations: 100%|██████████| 10000/10000 [11:45<00:00, 14.18it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [12:10<00:00, 13.68it/s]
+[last bar] Iterations: 100%|██████████| 10000/10000 [12:10<00:00, 13.68it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [12:32<00:00, 14.89it/s]
+[bar done] Iterations: 100%|██████████| 10000/10000 [12:32<00:00, 13.29it/s]
+[last bar] Iterations: 100%|██████████| 10000/10000 [12:32<00:00, 13.29it/s]
+[last bar] Iterations:  73%|███████▎  | 7300/10000 [2:29:09<48:01,  1.07s/it]  joblib.externals.loky.process_execut
+"""
+Traceback (most recent call last):
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/externals/loky/process_executor.py", line 490, in _process_worker
+    r = call_item()
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/externals/loky/process_executor.py", line 291, in __call__
+    return self.fn(*self.args, **self.kwargs)
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/parallel.py", line 607, in __call__
+    return [func(*args, **kwargs) for func, args, kwargs in self.items]
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/parallel.py", line 607, in <listcomp>
+    return [func(*args, **kwargs) for func, args, kwargs in self.items]
+  File "/nfs/home/svu/e1377027/bart-playground/diagnosis/experiment_fixed100.py", line 402, in run_short_chain
+    result = run_short_method(
+  File "/nfs/home/svu/e1377027/bart-playground/diagnosis/experiment_fixed100.py", line 481, in run_short_method
+    model.fit(X_train, y_train)
+  File "/nfs/home/svu/e1377027/bart-playground/bart_playground/bart.py", line 1488, in fit
+    return self.fit_with_data(
+  File "/nfs/home/svu/e1377027/bart-playground/bart_playground/bart.py", line 1549, in fit_with_data
+    self._fit_loop_serial(current_states, total_iters, progress)
+  File "/nfs/home/svu/e1377027/bart-playground/bart_playground/bart.py", line 1592, in _fit_loop_serial
+    accepted_swap_this_iter = self._swap_step_serial_batched(current_states, iter_idx)
+  File "/nfs/home/svu/e1377027/bart-playground/bart_playground/bart.py", line 1481, in _swap_step_serial_batched
+    self._refresh_state_tempered_params(
+  File "/nfs/home/svu/e1377027/bart-playground/bart_playground/bart.py", line 1391, in _refresh_state_tempered_params
+    new_leaf_vals = sampler.tree_prior.resample_leaf_vals(
+  File "/nfs/home/svu/e1377027/bart-playground/bart_playground/priors.py", line 268, in resample_leaf_vals
+    leaf_params_new = _resample_leaf_vals_numba(
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/numba/np/linalg.py", line 1011, in cho_impl
+    raise np.linalg.LinAlgError(
+numpy.linalg.LinAlgError: Matrix is not positive definite.
+"""
+The above exception was the direct cause of the following exception:
+Traceback (most recent call last):
+  File "/nfs/home/svu/e1377027/bart-playground/diagnosis/run_fixed100.py", line 293, in <module>
+    main()
+  File "/nfs/home/svu/e1377027/bart-playground/diagnosis/run_fixed100.py", line 287, in main
+    _run_fixed(args, store_root)
+  File "/nfs/home/svu/e1377027/bart-playground/diagnosis/run_fixed100.py", line 218, in _run_fixed
+    exp.run_fixed100_dataset(**kwargs)
+  File "/nfs/home/svu/e1377027/bart-playground/diagnosis/experiment_fixed100.py", line 1072, in run_fixed100_dataset
+    short_results = Parallel(n_jobs=n_jobs, verbose=10)(
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/parallel.py", line 2098, in __call__
+    return output if self.return_generator else list(output)
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/parallel.py", line 1704, in _get_outputs
+    yield from self._retrieve()
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/parallel.py", line 1806, in _retrieve
+    self._raise_error_fast()
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/parallel.py", line 1885, in _raise_error_fast
+    error_job.get_result(self.timeout)
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/parallel.py", line 780, in get_result
+    return self._return_or_raise()
+  File "/nfs/home/svu/e1377027/bart-playground/.venv/lib/python3.10/site-packages/joblib/parallel.py", line 795, in _return_or_raise
+    raise self._result
+numpy.linalg.LinAlgError: Matrix is not positive definite.
+/home/svu/e1377027/envs/py310/lib/python3.10/multiprocessing/resource_tracker.py:224: UserWarning: resource_tracker: There appear to be 4 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '
