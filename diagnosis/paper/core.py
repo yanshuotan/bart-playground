@@ -37,6 +37,10 @@ OPENML_SETTINGS = {
     "fixed100_BlackFriday_subsample10000": ("Black Friday", "black_friday"),
     "fixed100_Fiat500": ("Fiat 500", "fiat500"),
     "fixed100_Kin8nm": ("Kin8nm", "kin8nm"),
+    "fixed100_Diamonds_subsample10000": ("Diamonds", "diamonds"),
+    "fixed100_Sarcos_subsample10000": ("Sarcos", "sarcos"),
+    "fixed100_MiamiHousing_subsample10000": ("Miami housing", "miami_housing"),
+    "fixed100_VideoTranscoding_subsample10000": ("Video transcoding", "video_transcoding"),
 }
 
 

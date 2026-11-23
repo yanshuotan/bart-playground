@@ -11,11 +11,13 @@ Every configured dataset uses runs `000` through `004`.
 | `section4_default.py` | Default-only diagnosis figure and tables | `fig:default-diagnostic` (4.1) |
 | `section4_long_budget.py` | two-budget R-hat table, long-chain projection figures | `tab:rhat-budgets`, `fig:long-chains` (4.2), `fig:appendix-long-*` |
 | `section4_scaling.py` | sample-size and noise sweep | `fig:scaling` (4.3), size and noise appendix |
+| `section4_kappa.py` | size and noise scale $\kappa=n/(1-R^2)$ against Default R-hat over the paper, sweep and controlled settings (`kappa_*.csv`) | 4.3 text, `tab:kappa`, `tab:kappa-spearman`, `tab:kappa-controlled` |
 | `section4_worst_input.py` | per-chain densities of latent $f$ and of $f+\sigma\varepsilon$ at the input with the largest pointwise R-hat, one row per record or method | 4.4 Friedman figure, 7.3 sampler figure, appendix overview |
-| `section7_methods.py` | four-method factorial tables, rolling and projection figures | `tab:rhat-ablation`, `tab:joint-ablation`, `tab:prediction-ablation`, `fig:worst-direction-full` (7.2), `fig:representative-rhat`, `tab:appendix-all-methods` |
+| `section7_methods.py` | four-method factorial tables and projection figures | `tab:rhat-ablation`, `tab:joint-ablation`, `tab:prediction-ablation`, `fig:worst-direction-full` (7.2), `tab:appendix-all-methods` |
 | `section7_equal_time.py` | equal-wall-time curves and the pooled-estimator baseline | `tab:production-cost`, `tab:equal-time`, `fig:equal-time` (7.5) |
 | `section7_costs.py` | pooling, decomposition, coverage, ESS; scalar-quantity diagnostics | `tab:default-coverage` (4.4), `tab:coverage` (7.3), ESS, chain-choice and scalar appendix tables |
 | `section7_feature_use.py` | split-use shares, inclusion probabilities and their chain agreement (`feature_use_*.csv`) | 4.4 and 7.4 text, `tab:feature-use`, `tab:feature-use-active` |
+| `section7_swap_rates.py` | adjacent-pair swap acceptance of both PT arms (`swap_rates_*.csv`) | 6 text, `tab:swap-rates` |
 | `section7_inclusion_figure.py` | per-chain inclusion probabilities of every predictor for one DART run | `fig:inclusion-default` (4.4), `fig:inclusion` (7.4) |
 | `long_tail_tables.py` | long and contiguous-tail Default records scored as methods (`*_tail_as_method_*.csv`) | `long`/`tail` columns of the Section 4 and 7 tables, tail rows of the appendix tables |
 | `long_tail_note.py` | contiguous-tail comparison | supporting figures and CSVs for the outline's tail analysis |
@@ -31,6 +33,8 @@ first one, so existing invocations still work.
 .\.venv\Scripts\python.exe diagnosis\paper\section4_long_budget.py table
 .\.venv\Scripts\python.exe diagnosis\paper\section4_long_budget.py figures
 .\.venv\Scripts\python.exe diagnosis\paper\section4_scaling.py
+.\.venv\Scripts\python.exe diagnosis\paper\section4_kappa.py
+.\.venv\Scripts\python.exe diagnosis\paper\section7_swap_rates.py
 .\.venv\Scripts\python.exe diagnosis\paper\section7_methods.py
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py costs --long
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py scalar

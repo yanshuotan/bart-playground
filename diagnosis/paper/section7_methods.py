@@ -51,12 +51,6 @@ METHOD_NAMES = {
     "mtmh": "MTMH",
     "mtmh_pt": "MTMH+PT",
 }
-METHOD_COLORS = {
-    "default": "#1b9e77",
-    "default_pt": "#d95f02",
-    "mtmh": "#7570b3",
-    "mtmh_pt": "#e7298a",
-}
 CHAIN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728")
 
 
@@ -169,21 +163,13 @@ def training_targets(
 
 
 def full_draw_rhat(draws: np.ndarray) -> dict[str, float | int]:
-    """Table summaries from all retained draws; rolling windows are graphical only."""
+    """Table summaries from all retained draws."""
     cross = summarize_rhat(pointwise_rhat(draws))
     return {
         "cross_rhat_median": cross["median"],
         "cross_rhat_q90": cross["q90"],
         "rhat_draws_per_chain": draws.shape[1],
     }
-
-
-def rolling_cross_rhat(draws: np.ndarray, window: int, step: int) -> pd.DataFrame:
-    rows = []
-    for start in range(0, draws.shape[1] - window + 1, step):
-        rows.append({"window_start": start, "window_end": start + window,
-                     **summarize_rhat(pointwise_rhat(draws[:, start:start + window]))})
-    return pd.DataFrame(rows)
 
 
 def chain_geometry(draws: np.ndarray) -> dict[str, float | int]:
@@ -267,29 +253,6 @@ def predictive_baselines(train_targets: np.ndarray, truth: np.ndarray) -> dict[s
         "naive_rmse": naive_rmse,
         "climatology_crps": climatology_crps,
     }
-
-
-def plot_rhat_comparison(cross_frames: dict[str, pd.DataFrame], title: str) -> plt.Figure:
-    """Rolling cross-chain pointwise R-hat through the run, one line per method.
-
-    The line is the median over test inputs and the band the interquartile
-    range; windows start at initialization.
-    """
-    fig, ax = plt.subplots(1, 1, figsize=(7.2, 4.8), layout="constrained")
-    for method in PLOT_ORDER:
-        cross = cross_frames[method].sort_values("window_end")
-        ax.plot(cross["window_end"], cross["median"], color=METHOD_COLORS[method],
-                linewidth=1.8, label=METHOD_NAMES[method])
-        ax.fill_between(cross["window_end"], cross["q25"], cross["q75"],
-                        color=METHOD_COLORS[method], alpha=0.12)
-    ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1)
-    ax.set_xlabel("window end")
-    ax.set_ylabel("rank-split R-hat")
-    ax.grid(alpha=0.2)
-    ax.legend(fontsize=8)
-    if title:
-        fig.suptitle(title)
-    return fig
 
 
 def plot_worst_comparison(results: dict[str, dict[str, np.ndarray | float]], start: int,
@@ -429,8 +392,7 @@ def write_summary(
         "",
         "`short_burn` is also the start of the worst-direction calculation.",
         "Table cross R-hat uses every retained draw, with the median and q90 taken across test inputs, "
-        "and the rank-normalized split-and-folded estimator. "
-        "Rolling-window R-hat is used only in the temporal figures, not in these table columns.",
+        "and the rank-normalized split-and-folded estimator.",
     ])
     for dataset in summary["dataset"].drop_duplicates():
         lines.extend(["", f"## {dataset}", ""])
@@ -539,11 +501,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timing-summary", type=Path, default=diagnosis_root / "timing" / "summary.md")
     parser.add_argument("--datasets", nargs="+", default=list(DATASETS))
     parser.add_argument("--runs", nargs="+", type=int, default=list(RUNS))
-    parser.add_argument("--window", type=int, default=1000)
-    parser.add_argument("--step", type=int, default=100)
     parser.add_argument("--short-burn", type=int, default=3000)
     parser.add_argument("--rhat-only", action="store_true",
-                        help="Refresh full post-burn R-hat table summaries without regenerating rolling figures.")
+                        help="Refresh full post-burn R-hat table summaries without regenerating figures.")
     parser.add_argument(
         "--geometry-only",
         action="store_true",
@@ -559,8 +519,7 @@ def parse_args() -> argparse.Namespace:
 def method_results(args, dataset: str, run: int, method: str, truth: np.ndarray,
                    baseline: dict[str, float], y_scale: float) -> dict:
     """Everything section 7 derives from one method's draws in one run."""
-    all_draws = predictions(args.store_root, dataset, run, method, 0)
-    post_burn = all_draws[:, args.short_burn:, :]
+    post_burn = predictions(args.store_root, dataset, run, method, args.short_burn)
     worst = worst_direction_summary(post_burn, args.ridge_fraction)
     geometry = chain_geometry(post_burn)
     rmse, crps = predictive_metrics(
@@ -590,7 +549,6 @@ def method_results(args, dataset: str, run: int, method: str, truth: np.ndarray,
     return {
         "row": row,
         "worst": worst,
-        "cross": rolling_cross_rhat(all_draws, args.window, args.step),
     }
 
 
@@ -607,8 +565,6 @@ def main() -> int:
 
     settings = {
         "runs_per_dataset": len(args.runs),
-        "cross_chain_window": args.window,
-        "rolling_step": args.step,
         "short_burn": args.short_burn,
         "chain_geometry_draws_per_chain": "all post-burn draws",
         "table_rhat_draws": "all post-burn draws",
@@ -660,11 +616,11 @@ def main() -> int:
         return 0
 
     cache = ResultCache("section7_methods", {
-        "version": CACHE_VERSION, "window": args.window, "step": args.step,
+        "version": CACHE_VERSION,
         "short_burn": args.short_burn, "ridge_fraction": args.ridge_fraction,
         "noise_seed": PREDICTIVE_NOISE_SEED,
     }, enabled=not args.no_cache)
-    run_rows, baseline_rows, cross_all = [], [], []
+    run_rows, baseline_rows = [], []
     for dataset in args.datasets:
         full_targets = full_target_vector(args.store_root, dataset)
         for run in args.runs:
@@ -685,7 +641,7 @@ def main() -> int:
                 **baseline,
             })
 
-            cross_by_method, worst_by_method = {}, {}
+            worst_by_method = {}
             all_cached = True
             for method in METHODS:
                 inputs = run_inputs(args.store_root, dataset, run, [method])
@@ -697,18 +653,12 @@ def main() -> int:
                     cache.put(key, inputs, result)
 
                 method_label = METHOD_NAMES[method]
-                cross_by_method[method] = result["cross"]
                 worst_by_method[method] = result["worst"]
-                cross_all.append(result["cross"].assign(dataset=dataset, run=run, method=method_label))
                 run_rows.append(result["row"])
-            rhat_path = figure_dir / f"{dataset}_run{run:03d}_rhat_comparison.png"
             worst_path = figure_dir / f"{dataset}_run{run:03d}_worst_direction.png"
-            if all_cached and rhat_path.is_file() and worst_path.is_file():
+            if all_cached and worst_path.is_file():
                 continue
             # No titles: the paper captions name the dataset and run.
-            rhat_fig = plot_rhat_comparison(cross_by_method, "")
-            rhat_fig.savefig(rhat_path, dpi=args.dpi, bbox_inches="tight")
-            plt.close(rhat_fig)
             worst_fig = plot_worst_comparison(worst_by_method, args.short_burn)
             worst_fig.savefig(worst_path, dpi=args.dpi, bbox_inches="tight")
             plt.close(worst_fig)
@@ -726,7 +676,6 @@ def main() -> int:
     baseline_frame.to_csv(table_dir / "predictive_baselines.csv", index=False)
     timing_frame.to_csv(table_dir / "timing_parallel.csv", index=False)
     paper_table.to_csv(table_dir / "paper_table_summary.csv", index=False)
-    pd.concat(cross_all, ignore_index=True).to_csv(table_dir / "comparison_cross_chain_rhat_windows.csv", index=False)
 
     write_summary(summary_path, settings, summary_frame, timing_frame)
     diagnosis_summary = Path(__file__).resolve().parent / "diagnosis_summary.md"

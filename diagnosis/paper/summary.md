@@ -1,12 +1,12 @@
 # Paper analysis outputs
 
-This directory contains standalone paper-facing analyses for five paired runs of 20 datasets.
+This directory contains standalone paper-facing analyses for five paired runs of 24 datasets.
 
 ## Main result
 
-Across the 17 standard-BART datasets, MTMH+PT has the smallest five-run mean in 25 of 34 diagnostic cells. DART dimensions form a separate controlled extension.
+Across the 21 standard-BART datasets, MTMH+PT has the smallest five-run mean in 27 of 42 diagnostic cells. DART dimensions form a separate controlled extension.
 Predictive changes use root-average-chain-MSE RMSE and observation-predictive CRPS, relative to training-derived references.
-The measured MTMH+PT cost is 6.15x to 9.38x the Default runtime per chain (20 of 20 datasets have timing runs).
+The measured MTMH+PT cost is 6.15x to 9.91x the Default runtime per chain (24 of 24 datasets have timing runs).
 
 The table reports five-run means as `Default -> MTMH+PT`.
 
@@ -32,6 +32,10 @@ The table reports five-run means as `Default -> MTMH+PT`.
 | BlackFriday_subsample10000 | 1.042 -> 1.018 | 1.206 -> 1.081 | 0.741 -> 0.742 | 0.742 -> 0.743 | 8.08x |
 | Fiat500 | 1.027 -> 1.005 | 1.054 -> 1.009 | 0.380 -> 0.380 | 0.378 -> 0.378 | 6.59x |
 | Kin8nm | 1.604 -> 1.231 | 1.995 -> 1.421 | 0.472 -> 0.427 | 0.466 -> 0.423 | 8.75x |
+| Diamonds_subsample10000 | 1.636 -> 1.264 | 2.221 -> 1.653 | 0.155 -> 0.158 | 0.131 -> 0.129 | 9.91x |
+| Sarcos_subsample10000 | 1.814 -> 1.318 | 2.339 -> 1.537 | 0.223 -> 0.204 | 0.214 -> 0.195 | 9.08x |
+| MiamiHousing_subsample10000 | 1.698 -> 1.354 | 2.246 -> 1.750 | 0.355 -> 0.356 | 0.315 -> 0.296 | 9.22x |
+| VideoTranscoding_subsample10000 | 1.812 -> 1.578 | 2.381 -> 2.064 | 0.179 -> 0.153 | 0.160 -> 0.127 | 8.65x |
 
 ## Default diagnosis
 

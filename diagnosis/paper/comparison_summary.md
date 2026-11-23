@@ -5,14 +5,12 @@ All diagnostic and predictive entries summarize five paired runs per dataset.
 ## Settings
 
 - `runs_per_dataset`: 5
-- `cross_chain_window`: 1000
-- `rolling_step`: 100
 - `short_burn`: 3000
 - `chain_geometry_draws_per_chain`: all post-burn draws
 - `table_rhat_draws`: all post-burn draws
 
 `short_burn` is also the start of the worst-direction calculation.
-Table cross R-hat uses every retained draw, with the median and q90 taken across test inputs, and the rank-normalized split-and-folded estimator. Rolling-window R-hat is used only in the temporal figures, not in these table columns.
+Table cross R-hat uses every retained draw, with the median and q90 taken across test inputs, and the rank-normalized split-and-folded estimator.
 
 ## fixed100_Abalone
 
@@ -373,6 +371,78 @@ Table cross R-hat uses every retained draw, with the median and q90 taken across
 | fixed100_Kin8nm | MTMH | - | 1 | 654.7 | 3.7 | 6.02 |
 | fixed100_Kin8nm | Default+PT | 40 | 40 | 346.9 | 3.1 | 3.19 |
 | fixed100_Kin8nm | MTMH+PT | 40 | 40 | 951.4 | 1.2 | 8.75 |
+
+## fixed100_Diamonds_subsample10000
+
+| method | cross R-hat median | cross R-hat q90 | B/W ratio | relative RMSE | relative CRPS |
+| --- | --- | --- | --- | --- | --- |
+| Default | 1.6365 (0.0433) | 2.2209 (0.0744) | 2.2554 (0.3730) | 0.1549 (0.0128) | 0.1315 (0.0079) |
+| Default+PT | 1.2402 (0.0373) | 1.5208 (0.0616) | 0.6157 (0.1418) | 0.1524 (0.0096) | 0.1264 (0.0052) |
+| MTMH | 1.4108 (0.0640) | 2.0031 (0.0654) | 2.2554 (0.3641) | 0.1654 (0.0106) | 0.1371 (0.0068) |
+| MTMH+PT | 1.2641 (0.0595) | 1.6526 (0.1618) | 1.0947 (0.5308) | 0.1580 (0.0081) | 0.1286 (0.0055) |
+
+### Computational cost
+
+| dataset | method | temperatures | workers | mean_seconds_per_chain | sd_seconds_per_chain | relative_to_default |
+| --- | --- | --- | --- | --- | --- | --- |
+| fixed100_Diamonds_subsample10000 | Default | - | 1 | 95.8 | 1.6 | 1.0 |
+| fixed100_Diamonds_subsample10000 | MTMH | - | 1 | 538.2 | 3.8 | 5.62 |
+| fixed100_Diamonds_subsample10000 | Default+PT | 60 | 60 | 385.6 | 1.5 | 4.02 |
+| fixed100_Diamonds_subsample10000 | MTMH+PT | 60 | 60 | 950.1 | 2.4 | 9.91 |
+
+## fixed100_Sarcos_subsample10000
+
+| method | cross R-hat median | cross R-hat q90 | B/W ratio | relative RMSE | relative CRPS |
+| --- | --- | --- | --- | --- | --- |
+| Default | 1.8136 (0.0502) | 2.3393 (0.0426) | 2.3016 (0.3811) | 0.2233 (0.0123) | 0.2143 (0.0067) |
+| Default+PT | 1.3298 (0.1440) | 1.5757 (0.1964) | 0.5618 (0.2168) | 0.2069 (0.0151) | 0.1975 (0.0084) |
+| MTMH | 1.7064 (0.0184) | 2.1802 (0.0560) | 1.9113 (0.1409) | 0.2172 (0.0163) | 0.2087 (0.0103) |
+| MTMH+PT | 1.3178 (0.1235) | 1.5369 (0.2043) | 0.6057 (0.3227) | 0.2044 (0.0133) | 0.1952 (0.0106) |
+
+### Computational cost
+
+| dataset | method | temperatures | workers | mean_seconds_per_chain | sd_seconds_per_chain | relative_to_default |
+| --- | --- | --- | --- | --- | --- | --- |
+| fixed100_Sarcos_subsample10000 | Default | - | 1 | 112.0 | 1.3 | 1.0 |
+| fixed100_Sarcos_subsample10000 | MTMH | - | 1 | 613.1 | 6.8 | 5.48 |
+| fixed100_Sarcos_subsample10000 | Default+PT | 60 | 60 | 412.5 | 7.1 | 3.68 |
+| fixed100_Sarcos_subsample10000 | MTMH+PT | 60 | 60 | 1016.7 | 1.2 | 9.08 |
+
+## fixed100_MiamiHousing_subsample10000
+
+| method | cross R-hat median | cross R-hat q90 | B/W ratio | relative RMSE | relative CRPS |
+| --- | --- | --- | --- | --- | --- |
+| Default | 1.6983 (0.0521) | 2.2458 (0.0862) | 2.7349 (0.5212) | 0.3554 (0.0252) | 0.3149 (0.0104) |
+| Default+PT | 1.3013 (0.0764) | 1.5582 (0.1236) | 0.6663 (0.2403) | 0.3152 (0.0207) | 0.2749 (0.0137) |
+| MTMH | 1.5873 (0.0329) | 2.0926 (0.0752) | 2.8167 (0.5291) | 0.3537 (0.0278) | 0.3017 (0.0163) |
+| MTMH+PT | 1.3539 (0.0977) | 1.7504 (0.2192) | 1.0125 (0.4892) | 0.3562 (0.0209) | 0.2964 (0.0183) |
+
+### Computational cost
+
+| dataset | method | temperatures | workers | mean_seconds_per_chain | sd_seconds_per_chain | relative_to_default |
+| --- | --- | --- | --- | --- | --- | --- |
+| fixed100_MiamiHousing_subsample10000 | Default | - | 1 | 106.8 | 1.8 | 1.0 |
+| fixed100_MiamiHousing_subsample10000 | MTMH | - | 1 | 519.8 | 6.2 | 4.87 |
+| fixed100_MiamiHousing_subsample10000 | Default+PT | 60 | 60 | 447.8 | 11.5 | 4.19 |
+| fixed100_MiamiHousing_subsample10000 | MTMH+PT | 60 | 60 | 984.6 | 1.2 | 9.22 |
+
+## fixed100_VideoTranscoding_subsample10000
+
+| method | cross R-hat median | cross R-hat q90 | B/W ratio | relative RMSE | relative CRPS |
+| --- | --- | --- | --- | --- | --- |
+| Default | 1.8123 (0.0537) | 2.3808 (0.0728) | 3.8574 (1.8939) | 0.1793 (0.0135) | 0.1599 (0.0051) |
+| Default+PT | 1.4479 (0.0378) | 1.7607 (0.0451) | 0.8284 (0.1518) | 0.1437 (0.0058) | 0.1358 (0.0052) |
+| MTMH | 1.7468 (0.0382) | 2.3225 (0.0529) | 2.7009 (1.7264) | 0.1848 (0.0676) | 0.1374 (0.0174) |
+| MTMH+PT | 1.5781 (0.1037) | 2.0642 (0.1495) | 2.3560 (0.4997) | 0.1530 (0.0196) | 0.1272 (0.0059) |
+
+### Computational cost
+
+| dataset | method | temperatures | workers | mean_seconds_per_chain | sd_seconds_per_chain | relative_to_default |
+| --- | --- | --- | --- | --- | --- | --- |
+| fixed100_VideoTranscoding_subsample10000 | Default | - | 1 | 131.3 | 10.3 | 1.0 |
+| fixed100_VideoTranscoding_subsample10000 | MTMH | - | 1 | 627.1 | 21.4 | 4.78 |
+| fixed100_VideoTranscoding_subsample10000 | Default+PT | 60 | 60 | 465.5 | 16.5 | 3.55 |
+| fixed100_VideoTranscoding_subsample10000 | MTMH+PT | 60 | 60 | 1135.6 | 54.4 | 8.65 |
 
 ## Metric definitions
 

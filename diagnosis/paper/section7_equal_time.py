@@ -93,14 +93,18 @@ DISPLAY = {
     **{tag: name for tag, (name, _) in OPENML_SETTINGS.items()},
 }
 PRODUCTION_ITERS = 10_000
-# the resolving group of settings first, then the persistent one
-ORDER = ["fixed100_FriedmanSparseDir_p20", "fixed100_FriedmanSparseDir_p200",
-         "fixed100_FriedmanSparseDir_p100", "fixed100_Abalone",
-         "fixed100_Friedman", "fixed100_Concrete",
-         "fixed100_CalHousing_subsample10000", "fixed100_Airfoil",
-         "fixed100_CCPP", "fixed100_CPUAct",
-         "fixed100_Superconduct_subsample10000", "fixed100_SeoulBike",
-         *OPENML_SETTINGS]
+# the paper's order (upper end of the thinned-record median range): the
+# settings that resolve over 10^7 iterations first, then the persistent ones;
+# settings not listed here follow in registry order
+ORDER = ["fixed100_Fiat500", "fixed100_QSARFishToxicity", "fixed100_Cars",
+         "fixed100_CPS88Wages_subsample10000", "fixed100_Abalone",
+         "fixed100_FriedmanSparseDir_p20", "fixed100_FriedmanSparseDir_p200",
+         "fixed100_FriedmanSparseDir_p100", "fixed100_Friedman",
+         "fixed100_BlackFriday_subsample10000", "fixed100_Concrete",
+         "fixed100_Protein_subsample10000", "fixed100_SpaceGA", "fixed100_Airfoil",
+         "fixed100_CCPP", "fixed100_CalHousing_subsample10000", "fixed100_CPUAct",
+         "fixed100_Superconduct_subsample10000", "fixed100_SeoulBike", "fixed100_Kin8nm"]
+ORDER += [tag for tag in TIMING_TAG if tag not in ORDER]
 NAMES = ["Default", "MTMH", "Default+PT", "MTMH+PT"]
 STYLE = {"Default": dict(color="#1f77b4", marker="o"),
          "MTMH": dict(color="#2ca02c", marker="s"),
@@ -264,7 +268,8 @@ def long_reference(table_dir: Path, run: int) -> pd.Series:
 def draw_curves(args: argparse.Namespace, short: pd.DataFrame, floor: pd.Series,
                 order) -> None:
     """One panel per setting: agreement against wall time, all on one grid."""
-    fig, axes = plt.subplots(3, 4, figsize=(11.2, 7.4), sharex=True)
+    rows = -(-len(order) // 4)
+    fig, axes = plt.subplots(rows, 4, figsize=(11.2, 2.47 * rows), sharex=True)
     flat = axes.ravel()
     for ax, dataset in zip(flat, order):
         part = short[short.dataset.eq(dataset)]

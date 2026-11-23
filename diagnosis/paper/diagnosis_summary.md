@@ -5,8 +5,6 @@ All values summarize five runs per dataset.
 ## Settings
 
 - `runs_per_dataset`: 5
-- `cross_chain_window`: 1000
-- `rolling_step`: 100
 - `short_burn`: 3000
 - `long_burn`: 3000
 
@@ -17,8 +15,8 @@ All values summarize five runs per dataset.
 
 | dataset | worst_lambda_max_mean | cross_rhat_median_mean | long_rhat_median_mean |
 | --- | --- | --- | --- |
-| fixed100_Abalone | 25.4743 | 1.2894 | 1.0002 |
-| fixed100_Concrete | 45.4533 | 1.3887 | 1.0035 |
-| fixed100_Friedman | 53.7944 | 1.4700 | 1.0016 |
+| fixed100_Abalone | 25.4743 | 1.0972 | 1.0002 |
+| fixed100_Concrete | 45.4533 | 1.1733 | 1.0035 |
+| fixed100_Friedman | 53.7944 | 1.2330 | 1.0016 |
 
 The long chains are empirical references; their own R-hat summaries qualify comparisons with the production-length chains.
