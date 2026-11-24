@@ -20,7 +20,7 @@ Writes to the table directory:
 * ``coverage_replicates_inputs.csv``: coverage at each input, per method;
 * ``coverage_replicates_summary.csv``: one row per method;
 
-and ``coverage_replicates_inputs.png`` (per-input coverage, sorted) to the
+and ``coverage_replicates_inputs.png`` (single-chain against mixture coverage at each input) to the
 figure directory. Per-replicate results are cached under
 ``cache/section4_coverage_replicates``.
 """
@@ -44,6 +44,7 @@ TAG = "cov_Friedman"
 METHODS = ("default", "mtmh", "default_pt", "mtmh_pt")
 METHOD_NAMES = {"default": "Default", "mtmh": "MTMH", "default_pt": "Default+PT", "mtmh_pt": "MTMH+PT"}
 STYLE = {"Default": "#1f77b4", "MTMH": "#2ca02c", "Default+PT": "#d62728", "MTMH+PT": "#9467bd"}
+MARKERS = {"Default": "o", "MTMH": "s", "Default+PT": "^", "MTMH+PT": "D"}
 
 
 def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
@@ -97,18 +98,29 @@ def figure(inputs: pd.DataFrame, path: Path, level: float) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.0, 3.4), sharey=True)
-    for ax, column, title in zip(axes, ("cover_single", "cover_pooled"),
-                                 ("Single chain", "Four-chain mixture")):
-        for name, part in inputs.groupby("method", sort=False):
-            values = np.sort(part[column].to_numpy())
-            ax.plot(np.arange(1, len(values) + 1), values, color=STYLE[name], lw=1.6, label=name)
-        ax.axhline(level, color="0.35", ls=(0, (4, 2)), lw=0.9)
-        ax.set_title(title, fontsize=10)
-        ax.set_xlabel("Input, sorted by coverage")
-        ax.grid(alpha=0.25)
-    axes[0].set_ylabel(f"Coverage of central {int(round(100 * level))}% interval")
-    axes[1].legend(frameon=False, fontsize=8, loc="lower right")
+    # one point per input and sampler: mixture coverage against single-chain
+    # coverage; the large markers are the means over inputs
+    fig, ax = plt.subplots(figsize=(5.2, 5.0))
+    lo = min(inputs.cover_single.min(), inputs.cover_pooled.min()) - 0.02
+    ax.plot([lo, 1.0], [lo, 1.0], color="0.3", lw=0.9, zorder=1)
+    ax.axhline(level, color="0.5", ls=(0, (4, 2)), lw=0.8, zorder=1)
+    ax.axvline(level, color="0.5", ls=(0, (4, 2)), lw=0.8, zorder=1)
+    groups = list(inputs.groupby("method", sort=False))
+    for name, part in groups:
+        ax.scatter(part.cover_pooled, part.cover_single, s=16, marker=MARKERS[name], color=STYLE[name],
+                   alpha=0.6, edgecolors="none", label=name, zorder=2)
+    for name, part in groups:
+        ax.scatter(part.cover_pooled.mean(), part.cover_single.mean(), s=110, marker=MARKERS[name],
+                   color=STYLE[name], edgecolors="black", linewidths=1.0, zorder=4)
+    ax.scatter([], [], s=70, marker="o", facecolors="white", edgecolors="black", linewidths=1.0,
+               label="Mean over inputs")
+    ax.set_xlim(lo, 1.005)
+    ax.set_ylim(lo, 1.005)
+    ax.set_aspect("equal")
+    ax.set_xlabel("Four-chain mixture coverage")
+    ax.set_ylabel("Single-chain coverage")
+    ax.grid(alpha=0.25)
+    ax.legend(frameon=False, fontsize=8, loc="upper left")
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=200, bbox_inches="tight")
