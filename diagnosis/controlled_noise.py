@@ -2,7 +2,7 @@
 """Default-sampler agreement when only the response noise changes.
 
 The training inputs, training size and prediction panel stay those of runs 0-4
-of the main experiment on SeoulBike, Airfoil and Abalone; only the training
+of the main experiment on SeoulBike, Airfoil, Abalone and CPU activity; only the training
 response changes. Three responses are used:
 
 * ``observed``: the observed training response;
@@ -19,8 +19,6 @@ sigma_bar^2 / var(y_train) averaged over runs 0-4, rounded to three decimals.
 
 Each configuration runs four Default chains of 10,000 iterations per run and is
 stored like ``scaling_sweep.py`` under ``<store-dir>/ctl_<Source>_<kind>[_nfNNNN]``.
-Run 0 of every configuration also gets a separate Default fit (random state
-777) whose move acceptance over iterations 3,001-5,000 is recorded.
 """
 from __future__ import annotations
 
@@ -44,7 +42,7 @@ from experiment_fixed100 import (  # noqa: E402
 )
 from fixed100_support import load_dataset  # noqa: E402
 
-SOURCES = {"seoul_bike": "SeoulBike", "airfoil": "Airfoil", "abalone": "Abalone"}
+SOURCES = {"seoul_bike": "SeoulBike", "airfoil": "Airfoil", "abalone": "Abalone", "cpu_act": "CPUAct"}
 # (kind, target noise fraction); "nu0" is the observed response's own level
 PLAN = {
     "seoul_bike": [("observed", None), ("added", 0.17), ("added", 0.4),
@@ -53,13 +51,14 @@ PLAN = {
                 ("semi", "nu0"), ("semi", 0.1)],
     "abalone": [("observed", None), ("semi", "nu0"), ("semi", 0.1),
                 ("semi", 0.04), ("semi", 0.01)],
+    "cpu_act": [("observed", None), ("semi", "nu0"), ("added", 0.05), ("semi", 0.05),
+                ("added", 0.2), ("semi", 0.2)],
 }
 RUNS = (0, 1, 2, 3, 4)
 BURN = 3000
 # seed tuple of the response noise: (7, run, int(1000 * target), KIND_CODE[kind])
 KIND_CODE = {"observed": 4, "added": 5, "semi": 5}
 CHAIN_SEED_OFFSET = 500_000
-ACCEPTANCE_SEED = 777
 
 
 def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
@@ -158,27 +157,6 @@ def chain_task(args, cfg, chain_id):
     )
 
 
-def acceptance_task(args, cfg):
-    """Move acceptance of one Default fit over iterations 3,001-5,000."""
-    from bart_playground import DefaultBART
-
-    model = DefaultBART(ndpost=3000, nskip=0, n_trees=args.n_trees, tol=1,
-                        proposal_probs=exp.default_proposal_probs, random_state=ACCEPTANCE_SEED,
-                        dirichlet_prior=False, s_alpha=1.0)
-    model.fit(cfg["X_train"], cfg["y_train"], quietly=True)
-    sampler = model.sampler
-    accepted0, proposed0 = dict(sampler.move_accepted_counts), dict(sampler.move_success_counts)
-    sampler.continue_run(2000, last_state=model.trace[-1], quietly=True)
-    rates = {move: (sampler.move_accepted_counts[move] - accepted0[move])
-             / max(1, sampler.move_success_counts[move] - proposed0[move]) for move in accepted0}
-    _write_key_value_csv(
-        args.store_dir / cfg["tag"] / "metadata" / f"{cfg['tag']}__run{cfg['run']:03d}__default_acceptance.csv",
-        {"iterations": "3001-5000", "random_state": ACCEPTANCE_SEED,
-         **{f"accept_{move}": rate for move, rate in rates.items()}},
-    )
-    return cfg["tag"]
-
-
 def save_run(args, cfg) -> None:
     root, tag, run = args.store_dir / cfg["tag"], cfg["tag"], cfg["run"]
     tmp_root = root / "_stream_tmp" / f"run{run:03d}"
@@ -222,14 +200,10 @@ def main(supplied: list[str] | None = None) -> int:
     # largest training sets first so the end of the schedule is short
     tasks = [(cfg, chain_id) for cfg in sorted(todo, key=lambda c: -len(c["train"]))
              for chain_id in range(args.n_chains)]
-    acceptance = [cfg for cfg in configs if cfg["run"] == 0 and not (
-        args.store_dir / cfg["tag"] / "metadata" / f"{cfg['tag']}__run000__default_acceptance.csv").is_file()]
     jobs = [delayed(chain_task)(args, cfg, chain_id) for cfg, chain_id in tasks]
-    jobs += [delayed(acceptance_task)(args, cfg) for cfg in acceptance]
-    print(f"[controlled] {len(tasks)} chains and {len(acceptance)} acceptance fits on {args.n_jobs} workers", flush=True)
+    print(f"[controlled] {len(tasks)} chains on {args.n_jobs} workers", flush=True)
     for done in Parallel(n_jobs=args.n_jobs, return_as="generator_unordered")(jobs):
-        label = done if isinstance(done, str) else Path(done["tmp_dir"]).name
-        print(f"[controlled] done {label}", flush=True)
+        print(f"[controlled] done {Path(done['tmp_dir']).name}", flush=True)
     for cfg in todo:
         save_run(args, cfg)
         print(f"[controlled] {cfg['tag']} run {cfg['run']:03d} saved", flush=True)

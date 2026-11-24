@@ -88,7 +88,8 @@ def sweep_source(tag: str) -> tuple[np.ndarray, np.ndarray]:
 def controlled_source(tag: str) -> tuple[np.ndarray, np.ndarray]:
     from fixed100_support import load_dataset
 
-    source = {"SeoulBike": "seoul_bike", "Airfoil": "airfoil", "Abalone": "abalone"}[tag.split("_")[1]]
+    source = {"SeoulBike": "seoul_bike", "Airfoil": "airfoil", "Abalone": "abalone",
+              "CPUAct": "cpu_act"}[tag.split("_")[1]]
     X, y = load_dataset(source)
     return np.asarray(X, dtype=float), np.asarray(y, dtype=float).reshape(-1)
 
@@ -243,17 +244,13 @@ def main(supplied: list[str] | None = None) -> int:
         pick(tails, "method", "default_long", "cross_rhat_median"))
     settings["label"] = [DISPLAY.get(s, s) for s in settings.setting]
 
-    # controlled settings: design and change-move acceptance of run 0
+    # controlled settings: response design
     for idx in settings.index[settings.group == "controlled"]:
         tag = settings.at[idx, "setting"]
         meta = pd.read_csv(stored(args.controlled_store, tag, "metadata", 0, "default_metadata"),
                            header=None, index_col=0).iloc[:, 0]
         settings.at[idx, "response"] = meta["response"]
         settings.at[idx, "target_noise_fraction"] = pd.to_numeric(meta.get("target_noise_fraction"), errors="coerce")
-        acceptance = stored(args.controlled_store, tag, "metadata", 0, "default_acceptance")
-        if acceptance.is_file():
-            acc = pd.read_csv(acceptance, header=None, index_col=0).iloc[:, 0]
-            settings.at[idx, "change_acceptance_run0"] = float(acc["accept_change"])
     settings.to_csv(args.table_dir / "kappa_settings.csv", index=False)
 
     statistics(settings).to_csv(args.table_dir / "kappa_statistics.csv", index=False)
