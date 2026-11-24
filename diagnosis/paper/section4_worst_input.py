@@ -19,9 +19,10 @@ record keeps the draws after the common 3,000-draw warm-up.
 
 The paper figures:
 
-* 4.4: ``--datasets fixed100_Friedman --records default default_long --suffix _long``
-* 7.3: ``--datasets fixed100_Friedman --records default mtmh default_pt mtmh_pt --suffix _methods``
-* appendix: ``--overview --suffix _default`` and
+* 4.4: ``--datasets fixed100_Friedman --records default default_long --panels latent --suffix _long_latent``
+* 7.3: ``--datasets fixed100_Friedman --records default mtmh default_pt mtmh_pt --panels latent --suffix _methods_latent``
+* appendix: the same two calls with ``--panels predictive`` and suffixes
+  ``_long_predictive`` and ``_methods_predictive``; ``--overview --suffix _default`` and
   ``--overview --records mtmh_pt --suffix _mtmh_pt`` (same inputs, chosen on Default)
 """
 from __future__ import annotations
@@ -84,6 +85,9 @@ def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
                         help="Appended to output names, e.g. _methods.")
     parser.add_argument("--overview", action="store_true",
                         help="Also draw the first record of every dataset in one grid.")
+    parser.add_argument("--panels", default="both", choices=["both", "latent", "predictive"],
+                        help="both: one row per record with latent and predictive panels; "
+                             "latent or predictive: one panel per record, two per row.")
     parser.add_argument("--title", action="store_true",
                         help="Add a title naming the dataset, run and input to each dataset figure.")
     parser.add_argument("--dpi", type=int, default=200)
@@ -161,7 +165,33 @@ def draw_rows(axes, data: dict, records: list[str], interval: float, label_rows:
                       f"{prefix}predictive $f+\\sigma\\varepsilon$, $\\hat R={result['rhat_predictive']:.2f}$")
 
 
+def single_kind_figure(args: argparse.Namespace, dataset: str, run: int, data: dict) -> Path:
+    """One panel per record, latent or predictive only, two panels per row."""
+    kind = args.panels
+    n = len(args.records)
+    ncols = min(n, 2)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.6 * ncols, 2.9 * nrows), squeeze=False)
+    grid = axis_range([data["records"][r][kind] for r in args.records])
+    marker, marker_label = (data["truth"], "true $f$") if kind == "latent" else (data["y"], "observed $y$")
+    what = "latent $f$" if kind == "latent" else "predictive $f+\\sigma\\varepsilon$"
+    for k, record in enumerate(args.records):
+        result = data["records"][record]
+        density_panel(axes[k // ncols][k % ncols], result[kind], grid, args.interval, marker, marker_label,
+                      f"{RECORDS[record]}: {what}, $\\hat R={result[f'rhat_{kind}']:.2f}$")
+    for k in range(n, nrows * ncols):
+        axes[k // ncols][k % ncols].axis("off")
+    axes[0][0].legend(fontsize=7, frameon=False)
+    fig.tight_layout()
+    path = args.figure_dir / f"worst_input_{dataset.removeprefix('fixed100_')}_run{run:03d}{args.suffix}.png"
+    fig.savefig(path, dpi=args.dpi)
+    plt.close(fig)
+    return path
+
+
 def dataset_figure(args: argparse.Namespace, dataset: str, run: int, data: dict) -> Path:
+    if args.panels != "both":
+        return single_kind_figure(args, dataset, run, data)
     rows = len(args.records)
     fig, axes = plt.subplots(rows, 2, figsize=(9, 2.7 * rows + 0.5), squeeze=False)
     draw_rows(axes, data, args.records, args.interval, label_rows=rows > 1)
