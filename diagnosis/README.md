@@ -12,6 +12,7 @@ long-chain empirical reference.
 | `store/` | Stored predictions, traces, splits, temperatures, and metadata for every dataset and run. |
 | `store_default_ext/` | Extended run-0 Default chains, 30,000 stored draws per setting. |
 | `store_scaling/` | The sample-size and noise sweep. |
+| `store_coverage/` | Coverage replicates on Friedman, written by `coverage_replicates.py`. |
 | `store_controlled/` | Controlled-noise responses on SeoulBike, Airfoil and Abalone, written by `controlled_noise.py`. |
 | `timing/` | PT timing benchmark, per-run CSV files, and the timing summary used by the paper analysis. |
 | `paper/` | Standalone diagnosis and comparison scripts plus paper-facing tables, figures, and summaries. |

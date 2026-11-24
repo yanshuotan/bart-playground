@@ -11,6 +11,7 @@ Every configured dataset uses runs `000` through `004`.
 | `section4_default.py` | Default-only diagnosis figure and tables | `fig:default-diagnostic` (4.1) |
 | `section4_long_budget.py` | two-budget R-hat table, long-chain projection figures | `tab:rhat-budgets`, `fig:long-chains` (4.2), `fig:appendix-long-*` |
 | `section4_scaling.py` | sample-size and noise sweep | `fig:scaling` (4.3), size and noise appendix |
+| `section4_coverage_replicates.py` | frequentist coverage of the latent $f$ over 100 independent Friedman training sets (`coverage_replicates_*.csv`, `coverage_replicates_inputs.png`) | 4.4 and 7.3 text, `tab:coverage-replicates`, `fig:coverage-replicates` |
 | `section4_kappa.py` | size and noise scale $\kappa=n/(1-R^2)$ against Default R-hat over the paper, sweep and controlled settings (`kappa_*.csv`) | 4.3 text, `tab:kappa`, `tab:kappa-spearman`, `tab:kappa-controlled` |
 | `section4_worst_input.py` | per-chain densities of latent $f$ and of $f+\sigma\varepsilon$ at the input with the largest pointwise R-hat, one row per record or method | 4.4 Friedman figure, 7.3 sampler figure, appendix overview |
 | `section7_methods.py` | four-method factorial tables and projection figures | `tab:rhat-ablation`, `tab:joint-ablation`, `tab:prediction-ablation`, `fig:worst-direction-full` (7.2), `tab:appendix-all-methods` |
@@ -34,6 +35,7 @@ first one, so existing invocations still work.
 .\.venv\Scripts\python.exe diagnosis\paper\section4_long_budget.py figures
 .\.venv\Scripts\python.exe diagnosis\paper\section4_scaling.py
 .\.venv\Scripts\python.exe diagnosis\paper\section4_kappa.py
+.\.venv\Scripts\python.exe diagnosis\paper\section4_coverage_replicates.py
 .\.venv\Scripts\python.exe diagnosis\paper\section7_swap_rates.py
 .\.venv\Scripts\python.exe diagnosis\paper\section7_methods.py
 .\.venv\Scripts\python.exe diagnosis\paper\section7_costs.py costs --long
