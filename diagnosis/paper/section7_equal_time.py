@@ -30,6 +30,11 @@ reruns Default alone at 10^5 iterations under the short-chain seeds, and this
 script reads that output when it is present, checks the overlap against the
 stored short run and uses it in place of it. Every setting is analysed on the
 same budget grid, which ends at $b=2.5$.
+
+The dashed reference line in each panel is the cross-chain median of the
+thinned long Default record ($10^7$ iterations, $b=1000$) for the same run, read
+from the ``*_tail_as_method_run_level.csv`` tables of ``long_tail_tables.py`` so
+that it matches the long-budget table of Section 4. Run that script first.
 """
 from __future__ import annotations
 
@@ -48,8 +53,8 @@ import xarray as xr
 
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
-from core import load_with_shape, pointwise_rhat_summary  # noqa: E402
-from section6_methods import (full_target_vector, predictive_baselines,  # noqa: E402
+from core import OPENML_SETTINGS, load_with_shape, pointwise_rhat_summary  # noqa: E402
+from section7_methods import (full_target_vector, predictive_baselines,  # noqa: E402
                               predictive_metrics, residual_variances, split_indices)
 from section7_costs import scalar_summary, targets  # noqa: E402
 
@@ -65,34 +70,41 @@ TIMING_TAG = {
     "fixed100_Airfoil": "fixed100_Airfoil",
     "fixed100_CCPP": "fixed100_CCPP",
     "fixed100_CPUAct": "fixed100_CPUAct",
-    "fixed100_CalHousing_subsample5000": "fixed100_CalHousing_subsample5000",
+    "fixed100_CalHousing_subsample10000": "fixed100_CalHousing_subsample10000",
     "fixed100_Concrete": "fixed100_Concrete",
     "fixed100_Friedman": "fixed100_Friedman",
     "fixed100_FriedmanSparseDir_p20": "fixed100_FriedmanSparseDirP20K5",
     "fixed100_FriedmanSparseDir_p100": "fixed100_FriedmanSparseDir",
     "fixed100_FriedmanSparseDir_p200": "fixed100_FriedmanSparseDirP200K5",
     "fixed100_SeoulBike": "fixed100_SeoulBike",
-    "fixed100_Superconduct_subsample5000": "fixed100_Superconduct_subsample5000",
+    "fixed100_Superconduct_subsample10000": "fixed100_Superconduct_subsample10000",
+    **{tag: tag for tag in OPENML_SETTINGS},
 }
 DISPLAY = {
     "fixed100_Abalone": "Abalone", "fixed100_Airfoil": "Airfoil",
     "fixed100_CCPP": "CCPP", "fixed100_CPUAct": "CPU activity",
-    "fixed100_CalHousing_subsample5000": "CalHousing",
+    "fixed100_CalHousing_subsample10000": "CalHousing",
     "fixed100_Concrete": "Concrete", "fixed100_Friedman": "Friedman",
     "fixed100_FriedmanSparseDir_p20": "DART $d=20$",
     "fixed100_FriedmanSparseDir_p100": "DART $d=100$",
     "fixed100_FriedmanSparseDir_p200": "DART $d=200$",
     "fixed100_SeoulBike": "SeoulBike",
-    "fixed100_Superconduct_subsample5000": "Superconduct",
+    "fixed100_Superconduct_subsample10000": "Superconduct",
+    **{tag: name for tag, (name, _) in OPENML_SETTINGS.items()},
 }
 PRODUCTION_ITERS = 10_000
-# the resolving group of settings first, then the persistent one
-ORDER = ["fixed100_FriedmanSparseDir_p20", "fixed100_FriedmanSparseDir_p200",
-         "fixed100_FriedmanSparseDir_p100", "fixed100_Abalone",
-         "fixed100_Friedman", "fixed100_Concrete",
-         "fixed100_CalHousing_subsample5000", "fixed100_Airfoil",
-         "fixed100_CCPP", "fixed100_CPUAct",
-         "fixed100_Superconduct_subsample5000", "fixed100_SeoulBike"]
+# the paper's order (upper end of the thinned-record median range): the
+# settings that resolve over 10^7 iterations first, then the persistent ones;
+# settings not listed here follow in registry order
+ORDER = ["fixed100_Fiat500", "fixed100_QSARFishToxicity", "fixed100_Cars",
+         "fixed100_CPS88Wages_subsample10000", "fixed100_Abalone",
+         "fixed100_FriedmanSparseDir_p20", "fixed100_FriedmanSparseDir_p200",
+         "fixed100_FriedmanSparseDir_p100", "fixed100_Friedman",
+         "fixed100_BlackFriday_subsample10000", "fixed100_Concrete",
+         "fixed100_Protein_subsample10000", "fixed100_SpaceGA", "fixed100_Airfoil",
+         "fixed100_CCPP", "fixed100_CalHousing_subsample10000", "fixed100_CPUAct",
+         "fixed100_Superconduct_subsample10000", "fixed100_SeoulBike", "fixed100_Kin8nm"]
+ORDER += [tag for tag in TIMING_TAG if tag not in ORDER]
 NAMES = ["Default", "MTMH", "Default+PT", "MTMH+PT"]
 STYLE = {"Default": dict(color="#1f77b4", marker="o"),
          "MTMH": dict(color="#2ca02c", marker="s"),
@@ -120,9 +132,6 @@ def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--warmup-fraction", type=float, default=0.3)
     parser.add_argument("--min-draws", type=int, default=150,
                         help="Skip a budget point if any method retains fewer draws.")
-    parser.add_argument("--long-fractions", nargs="+", type=float,
-                        default=[0.05, 0.1, 0.25, 0.5, 1.0])
-    parser.add_argument("--long-draws", type=int, default=350)
     parser.add_argument("--dpi", type=int, default=200)
     return parser.parse_args(supplied)
 
@@ -182,7 +191,7 @@ def curves_main(args) -> int:
     args.table_dir.mkdir(parents=True, exist_ok=True)
     args.figure_dir.mkdir(parents=True, exist_ok=True)
 
-    rows, long_rows = [], []
+    rows = []
     for dataset in args.datasets:
         ratios = cost_ratios(args.timing_dir, dataset)
         for run in [args.run]:
@@ -210,33 +219,10 @@ def curves_main(args) -> int:
                         "rhat_median": summary["median"], "rhat_q90": summary["q90"],
                     })
             del draws
-
-            long_hits = sorted((args.store_root / dataset / "preds").glob(
-                f"*__run{run:03d}__default_long__preds.csv"))
-            if long_hits:
-                long_draws = load_with_shape(long_hits[0]).transpose(0, 2, 1)
-                stored = long_draws.shape[1]
-                for fraction in args.long_fractions:
-                    count = int(round(fraction * stored))
-                    if count - int(round(args.warmup_fraction * count)) < args.long_draws:
-                        continue
-                    sample = thinned_tail(long_draws, count, args.warmup_fraction,
-                                          args.long_draws)
-                    summary = pointwise_rhat_summary(sample)
-                    long_rows.append({
-                        "dataset": dataset, "run": run, "method": "Default (long)",
-                        "budget": fraction * 1000.0, "cost_ratio": 1.0,
-                        "iterations": int(fraction * 10_000_000),
-                        "draws_compared": args.long_draws,
-                        "rhat_median": summary["median"], "rhat_q90": summary["q90"],
-                    })
-                del long_draws
             print(f"[equal-time] {dataset} run {run:03d}", flush=True)
 
-    frame = pd.DataFrame(rows + long_rows)
-    frame.to_csv(args.table_dir / "equal_time_budget.csv", index=False)
-
     short = pd.DataFrame(rows)
+    short.to_csv(args.table_dir / "equal_time_budget.csv", index=False)
     reached = set.intersection(*(set(g.budget) for _, g in short.groupby("dataset")))
     headline = max(reached)
     summary = short[short.budget.eq(headline)][
@@ -247,7 +233,7 @@ def curves_main(args) -> int:
     order = [d for d in ORDER if d in set(short.dataset)]
     median = summary.pivot(index="dataset", columns="method", values="rhat_median")
     q90 = summary.pivot(index="dataset", columns="method", values="rhat_q90")
-    draw_curves(args, frame, order)
+    draw_curves(args, short, long_reference(args.table_dir, args.run), order)
 
     pd.set_option("display.width", 200)
     wide = median.loc[order]
@@ -268,12 +254,22 @@ def curves_main(args) -> int:
     return 0
 
 
-def draw_curves(args: argparse.Namespace, frame: pd.DataFrame, order) -> None:
+def long_reference(table_dir: Path, run: int) -> pd.Series:
+    """Cross-chain median of the thinned long Default record, per setting."""
+    paths = [table_dir / f"{name}_tail_as_method_run_level.csv" for name in ("long", "dart")]
+    missing = [p.name for p in paths if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"{missing} not found; run long_tail_tables.py first")
+    table = pd.concat([pd.read_csv(p) for p in paths])
+    rows = table[table.run.eq(run) & table.method.eq("default_long")]
+    return rows.set_index("dataset")["cross_rhat_median"]
+
+
+def draw_curves(args: argparse.Namespace, short: pd.DataFrame, floor: pd.Series,
+                order) -> None:
     """One panel per setting: agreement against wall time, all on one grid."""
-    short = frame[frame.method.ne("Default (long)")]
-    floor = (frame[frame.method.eq("Default (long)") & frame.budget.eq(1000.0)]
-             .set_index("dataset")["rhat_median"])
-    fig, axes = plt.subplots(3, 4, figsize=(11.2, 7.4), sharex=True)
+    rows = -(-len(order) // 4)
+    fig, axes = plt.subplots(rows, 4, figsize=(11.2, 2.47 * rows), sharex=True)
     flat = axes.ravel()
     for ax, dataset in zip(flat, order):
         part = short[short.dataset.eq(dataset)]

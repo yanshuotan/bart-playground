@@ -8,10 +8,8 @@ scripts in ``diagnosis/exploratory``.
 from __future__ import annotations
 
 import argparse
-import ast
 from pathlib import Path
 
-import arviz as az
 import matplotlib
 
 matplotlib.use("Agg")
@@ -21,7 +19,6 @@ from core import (dataset_tag, load_with_shape, markdown_table,
                   pointwise_rhat, summarize_rhat, worst_direction_summary)
 import numpy as np
 import pandas as pd
-import xarray as xr
 
 
 DATASETS = ("fixed100_Abalone", "fixed100_Concrete", "fixed100_Friedman")
@@ -40,52 +37,6 @@ def predictions(store_root: Path, dataset: str, run: int, method: str, burn: int
     return draws[:, burn:, :] if burn else draws
 
 
-def rolling_cross_rhat(draws: np.ndarray, window: int, step: int) -> pd.DataFrame:
-    rows = []
-    for start in range(0, draws.shape[1] - window + 1, step):
-        rows.append({"window_start": start, "window_end": start + window,
-                     **summarize_rhat(pointwise_rhat(draws[:, start:start + window]))})
-    return pd.DataFrame(rows)
-
-
-def rolling_within_rhat(
-    draws: np.ndarray,
-    segment_length: int,
-    n_segments: int,
-    step: int,
-) -> pd.DataFrame:
-    rows = []
-    block_length = segment_length * n_segments
-    for start in range(0, draws.shape[1] - block_length + 1, step):
-        block = draws[:, start:start + block_length]
-        segments = block.reshape(draws.shape[0], n_segments, segment_length, draws.shape[2])
-        pseudo = segments.transpose(1, 2, 0, 3)
-        data = xr.DataArray(
-            pseudo,
-            dims=("chain", "draw", "original_chain", "test_point"),
-            name="prediction",
-        )
-        values = np.asarray(az.rhat(data, method="rank")["prediction"].values)
-        for chain_id, chain_values in enumerate(values):
-            rows.append({
-                "original_chain": chain_id,
-                "window_start": start,
-                "window_end": start + block_length,
-                **summarize_rhat(chain_values),
-            })
-    return pd.DataFrame(rows)
-
-
-def mean_pairwise_centroid_distance(draws: np.ndarray) -> float:
-    centers = draws.mean(axis=1)
-    distances = [
-        np.linalg.norm(centers[left] - centers[right])
-        for left in range(len(centers))
-        for right in range(left + 1, len(centers))
-    ]
-    return float(np.mean(distances))
-
-
 def spaced_indices(size: int, count: int) -> np.ndarray:
     return np.linspace(0, size - 1, min(size, count), dtype=int)
 
@@ -94,14 +45,12 @@ def plot_diagnosis(
     short_all: np.ndarray,
     short_post_burn: np.ndarray,
     worst: dict[str, np.ndarray | float],
-    cross: pd.DataFrame,
-    within: pd.DataFrame,
     short_burn: int,
     plot_draws: int,
-    title: str,
+    title: str = "",
 ) -> plt.Figure:
-    fig, axes = plt.subplots(2, 2, figsize=(13.2, 8.6), layout="constrained")
-    trace_ax, direction_ax, cross_ax, within_ax = axes.flat
+    fig, axd = plt.subplot_mosaic([["a", "b"]], figsize=(13.2, 4.6), layout="constrained")
+    trace_ax, direction_ax = axd["a"], axd["b"]
     projected = np.asarray(worst["projected"])
     iterations = np.arange(short_burn, short_all.shape[1])
     for chain_id in range(projected.shape[0]):
@@ -112,25 +61,6 @@ def plot_diagnosis(
     trace_ax.set(title="(a) Maximum between/within direction", xlabel="iteration",
                  ylabel="projected prediction")
     trace_ax.legend(ncol=2, fontsize=8)
-
-    x = cross["window_end"].to_numpy()
-    cross_ax.plot(x, cross["median"], color="#245f9e", linewidth=1.8, label="median")
-    cross_ax.fill_between(x, cross["q25"], cross["q75"], color="#245f9e", alpha=0.2,
-                          label="test-point IQR")
-    cross_ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1, label="1.01")
-    cross_ax.set(title="(c) Cross-chain pointwise rank-split R-hat", xlabel="window end", ylabel="R-hat")
-    cross_ax.legend(fontsize=8)
-
-    for chain_id, frame in within.groupby("original_chain"):
-        frame = frame.sort_values("window_end")
-        x = frame["window_end"].to_numpy()
-        color = CHAIN_COLORS[int(chain_id)]
-        within_ax.plot(x, frame["median"], color=color, linewidth=1.5,
-                       label=f"chain {int(chain_id) + 1}")
-        within_ax.fill_between(x, frame["q25"], frame["q75"], color=color, alpha=0.08)
-    within_ax.axhline(1.01, color="#555555", linestyle="--", linewidth=1, label="1.01")
-    within_ax.set(title="(d) Within-chain segment rank-split R-hat", xlabel="window end", ylabel="R-hat")
-    within_ax.legend(ncol=3, fontsize=8)
 
     # the fitted first half is left out of the scatter; the trace shows both halves
     short_coords = np.asarray(worst["projected_2d"])[:, int(worst["fit_draws"]):, :]
@@ -152,9 +82,10 @@ def plot_diagnosis(
         ylabel=ylabel,
     )
     direction_ax.legend(ncol=2, fontsize=7.5)
-    for ax in axes.flat:
+    for ax in axd.values():
         ax.grid(alpha=0.2)
-    fig.suptitle(title, fontsize=14)
+    if title:
+        fig.suptitle(title, fontsize=14)
     return fig
 
 
@@ -182,7 +113,6 @@ def write_summary(path: Path, settings: dict[str, int | float], dataset_summary:
     lines.extend(["", "## Dataset-level results", ""])
     columns = [
         "dataset", "worst_lambda_max_mean", "cross_rhat_median_mean",
-        "within_rhat_median_mean", "short_centroid_distance_mean",
         "long_rhat_median_mean",
     ]
     view = dataset_summary[columns].copy()
@@ -203,10 +133,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary-path", type=Path, default=script.parent / "diagnosis_summary.md")
     parser.add_argument("--datasets", nargs="+", default=list(DATASETS))
     parser.add_argument("--runs", nargs="+", type=int, default=list(RUNS))
-    parser.add_argument("--window", type=int, default=1000)
-    parser.add_argument("--step", type=int, default=100)
-    parser.add_argument("--segment-length", type=int, default=1000)
-    parser.add_argument("--n-segments", type=int, default=4)
     parser.add_argument("--short-burn", type=int, default=3000)
     parser.add_argument("--long-burn", type=int, default=3000)
     parser.add_argument("--plot-draws", type=int, default=750)
@@ -224,7 +150,7 @@ def main() -> int:
     figure_dir.mkdir(parents=True, exist_ok=True)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
 
-    run_rows, cross_frames, within_frames = [], [], []
+    run_rows = []
     for dataset in args.datasets:
         for run in args.runs:
             print(f"[diagnosis] {dataset} run {run:03d}", flush=True)
@@ -234,33 +160,24 @@ def main() -> int:
             long_post_burn = long_all[:, args.long_burn:, :]
 
             worst = worst_direction_summary(short_all[:, args.short_burn:, :], args.ridge_fraction)
-            cross = rolling_cross_rhat(short_all, args.window, args.step)
-            within = rolling_within_rhat(short_all, args.segment_length, args.n_segments, args.step)
-            long_values = pointwise_rhat(long_post_burn)
-            long_summary = summarize_rhat(long_values)
+            short_summary = summarize_rhat(pointwise_rhat(short_post_burn))
+            long_summary = summarize_rhat(pointwise_rhat(long_post_burn))
 
-            cross_frames.append(cross.assign(dataset=dataset, run=run))
-            within_frames.append(within.assign(dataset=dataset, run=run))
             run_rows.append({
                 "dataset": dataset,
                 "run": run,
                 "worst_lambda_max": worst["lambda_max"],
                 "worst_lambda_second": worst["lambda_second"],
                 "worst_eigen_gap": worst["eigen_gap"],
-                "cross_rhat_median": cross["median"].median(),
-                "cross_rhat_q90": cross["q90"].median(),
-                "within_rhat_median": within["median"].median(),
-                "within_rhat_q90": within["q90"].median(),
-                "short_centroid_distance": mean_pairwise_centroid_distance(short_post_burn),
+                "cross_rhat_median": short_summary["median"],
+                "cross_rhat_q90": short_summary["q90"],
                 "long_rhat_median": long_summary["median"],
                 "long_rhat_q90": long_summary["q90"],
             })
 
-            fig = plot_diagnosis(
-                short_all, short_post_burn, worst, cross, within,
-                args.short_burn, args.plot_draws,
-                f"{dataset} | run {run:03d} | Default sampler diagnosis",
-            )
+            # No title: the paper caption names the dataset and run.
+            fig = plot_diagnosis(short_all, short_post_burn, worst,
+                                 args.short_burn, args.plot_draws)
             fig.savefig(figure_dir / f"{dataset}_run{run:03d}_default_diagnosis.png",
                         dpi=args.dpi, bbox_inches="tight")
             plt.close(fig)
@@ -269,15 +186,9 @@ def main() -> int:
     dataset_frame = aggregate_dataset_summary(run_frame)
     run_frame.to_csv(table_dir / "diagnosis_run_summary.csv", index=False)
     dataset_frame.to_csv(table_dir / "diagnosis_dataset_summary.csv", index=False)
-    pd.concat(cross_frames, ignore_index=True).to_csv(table_dir / "diagnosis_cross_chain_rhat_windows.csv", index=False)
-    pd.concat(within_frames, ignore_index=True).to_csv(table_dir / "diagnosis_within_chain_rhat_windows.csv", index=False)
 
     settings = {
         "runs_per_dataset": len(args.runs),
-        "cross_chain_window": args.window,
-        "rolling_step": args.step,
-        "segment_length": args.segment_length,
-        "segments_per_block": args.n_segments,
         "short_burn": args.short_burn,
         "long_burn": args.long_burn,
     }

@@ -74,6 +74,35 @@ def _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2, rando
     leaf_params_new = post_mean + noise
     return leaf_params_new
 
+def _resample_leaf_vals_with_fallback(leaf_basis, residuals, eps_sigma2, f_sigma2, random_normal_p, temp=1.0):
+    """`_resample_leaf_vals_numba`, redone in float64 when its Cholesky fails.
+
+    The precision matrix is positive definite in exact arithmetic, but the leaf
+    basis is structurally rank deficient (each tree's columns sum to the
+    all-ones vector), so along at least T-1 directions it is only the prior
+    term 1/f_sigma2. When eps_sigma2 is small the data term is several orders
+    of magnitude larger, and float32 rounding can push those directions
+    negative. Same remedy as `_leaf_basis_svd_with_fallback`: the float64
+    retry uses the same standard normals, so it is the same draw from the same
+    conditional, and every call whose float32 Cholesky succeeds is unchanged.
+    """
+    try:
+        return _resample_leaf_vals_numba(leaf_basis, residuals, eps_sigma2, f_sigma2,
+                                         random_normal_p, temp=temp)
+    except np.linalg.LinAlgError as float32_error:
+        logger.warning(
+            "float32 Cholesky of the %s leaf precision failed (%s); retrying in float64",
+            getattr(leaf_basis, "shape", "?"), float32_error,
+        )
+    basis64 = np.asarray(leaf_basis, dtype=np.float64)
+    tempered_eps_sigma2 = float(temp) * float(eps_sigma2)
+    precision = basis64.T @ basis64 / tempered_eps_sigma2 + np.eye(basis64.shape[1]) / float(f_sigma2)
+    rhs = basis64.T @ np.asarray(residuals, dtype=np.float64) / tempered_eps_sigma2
+    chol_precision = np.linalg.cholesky(precision)
+    post_mean = np.linalg.solve(chol_precision.T, np.linalg.solve(chol_precision, rhs))
+    noise = np.linalg.solve(chol_precision.T, np.asarray(random_normal_p, dtype=np.float64))
+    return (post_mean + noise).astype(np.asarray(leaf_basis).dtype)
+
 @njit(cache=True)
 def _single_tree_log_marginal_lkhd_numba(leaf_ids, sample_n_in_node, resids, eps_sigma2, f_sigma2, temp=1.0):
     """
@@ -265,7 +294,7 @@ class TreesPrior:
             if leaf_basis is None:
                 leaf_basis = bart_params.leaf_basis(tree_ids)
 
-            leaf_params_new = _resample_leaf_vals_numba(
+            leaf_params_new = _resample_leaf_vals_with_fallback(
                 leaf_basis,
                 residuals,
                 eps_sigma2=bart_params.global_params["eps_sigma2"][0],

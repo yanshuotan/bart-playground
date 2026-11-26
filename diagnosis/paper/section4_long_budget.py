@@ -6,8 +6,8 @@ stored as roughly 10^4 draws. Modern rank-normalized split R-hat is computed at
 each fixed test point using the same number of post-burn draws per chain, so the
 two budgets differ only in the span of iterations behind the stored draws.
 
-    .venv/Scripts/python diagnosis/paper/section3_long_budget.py table
-    .venv/Scripts/python diagnosis/paper/section3_long_budget.py figures
+    .venv/Scripts/python diagnosis/paper/section4_long_budget.py table
+    .venv/Scripts/python diagnosis/paper/section4_long_budget.py figures
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-from core import (dataset_tag, input_signature, load_with_shape,  # noqa: E402
+from core import (OPENML_SETTINGS, dataset_tag, input_signature, load_with_shape,  # noqa: E402
                   long_predictions, long_runs, pointwise_rhat_summary, run_inputs,
                   worst_directions)
 
@@ -33,14 +33,15 @@ DISPLAY = {
     "fixed100_Airfoil": "Airfoil",
     "fixed100_CPUAct": "CPUAct",
     "fixed100_CCPP": "CCPP",
-    "fixed100_CalHousing_subsample5000": "CalHousing",
+    "fixed100_CalHousing_subsample10000": "CalHousing",
     "fixed100_Concrete": "Concrete",
     "fixed100_Friedman": "Friedman",
     "fixed100_FriedmanSparseDir_p20": "Friedman-S p20",
     "fixed100_FriedmanSparseDir_p100": "Friedman-S p100",
     "fixed100_FriedmanSparseDir_p200": "Friedman-S p200",
     "fixed100_SeoulBike": "SeoulBike",
-    "fixed100_Superconduct_subsample5000": "Superconduct",
+    "fixed100_Superconduct_subsample10000": "Superconduct",
+    **{tag: name for tag, (name, _) in OPENML_SETTINGS.items()},
 }
 
 
@@ -158,13 +159,14 @@ CHAIN_COLORS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728")
 PANELS = "abcdefghijklmnopqrstuvwxyz"
 DISPLAY = {
     "fixed100_Abalone": "Abalone", "fixed100_Airfoil": "Airfoil", "fixed100_CCPP": "CCPP",
-    "fixed100_CPUAct": "CPU activity", "fixed100_CalHousing_subsample5000": "CalHousing",
+    "fixed100_CPUAct": "CPU activity", "fixed100_CalHousing_subsample10000": "CalHousing",
     "fixed100_Concrete": "Concrete", "fixed100_Friedman": "Friedman",
     "fixed100_FriedmanSparseDir_p20": "Friedman-S p20",
     "fixed100_FriedmanSparseDir_p100": "Friedman-S p100",
     "fixed100_FriedmanSparseDir_p200": "Friedman-S p200",
     "fixed100_SeoulBike": "SeoulBike",
-    "fixed100_Superconduct_subsample5000": "Superconduct",
+    "fixed100_Superconduct_subsample10000": "Superconduct",
+    **{tag: name for tag, (name, _) in OPENML_SETTINGS.items()},
 }
 
 

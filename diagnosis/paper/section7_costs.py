@@ -14,15 +14,13 @@ Four questions evaluated from the stored draws:
   known, so the containment rate of single-chain and pooled credible intervals
   is measured over 100 fixed inputs on one dataset realization per design,
   with paired training splits.
-* **Efficiency.** Bulk and tail ESS per test input, summarised by median and
-  10th percentile, and divided by the measured cost ratio. Two conventions are
-  reported side by side: each chain measured on its own and then averaged over
-  chains, and all four chains passed to one call. Rank normalization uses the
-  draws supplied to each calculation. Joint ESS incorporates serial dependence
-  and between-chain differences. Relative ESS divides by S for the single-chain
-  calculation and C*S for the joint calculation. Cost-normalized columns charge
-  one chain or four sequential chains, respectively. R-hat accompanies these
-  diagnostics, with separate columns screened on pointwise agreement.
+* **Efficiency.** Bulk ESS per test input, summarised by median and 10th
+  percentile. Two conventions are reported side by side: each chain measured
+  on its own and then averaged over chains, and all four chains passed to one
+  call. Rank normalization uses the draws supplied to each calculation. Joint
+  ESS incorporates serial dependence and between-chain differences. Relative
+  ESS divides by S for the single-chain calculation and C*S for the joint
+  calculation. Four-chain pointwise R-hat accompanies these diagnostics.
 
 Predictions are stored on the original response scale.
 """
@@ -44,8 +42,9 @@ import matplotlib.pyplot as plt
 HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
 sys.path.insert(0, str(DIAG))
-from core import ResultCache, load_with_shape, prediction_variance_terms, run_inputs  # noqa: E402
-from section6_methods import (full_target_vector, predictions,  # noqa: E402
+from core import (OPENML_SETTINGS, ResultCache, load_with_shape,  # noqa: E402
+                  prediction_variance_terms, run_inputs)
+from section7_methods import (full_target_vector, predictions,  # noqa: E402
                               residual_variances, split_indices)
 from fixed100_support import (  # noqa: E402
     DATASET_CONFIGS,
@@ -71,25 +70,27 @@ TIMING_TAG = {
     "fixed100_Airfoil": "fixed100_Airfoil",
     "fixed100_CCPP": "fixed100_CCPP",
     "fixed100_CPUAct": "fixed100_CPUAct",
-    "fixed100_CalHousing_subsample5000": "fixed100_CalHousing_subsample5000",
+    "fixed100_CalHousing_subsample10000": "fixed100_CalHousing_subsample10000",
     "fixed100_Concrete": "fixed100_Concrete",
     "fixed100_Friedman": "fixed100_Friedman",
     "fixed100_FriedmanSparseDir_p20": "fixed100_FriedmanSparseDirP20K5",
     "fixed100_FriedmanSparseDir_p100": "fixed100_FriedmanSparseDir",
     "fixed100_FriedmanSparseDir_p200": "fixed100_FriedmanSparseDirP200K5",
     "fixed100_SeoulBike": "fixed100_SeoulBike",
-    "fixed100_Superconduct_subsample5000": "fixed100_Superconduct_subsample5000",
+    "fixed100_Superconduct_subsample10000": "fixed100_Superconduct_subsample10000",
+    **{tag: tag for tag in OPENML_SETTINGS},
 }
 DISPLAY = {
     "fixed100_Abalone": "Abalone", "fixed100_Airfoil": "Airfoil",
     "fixed100_CCPP": "CCPP", "fixed100_CPUAct": "CPU activity",
-    "fixed100_CalHousing_subsample5000": "CalHousing",
+    "fixed100_CalHousing_subsample10000": "CalHousing",
     "fixed100_Concrete": "Concrete", "fixed100_Friedman": "Friedman",
     "fixed100_FriedmanSparseDir_p20": "DART $d=20$",
     "fixed100_FriedmanSparseDir_p100": "DART $d=100$",
     "fixed100_FriedmanSparseDir_p200": "DART $d=200$",
     "fixed100_SeoulBike": "SeoulBike",
-    "fixed100_Superconduct_subsample5000": "Superconduct",
+    "fixed100_Superconduct_subsample10000": "Superconduct",
+    **{tag: name for tag, (name, _) in OPENML_SETTINGS.items()},
 }
 # store folder -> how to rebuild the design so that the noise-free signal is known
 SYNTHETIC = {
@@ -185,7 +186,9 @@ def check_alignment(store_root: Path, dataset: str, run: int, method: str,
     stored = stored.reshape(stored.shape[0], -1)[:, -draws.shape[1]:]
     recomputed = np.sqrt(((draws - y[None, None, :]) ** 2).mean(axis=2))
     gap = float(np.max(np.abs(recomputed - stored)))
-    if gap > 1e-6:
+    # the stored RMSE keeps ten significant digits, so on a response measured
+    # in thousands it is only good to about 1e-6
+    if not np.allclose(recomputed, stored, rtol=1e-8, atol=1e-6):
         raise ValueError(
             f"{dataset} run {run} {method}: recomputed RMSE departs from the "
             f"stored RMSE by {gap:.3e}, so the responses are not aligned with "
@@ -256,36 +259,32 @@ def score(draws: np.ndarray, y: np.ndarray, truth: np.ndarray | None,
         if int(cached['draws']) != retained:
             raise ValueError('Cached ESS uses a different retained draw count')
         out.update({key: value for key, value in cached.items()
-                    if key.startswith(('ess_', 'rel_ess_'))
-                    and 'pooled' not in key and 'pooling' not in key})
+                    if key.startswith(('ess_bulk_', 'rel_ess_bulk_'))})
         missing = [k for k in ('ess_bulk_multi_median', 'ess_bulk_single_median')
                    if k not in out]
         if missing:
             raise ValueError(f'Cached ESS lacks {missing}; rerun without --reuse-ess')
         together = xr.DataArray(draws, dims=("chain", "draw", "point"), name="prediction")
         rhat = az.rhat(together, method='rank')['prediction'].values
-        out.update(rhat_median=float(np.median(rhat)), rhat_q90=float(np.quantile(rhat, .9)),
-                   agreement_screen_pass=float(np.all(np.isfinite(rhat)) and np.max(rhat) <= 1.01))
+        out.update(rhat_median=float(np.median(rhat)), rhat_q90=float(np.quantile(rhat, .9)))
         return out
     alone = xr.DataArray(draws.transpose(1, 0, 2).reshape(1, -1, chains * points),
                          dims=("chain", "draw", "point"), name="prediction")
     together = xr.DataArray(draws, dims=("chain", "draw", "point"), name="prediction")
-    for kind in ("bulk", "tail"):
-        single = az.ess(alone, method=kind)["prediction"].values.reshape(chains, points)
-        single = single.mean(axis=0)
-        multi = az.ess(together, method=kind)["prediction"].values
-        # Relative ESS divides by the draw count supplied to each calculation.
-        # Storage stride and computational cost are recorded separately.
-        for name, values, supplied in (("single", single, retained),
-                                       ("multi", multi, chains * retained)):
-            out[f"ess_{kind}_{name}_median"] = float(np.median(values))
-            out[f"ess_{kind}_{name}_q10"] = float(np.quantile(values, 0.1))
-            out[f"rel_ess_{kind}_{name}_median"] = float(np.median(values / supplied))
-            out[f"rel_ess_{kind}_{name}_q10"] = float(np.quantile(values / supplied, 0.1))
+    single = az.ess(alone, method="bulk")["prediction"].values.reshape(chains, points)
+    single = single.mean(axis=0)
+    multi = az.ess(together, method="bulk")["prediction"].values
+    # Relative ESS divides by the draw count supplied to each calculation.
+    # Storage stride and computational cost are recorded separately.
+    for name, values, supplied in (("single", single, retained),
+                                   ("multi", multi, chains * retained)):
+        out[f"ess_bulk_{name}_median"] = float(np.median(values))
+        out[f"ess_bulk_{name}_q10"] = float(np.quantile(values, 0.1))
+        out[f"rel_ess_bulk_{name}_median"] = float(np.median(values / supplied))
+        out[f"rel_ess_bulk_{name}_q10"] = float(np.quantile(values / supplied, 0.1))
     rhat = az.rhat(together, method="rank")["prediction"].values
     out["rhat_median"] = float(np.median(rhat))
     out["rhat_q90"] = float(np.quantile(rhat, 0.9))
-    out["agreement_screen_pass"] = float(np.all(np.isfinite(rhat)) and np.max(rhat) <= 1.01)
     return out
 
 
@@ -327,22 +326,10 @@ def costs_main(args) -> int:
                               **score(draws, y, truth, args.interval, cached=previous)}
                     results.put(key, inputs, scored)
                     del draws
-                chains = scored["chains"]
                 row = {"dataset": dataset, "run": run,
                        "method": METHOD_NAMES[method], "draws": scored["draws"],
                        "cost_ratio": ratios.get(method, np.nan)}
                 row.update({k: v for k, v in scored.items() if k not in ("chains", "draws")})
-                for kind in ("bulk", "tail"):
-                    for scope in ("single", "multi"):
-                        # A four-chain estimate costs four sequential chains.
-                        charged = row["cost_ratio"] * (chains
-                                                       if scope == "multi" else 1)
-                        row[f"ess_{kind}_{scope}_per_cost"] = (
-                            row[f"ess_{kind}_{scope}_median"] / charged
-                            if charged else np.nan)
-                        row[f"ess_{kind}_{scope}_per_cost_screened"] = (
-                            row[f"ess_{kind}_{scope}_per_cost"]
-                            if row["agreement_screen_pass"] else np.nan)
                 rows.append(row)
             print(f"[consequences] {dataset} run {run:03d}", flush=True)
     print(f"[consequences] cache: {results.hits} reused, {results.misses} computed", flush=True)
@@ -362,9 +349,8 @@ def costs_main(args) -> int:
         ("relative bulk ESS, divided by the draws supplied: "
          "one chain averaged over chains, then all four chains in one call",
          ["rel_ess_bulk_single_median", "rel_ess_bulk_multi_median"]),
-        ("bulk ESS: raw counts, then per unit of Default-relative cost",
-         ["ess_bulk_single_median", "ess_bulk_multi_median",
-          "ess_bulk_single_per_cost", "ess_bulk_multi_per_cost"]),
+        ("bulk ESS: one chain averaged over chains, then all four chains in one call",
+         ["ess_bulk_single_median", "ess_bulk_multi_median"]),
     ):
         print()
         print(label)
@@ -396,29 +382,23 @@ def costs_main(args) -> int:
 
 
 def scalar_summary(values):
-    """Bulk/tail ESS of whatever chains are supplied, with its own denominator.
+    """Bulk ESS of whatever chains are supplied, with its own denominator.
 
-    A run-level row supplies all four chains, so its `ess_*` is the four-chain
-    value and `rel_ess_*` divides by C*S; a chain-level row supplies one chain
-    and divides by S. The relative figure divides diagnostic ESS by the
-    number of draws supplied to that calculation.
+    A run-level row supplies all four chains, so its `ess_bulk` is the
+    four-chain value and `rel_ess_bulk` divides by C*S; a chain-level row
+    supplies one chain and divides by S. R-hat compares chains, so it is
+    reported only when more than one chain is supplied.
     """
     data = xr.DataArray(values, dims=('chain', 'draw'), name='quantity')
-    rhat_data = data
-    if values.shape[0] == 1:
-        half = values.shape[1] // 2
-        rhat_data = xr.DataArray(np.stack([values[0, :half], values[0, -half:]]),
-                                 dims=('chain', 'draw'), name='quantity')
-    result = {'rhat': float(az.rhat(rhat_data, method='rank')['quantity']),
-              'ess_bulk': float(az.ess(data, method='bulk')['quantity']),
-              'ess_tail': float(az.ess(data, method='tail')['quantity']),
-              'draws_supplied': int(values.size),
-              'pooled_mean': float(values.mean()),
-              'pooled_q05': float(np.quantile(values, .05)),
-              'pooled_q95': float(np.quantile(values, .95))}
-    for kind in ('bulk', 'tail'):
-        result[f'rel_ess_{kind}'] = result[f'ess_{kind}'] / values.size
-    result['agreement_screen_pass'] = np.isfinite(result['rhat']) and result['rhat'] <= 1.01
+    result = {}
+    if values.shape[0] > 1:
+        result['rhat'] = float(az.rhat(data, method='rank')['quantity'])
+    result.update({'ess_bulk': float(az.ess(data, method='bulk')['quantity']),
+                   'draws_supplied': int(values.size),
+                   'pooled_mean': float(values.mean()),
+                   'pooled_q05': float(np.quantile(values, .05)),
+                   'pooled_q95': float(np.quantile(values, .95))})
+    result['rel_ess_bulk'] = result['ess_bulk'] / values.size
     return result
 
 def scalar_results(args, dataset, run, method, scale):
@@ -441,7 +421,7 @@ def scalar_results(args, dataset, run, method, scale):
         summary = scalar_summary(values)
         # the same quantity under the other convention, so the two
         # sit in one row rather than in two tables
-        for key in ('ess_bulk', 'ess_tail', 'rel_ess_bulk', 'rel_ess_tail'):
+        for key in ('ess_bulk', 'rel_ess_bulk'):
             summary[f'{key}_single_mean'] = float(
                 np.mean([d[key] for d in per_chain]))
         rows.append({**base, **summary})
@@ -479,23 +459,30 @@ def scalar_main(args):
                 rows.extend(result['rows']); chains.extend(result['chains'])
             figure = figs/f'{dataset}_run000.png'
             if run == 0 and not (all_cached and figure.is_file()):
-                fig, axes = plt.subplots(2, 4, figsize=(14, 6), layout='constrained')
+                fig, axes = plt.subplots(2, 4, figsize=(11.2, 5.0), sharex=True,
+                                         layout='constrained')
+                labels = {'panel_mean_f': 'panel-average prediction',
+                          'noise_variance_y': 'noise variance (log scale)'}
                 for column, method in enumerate(['default', 'mtmh', 'default_pt', 'mtmh_pt']):
                     for qindex, row in enumerate(results[method]['rows']):
                         quantity = row['quantity']
                         x, series = results[method]['traces'][quantity]
                         ax = axes[qindex, column]
                         for c, trace in enumerate(series):
-                            ax.plot(x, trace, lw=.5, alpha=.7, label=f'chain {c}')
+                            ax.plot(x, trace, lw=.5, alpha=.75, label=f'chain {c + 1}')
                         ax.axvline(args.burn, color='black', ls='--', lw=.8)
-                        ax.set_title(f'{METHOD_NAMES[method]} | R-hat {row["rhat"]:.3f}')
-                        ax.set_ylabel(quantity); ax.set_xlabel('stored draw')
+                        ax.set_title(rf'{METHOD_NAMES[method]}, $\widehat{{R}}={row["rhat"]:.3f}$',
+                                     fontsize=9)
+                        ax.tick_params(labelsize=7.5)
                         if quantity == 'noise_variance_y':
                             ax.set_yscale('log')
-                            ax.set_ylabel('noise variance (outcome scale; log axis)')
-                axes[0, 0].legend(fontsize=6)
-                fig.suptitle(f'{dataset}, run 0; dashed line ends warm-up')
-                fig.savefig(figure, dpi=150); plt.close(fig)
+                            ax.set_xlabel('iteration', fontsize=8)
+                        if column == 0:
+                            ax.set_ylabel(labels[quantity], fontsize=8)
+                handles, names = axes[0, 0].get_legend_handles_labels()
+                fig.legend(handles, names, loc='outside upper center', ncol=4,
+                           fontsize=8, frameon=False)
+                fig.savefig(figure, dpi=200); plt.close(fig)
             print(f'[scalar] {dataset} run {run}', flush=True)
     print(f'[scalar] cache: {cache.hits} reused, {cache.misses} computed', flush=True)
     if args.plots_only:
@@ -503,10 +490,8 @@ def scalar_main(args):
     frame = pd.DataFrame(rows)
     frame.to_csv(out/'scalar_quantities_run_level.csv', index=False)
     pd.DataFrame(chains).to_csv(out/'scalar_quantities_chain_level.csv', index=False)
-    reported = ['rhat', 'ess_bulk', 'ess_tail', 'rel_ess_bulk', 'rel_ess_tail',
-                'ess_bulk_single_mean', 'ess_tail_single_mean',
-                'rel_ess_bulk_single_mean', 'rel_ess_tail_single_mean',
-                'pooled_mean', 'agreement_screen_pass']
+    reported = ['rhat', 'ess_bulk', 'rel_ess_bulk',
+                'ess_bulk_single_mean', 'rel_ess_bulk_single_mean', 'pooled_mean']
     frame.groupby(['dataset', 'method', 'quantity'], sort=False)[reported].agg(['mean','min','max']).to_csv(out/'scalar_quantities_summary.csv')
 
 

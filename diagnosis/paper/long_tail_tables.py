@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Long-Default records scored as methods: the `long` and `tail` columns.
 
-Three records of Default are scored with the definitions of sections 6 and 7:
+Three records of Default are scored with the definitions of section7_methods and section7_costs:
 
 * ``default``: the production chains, iterations 3,001--10,000;
 * ``default_long``: the 10^7-iteration chains read through their stride-1,000
@@ -10,8 +10,8 @@ Three records of Default are scored with the definitions of sections 6 and 7:
   their final 10,000 iterations, the last 7,000 of them.
 
 Every record keeps 7,000 draws per chain after the common 3,000-draw warm-up.
-Pointwise and segment R-hat, R_B/W, relative RMSE and CRPS come from
-section6_methods; ESS, the chain-specific MSE share, the between-chain variance
+Pointwise R-hat, R_B/W, relative RMSE and CRPS come from
+section7_methods; ESS, the chain-specific MSE share, the between-chain variance
 share and latent-f containment come from section7_costs.score; the scalar
 R-hat values apply section7_costs.scalar_summary to the panel-average
 prediction and the response-scale noise variance. Results are written as
@@ -30,7 +30,7 @@ HERE = Path(__file__).resolve().parent
 DIAG = HERE.parent
 sys.path.insert(0, str(DIAG))
 from core import ResultCache, run_inputs  # noqa: E402
-from section6_methods import (PREDICTIVE_NOISE_SEED, chain_geometry,  # noqa: E402
+from section7_methods import (PREDICTIVE_NOISE_SEED, chain_geometry,  # noqa: E402
                               full_draw_rhat, full_target_vector, predictions,
                               predictive_baselines, predictive_metrics,
                               residual_variances, training_targets, y_test)
@@ -39,7 +39,7 @@ from section7_costs import SYNTHETIC, TIMING_TAG, scalar_summary, score, targets
 # Bump when a definition below changes, so cached entries are recomputed.
 CACHE_VERSION = 1
 METHODS = ("default", "default_long", "default_long_tail")
-COLUMNS = ["cross_rhat_median", "cross_rhat_q90", "within_rhat_median",
+COLUMNS = ["cross_rhat_median", "cross_rhat_q90",
            "between_within_ratio", "relative_rmse", "relative_crps",
            "rel_ess_single", "rel_ess_joint", "between_share",
            "chain_specific_share", "scalar_rhat_panel", "scalar_rhat_noise",
@@ -54,7 +54,6 @@ def parse_args(supplied: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--datasets", nargs="+", default=list(TIMING_TAG))
     parser.add_argument("--runs", nargs="+", type=int, default=list(range(5)))
     parser.add_argument("--burn", type=int, default=3000)
-    parser.add_argument("--n-segments", type=int, default=4)
     parser.add_argument("--interval", type=float, default=0.9)
     parser.add_argument("--no-cache", action="store_true",
                         help="Recompute every (dataset, run, method) and rewrite its cache entry.")
@@ -75,8 +74,8 @@ def method_row(args, dataset: str, run: int, method: str, y: np.ndarray,
     scalar = {"panel_mean_f": scalar_summary(draws.mean(axis=2))["rhat"],
               "noise_variance_y": scalar_summary(variances * y_scale**2)["rhat"]}
     row = {
-        **{k: v for k, v in full_draw_rhat(draws, args.n_segments).items()
-           if k in ("cross_rhat_median", "cross_rhat_q90", "within_rhat_median")},
+        **{k: v for k, v in full_draw_rhat(draws).items()
+           if k in ("cross_rhat_median", "cross_rhat_q90")},
         "between_within_ratio": chain_geometry(draws)["between_within_ratio"],
         "relative_rmse": rmse / baseline["naive_rmse"],
         "relative_crps": crps / baseline["climatology_crps"],
@@ -97,7 +96,7 @@ def main(supplied: list[str] | None = None) -> int:
     args = parse_args(supplied)
     args.table_dir.mkdir(parents=True, exist_ok=True)
     cache = ResultCache("long_tail_tables", {
-        "version": CACHE_VERSION, "burn": args.burn, "n_segments": args.n_segments,
+        "version": CACHE_VERSION, "burn": args.burn,
         "interval": args.interval, "noise_seed": PREDICTIVE_NOISE_SEED,
     }, enabled=not args.no_cache)
 

@@ -7,7 +7,7 @@ import numpy as np
 NEW = Path(sys.argv[1] if len(sys.argv) > 1 else "/scratch/e1377027/opt/variants/ae_baseline")
 OLD = Path("/scratch/e0950116/bart_store")
 TAGS = ["fixed100_Concrete", "fixed100_SeoulBike", "fixed100_Abalone", "fixed100_Airfoil",
-        "fixed100_CalHousing_subsample5000", "fixed100_CCPP"]
+        "fixed100_CalHousing_subsample10000", "fixed100_CCPP"]
 
 
 def load(path):

@@ -6,7 +6,7 @@ Each path is a store root holding <tag>/preds etc. (the baseline is share_pt).
 Per store, method and run (post-burn draws, 4 chains):
   - pointwise rank R-hat over the 100 test points (median, q90);
   - relative RMSE (/ naive train-mean RMSE) and relative CRPS (/ climatology),
-    computed as in diagnosis/paper/section6_methods.py;
+    computed as in diagnosis/paper/section7_methods.py;
   - pooled R-hat against the baseline: the variant's chains and the baseline's
     chains together as one 8-chain sample. If both sample the same posterior
     this matches the within-store values; a systematic shift would inflate it;
@@ -27,10 +27,10 @@ sys.path.insert(0, str(ROOT / "diagnosis"))
 sys.path.insert(0, str(ROOT / "diagnosis" / "paper"))
 
 from core import load_with_shape, pointwise_rhat  # noqa: E402
-from section6_methods import PREDICTIVE_NOISE_SEED, predictive_baselines, predictive_metrics  # noqa: E402
+from section7_methods import PREDICTIVE_NOISE_SEED, predictive_baselines, predictive_metrics  # noqa: E402
 
 TAGS = {"concrete": "fixed100_Concrete", "seoul_bike": "fixed100_SeoulBike", "abalone": "fixed100_Abalone",
-        "airfoil": "fixed100_Airfoil", "calhousing": "fixed100_CalHousing_subsample5000", "ccpp": "fixed100_CCPP"}
+        "airfoil": "fixed100_Airfoil", "calhousing": "fixed100_CalHousing_subsample10000", "ccpp": "fixed100_CCPP"}
 METHODS = ("default_pt", "mtmh_pt")
 BURN = 3000
 

@@ -3,8 +3,9 @@
 One copy of the pieces the section scripts all need: reading a stored run,
 pointwise R-hat, and the cross-fitted between/within directions behind every
 projection figure. That last one was previously duplicated verbatim in the
-section 3 and section 6 scripts, which meant the eigenproblem behind Figure 1
-and the one behind Figures 4-5 could drift apart without anything failing.
+section 4 and section 7 scripts, which meant the eigenproblem behind the Default
+diagnostic figure and the one behind the sampler figures could drift apart
+without anything failing.
 """
 
 from __future__ import annotations
@@ -21,6 +22,26 @@ import arviz as az
 import numpy as np
 import xarray as xr
 from scipy.linalg import eigh
+
+
+# OpenML regression datasets added in November 2026: store directory -> (display
+# name, key in fixed100_support.DATASET_CONFIGS). The store directory is also
+# the tag the timing summaries use. Each section script appends these to its own
+# list of the original twelve settings.
+OPENML_SETTINGS = {
+    "fixed100_Protein_subsample10000": ("Protein", "protein"),
+    "fixed100_SpaceGA": ("SpaceGA", "space_ga"),
+    "fixed100_QSARFishToxicity": ("QSAR fish", "qsar_fish"),
+    "fixed100_Cars": ("Cars", "cars"),
+    "fixed100_CPS88Wages_subsample10000": ("CPS88 wages", "cps88wages"),
+    "fixed100_BlackFriday_subsample10000": ("Black Friday", "black_friday"),
+    "fixed100_Fiat500": ("Fiat 500", "fiat500"),
+    "fixed100_Kin8nm": ("Kin8nm", "kin8nm"),
+    "fixed100_Diamonds_subsample10000": ("Diamonds", "diamonds"),
+    "fixed100_Sarcos_subsample10000": ("Sarcos", "sarcos"),
+    "fixed100_MiamiHousing_subsample10000": ("Miami housing", "miami_housing"),
+    "fixed100_VideoTranscoding_subsample10000": ("Video transcoding", "video_transcoding"),
+}
 
 
 def load_with_shape(path: Path) -> np.ndarray:

@@ -6,8 +6,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'diagnosis'/'paper'))
 from section7_costs import score
 from section7_costs import scalar_summary
-from section6_equal_time import budget_configurations, evaluate
-from section6_methods import predictive_metrics
+from section7_equal_time import budget_configurations, evaluate
+from section7_methods import predictive_metrics
 from core import prediction_variance_terms
 
 def test_finite_mixture_decomposition_and_rmse_conventions():
@@ -22,7 +22,6 @@ def test_finite_mixture_decomposition_and_rmse_conventions():
     np.testing.assert_allclose(result['between_share_median'],np.median(between/(between+within)))
     np.testing.assert_allclose(result['mse_single'],result['mse_pooled']+result['mse_chain_specific'])
     np.testing.assert_allclose(result['rmse_single_mean_chainwise'],np.sqrt(((means-y)**2).mean(axis=1)).mean())
-    assert result['agreement_screen_pass']==0
 
 def test_pooled_default_is_charged_four_sequential_prefixes():
     ratios={'default':1.,'mtmh':7.5,'default_pt':4.,'mtmh_pt':12.}
@@ -41,7 +40,10 @@ def test_pooling_changes_estimator_not_constituent_chain_agreement():
     pooled=evaluate(draws,y,y,True)
     assert pooled['mse'] < single['mse']
     assert pooled['rhat_median']==single['rhat_median']
-    assert np.isfinite(scalar_summary(draws[:1].mean(axis=2))['rhat'])
+    # R-hat compares chains: reported for four chains, omitted for one.
+    assert np.isfinite(scalar_summary(draws.mean(axis=2))['rhat'])
+    one_chain = scalar_summary(draws[:1].mean(axis=2))
+    assert 'rhat' not in one_chain and np.isfinite(one_chain['ess_bulk'])
 
 
 def test_canonical_variance_and_predictive_rmse_across_sections():

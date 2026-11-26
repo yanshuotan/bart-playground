@@ -12,12 +12,16 @@ long-chain empirical reference.
 | `store/` | Stored predictions, traces, splits, temperatures, and metadata for every dataset and run. |
 | `store_default_ext/` | Extended run-0 Default chains, 30,000 stored draws per setting. |
 | `store_scaling/` | The sample-size and noise sweep. |
+| `store_coverage/` | Coverage replicates on Friedman, written by `coverage_replicates.py`. |
+| `store_controlled/` | Controlled-noise responses on SeoulBike, Airfoil and Abalone, written by `controlled_noise.py`. |
 | `timing/` | PT timing benchmark, per-run CSV files, and the timing summary used by the paper analysis. |
 | `paper/` | Standalone diagnosis and comparison scripts plus paper-facing tables, figures, and summaries. |
 | `exploratory/` | Earlier general analysis scripts, the notebook, and exploratory results. |
 | `run_fixed100.py` | Entry point for running selected fixed datasets and run IDs. |
 | `experiment_fixed100.py` | Temperature-ladder search, chain execution, and fixed-100 result writing. |
 | `fixed100_support.py` | Dataset loading and sparse-data utilities. |
+| `controlled_noise.py` | Default chains on observed, noise-added and semi-synthetic responses with the training inputs fixed. |
+| `coverage_replicates.py` | Interval coverage of the latent function over independent Friedman training sets. |
 
 ## Run experiments
 
@@ -39,22 +43,21 @@ written only after the final chunk, so a run that stops early leaves none. Use
 ## Paper analysis
 
 ```bash
-python diagnosis/paper/section3_default.py
-python diagnosis/paper/section6_methods.py
+python diagnosis/paper/section4_default.py
+python diagnosis/paper/section7_methods.py
 ```
 
 The scripts analyze five paired runs of every registered setting. They write CSV
-tables to `paper/tables/` and figures to `paper/figures/`. The rolling R-hat
-window is 1,000 draws and the step is 100.
+tables to `paper/tables/` and figures to `paper/figures/`.
 
 ## Which directory each analysis reads
 
 | Directory | Read by | Holds |
 |---|---|---|
 | `store/` | every section script | the main runs |
-| `store_default_ext/` | `section6_equal_time` | the extended Default runs |
-| `store_scaling/` | `section3_scaling` | the sample-size and noise sweep |
-| `timing/` | `section3_long_budget` `section6_*` `section7_costs` | run-0 wall-clock summaries |
+| `store_default_ext/` | `section7_equal_time` | the extended Default runs |
+| `store_scaling/` | `section4_scaling` | the sample-size and noise sweep |
+| `timing/` | `section4_long_budget` `section7_*` | run-0 wall-clock summaries |
 
 Each script takes the matching path as its `--store-root` (or `--extended-store`,
 `--timing-dir`) default, so running one without arguments reads the directory

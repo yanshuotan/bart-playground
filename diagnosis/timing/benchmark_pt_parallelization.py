@@ -126,8 +126,8 @@ DART = {"dirichlet_prior": True, "s_alpha": 1.0}
 SOURCES = {
     "abalone": _Source("fixed100_Abalone", "fixed100_Abalone", _named("abalone")),
     "airfoil": _Source("fixed100_Airfoil", "fixed100_Airfoil", _named("airfoil")),
-    "calhousing": _Source("fixed100_CalHousing_subsample5000",
-                          "fixed100_CalHousing_subsample5000", _named("calhousing")),
+    "calhousing": _Source("fixed100_CalHousing_subsample10000",
+                          "fixed100_CalHousing_subsample10000", _named("calhousing")),
     "ccpp": _Source("fixed100_CCPP", "fixed100_CCPP", _named("ccpp")),
     "concrete": _Source("fixed100_Concrete", "fixed100_Concrete", _named("concrete")),
     "cpu_act": _Source("fixed100_CPUAct", "fixed100_CPUAct", _named("cpu_act")),
@@ -141,9 +141,13 @@ SOURCES = {
                              "fixed100_FriedmanSparseDirP200K5", _sparse("friedman_p200_k5"),
                              DART),
     "seoul_bike": _Source("fixed100_SeoulBike", "fixed100_SeoulBike", _named("seoul_bike")),
-    "superconduct": _Source("fixed100_Superconduct_subsample5000",
-                            "fixed100_Superconduct_subsample5000", _named("superconduct")),
+    "superconduct": _Source("fixed100_Superconduct_subsample10000",
+                            "fixed100_Superconduct_subsample10000", _named("superconduct")),
 }
+# Every other configured dataset is stored under its own tag.
+for _key, _cfg in DATASET_CONFIGS.items():
+    if _key not in SOURCES and _key not in ("friedman_sparse_dir",):
+        SOURCES[_key] = _Source(_cfg["dataset_tag"], _cfg["dataset_tag"], _named(_key))
 DATASETS = tuple(SOURCES)
 # (label, method, backend) in execution order within a chain. Serial and
 # parallel runs of a PT method are adjacent so both see similar node conditions.
@@ -235,6 +239,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ladder-init-size", type=int, default=10)
     parser.add_argument("--ladder-target-rate", type=float, default=0.4)
     parser.add_argument("--ladder-max-rounds", type=int, default=10)
+    parser.add_argument("--ladder-max-temperatures", type=int, default=60,
+                        help="Cap on the searched ladder size, as in run_fixed100.py; 0 leaves it uncapped.")
     parser.add_argument("--ladder-ndpost", type=int, default=500)
     parser.add_argument("--ladder-nskip", type=int, default=500)
     parser.add_argument("--ladder-search-points", type=int, default=1000)
@@ -345,7 +351,8 @@ def timed_ladder_search(name: str, split: dict[str, Any], args) -> dict[str, Any
             n_trees=args.n_trees, tree_alpha=args.tree_alpha, tree_beta=args.tree_beta,
             proposal_probs=default_proposal_probs,
             target_rate=args.ladder_target_rate, max_rounds=args.ladder_max_rounds,
-            max_temperatures=None, ndpost=args.ladder_ndpost, nskip=args.ladder_nskip,
+            max_temperatures=args.ladder_max_temperatures if args.ladder_max_temperatures > 0 else None,
+            ndpost=args.ladder_ndpost, nskip=args.ladder_nskip,
             random_state=args.ladder_random_state + 10000 * args.run_id,
             swap_interval=args.swap_interval, post_swap_repair_steps=0,
             initial_temperatures=initial_temperatures(args),

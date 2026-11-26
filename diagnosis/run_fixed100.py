@@ -76,7 +76,7 @@ def _common_arguments(parser):
                         help="Particles per conditional SMC tree update of the pg method.")
     parser.add_argument("--ladder-tmax", type=float, default=100.0)
     parser.add_argument("--ladder-init-size", type=int, default=10)
-    parser.add_argument("--ladder-max-temperatures", type=int, default=0, help="Cap on the ladder size; 0 leaves it uncapped.")
+    parser.add_argument("--ladder-max-temperatures", type=int, default=60, help="Cap on the ladder size (default 60, the most a 64-core node can time with one worker per temperature; every ladder before the cap was added had at most 60); 0 leaves it uncapped.")
     parser.add_argument("--ladder-target-rate", type=float, default=0.4)
     parser.add_argument("--ladder-max-rounds", type=int, default=10)
     parser.add_argument("--ladder-ndpost", type=int, default=500,
@@ -101,7 +101,7 @@ def parse_args(argv=None):
     sub = parser.add_subparsers(dest="experiment", required=True)
     fixed = sub.add_parser("fixed", help="Run the retained named datasets")
     _common_arguments(fixed)
-    fixed.add_argument("--datasets", nargs="+", choices=("abalone", "airfoil", "calhousing", "ccpp", "concrete", "cpu_act", "friedman", "friedman_sparse_dir", "seoul_bike", "superconduct"), default=["abalone", "concrete", "friedman"])
+    fixed.add_argument("--datasets", nargs="+", choices=tuple(DATASET_CONFIGS), default=["abalone", "concrete", "friedman"])
     fixed.add_argument("--run-ids", nargs="+", help="Only these run IDs, e.g. 2 3 4 or 2-4")
     fixed.add_argument("--skip-short", action="store_true")
     fixed.add_argument("--skip-long", action="store_true")
