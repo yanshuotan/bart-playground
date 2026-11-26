@@ -17,18 +17,38 @@ training row. This is the prior of Chipman et al. truncated to trees without
 empty leaves, not the "valid split" prior of the PG paper, so PG and Default
 chains have the same posterior.
 
-Proposal and weights. Particles are proposed from the untruncated prior.
+Proposals and weights. Two proposals for a node's decision are available.
+
+The bootstrap proposal of the 2015 paper draws it from the untruncated prior.
 A split that leaves a child empty gets weight zero, which is the truncation
-indicator; any other split multiplies the weight by the ratio of the children's
-collapsed marginal likelihoods to the parent's, and a stop leaves it unchanged
-(nodes still pending count as leaves, as in the paper). Resampling is
-multinomial after every stage and keeps slot 0 on the reference path. When
-no particle has a pending node, the returned tree is drawn from the final
-weights over all particles, the reference included (Andrieu et al., 2010).
+indicator; any other split multiplies the weight by the ratio of the
+children's collapsed marginal likelihoods to the parent's, and a stop leaves it
+unchanged (nodes still pending count as leaves, as in the paper).
+
+The one-step optimal proposal of Lakshminarayanan, Roy and Teh (2013) draws
+the decision from its conditional given the data: stop with mass 1 - p_d and
+the split (v, tau) with mass p_d s_v / |grid_v| times the same likelihood
+ratio, zero for splits that leave a child empty. The weight is multiplied by
+the normalising constant Z of these masses, which does not depend on the
+decision drawn, and the reference particle gets the same factor at the node it
+replays. Z depends only on the node, so it is computed once per node, with the
+per-variable masses it is made of; drawing a split then needs one pass over
+the chosen variable. Each pass works on the binned covariates XB, where
+XB[i, v] is the first grid index j with X[i, v] <= grid_v[j], so the row
+goes left of threshold j exactly when XB[i, v] <= j; one pass over a node's
+rows fills the histograms of all variables at once. Thresholds may repeat
+(quantile grids of discrete columns): a repeated value keeps its share of the
+prior and its splits are the same partition.
+
+Resampling is multinomial after every stage and keeps slot 0 on the reference
+path. When no particle has a pending node, the returned tree is drawn from the
+final weights over all particles, the reference included (Andrieu et al.,
+2010).
 
 Each node's training rows are a contiguous segment of one index buffer, and
 particles share nodes, so copying a particle at resampling copies only its
-list of node references.
+list of node references. Particles that make the same split of a shared node
+also share its children.
 """
 import math
 
@@ -57,6 +77,73 @@ def _split_prob(depth, log_alpha, beta, quick_decay):
 
 
 @njit(cache=True)
+def _logsumexp(a, n):
+    m = -np.inf
+    for j in range(n):
+        if a[j] > m:
+            m = a[j]
+    if m == -np.inf:
+        return m
+    t = 0.0
+    for j in range(n):
+        t += math.exp(a[j] - m)
+    return m + math.log(t)
+
+
+@njit(cache=True)
+def _hist_all(XB, buf, st, n, resid, hoff, H, cnt, sums):
+    """Row counts and residual sums of one node per (variable, bin).
+
+    Variable v's bins are cnt[hoff[v]:hoff[v] + len_v + 1]; one pass over the
+    node's rows, reading each row's bins contiguously.
+    """
+    for b in range(H):
+        cnt[b] = 0
+        sums[b] = 0.0
+    p = XB.shape[1]
+    for q in range(st, st + n):
+        i = buf[q]
+        r = resid[i]
+        for v in range(p):
+            b = hoff[v] + XB[i, v]
+            cnt[b] += 1
+            sums[b] += r
+
+
+@njit(cache=True)
+def _hist_one(XB, v, buf, st, n, resid, nlen, cnt, sums):
+    """As `_hist_all` for variable v alone, its bins starting at 0."""
+    for b in range(nlen + 1):
+        cnt[b] = 0
+        sums[b] = 0.0
+    for q in range(st, st + n):
+        i = buf[q]
+        b = XB[i, v]
+        cnt[b] += 1
+        sums[b] += resid[i]
+
+
+@njit(cache=True)
+def _split_log_ratios(cnt, sums, off, nlen, n, total, lt_parent, sigma2_t, f_sigma2, out):
+    """Log likelihood ratio of every split of a node on one variable.
+
+    Reads that variable's bins cnt[off:off + nlen + 1] (and sums); out[j] is
+    the ratio of the split at its j-th threshold, -inf when a child would be
+    empty.
+    """
+    n_left = 0
+    s_left = 0.0
+    for j in range(nlen):
+        n_left += cnt[off + j]
+        s_left += sums[off + j]
+        if n_left == 0 or n_left == n:
+            out[j] = -np.inf
+        else:
+            out[j] = (_leaf_term(n_left, s_left, sigma2_t, f_sigma2)
+                      + _leaf_term(n - n_left, total - s_left, sigma2_t, f_sigma2) - lt_parent)
+
+
+@njit(cache=True)
 def _grow_1d(a, size):
     b = np.empty(size, a.dtype)
     b[:a.shape[0]] = a
@@ -71,9 +158,16 @@ def _grow_2d(a, size):
 
 
 @njit(cache=True)
+def _grow_rows(a, size):
+    b = np.empty((size, a.shape[1]), a.dtype)
+    b[:a.shape[0]] = a
+    return b
+
+
+@njit(cache=True)
 def pg_tree_csmc(XT, resid, sigma2_t, f_sigma2, log_alpha, beta, quick_decay,
                  var_cumsum, thr_vals, thr_start, thr_len,
-                 ref_vars, ref_thr, n_particles, max_stages, seed):
+                 ref_vars, ref_thr, n_particles, max_stages, seed, optimal, XB):
     """Draw one tree from the conditional SMC kernel.
 
     Parameters
@@ -99,6 +193,11 @@ def pg_tree_csmc(XT, resid, sigma2_t, f_sigma2, log_alpha, beta, quick_decay,
         Cap on the number of stages; nodes still pending then become leaves.
     seed : int
         Seed of Numba's random stream for this call.
+    optimal : bool
+        Use the one-step optimal proposal instead of the prior.
+    XB : (N, p) int32 array
+        Binned covariates (see the module docstring); may be empty unless
+        optimal.
 
     Returns
     -------
@@ -125,6 +224,16 @@ def pg_tree_csmc(XT, resid, sigma2_t, f_sigma2, log_alpha, beta, quick_decay,
     nd_heap = np.empty(cap_nodes, np.int64)
     nd_depth = np.empty(cap_nodes, np.int64)
     nd_lt = np.empty(cap_nodes, np.float64)
+    nd_sum = np.empty(cap_nodes, np.float64)
+    # First split made of each node (its left child, -1 if none), so that
+    # particles making the same split share the children.
+    nd_kid = np.full(cap_nodes, -1, np.int64)
+    nd_kid_v = np.empty(cap_nodes, np.int64)
+    nd_kid_t = np.empty(cap_nodes, thr_vals.dtype)
+    # Optimal proposal, per node: log Z (nan until computed) and the log
+    # masses of stopping (column 0) and of splitting on each variable.
+    nd_logz = np.full(cap_nodes, np.nan)
+    nd_mass = np.empty((cap_nodes, p + 1), np.float64)
     buf = np.empty(4 * N, np.int32)
     root_sum = 0.0
     for i in range(N):
@@ -136,7 +245,35 @@ def pg_tree_csmc(XT, resid, sigma2_t, f_sigma2, log_alpha, beta, quick_decay,
     nd_heap[0] = 0
     nd_depth[0] = 0
     nd_lt[0] = _leaf_term(N, root_sum, sigma2_t, f_sigma2)
+    nd_sum[0] = root_sum
     n_nodes = 1
+
+    if optimal:
+        if XB.shape[0] != N or XB.shape[1] != p:
+            raise ValueError("optimal proposal needs XB of shape (N, p)")
+        log_s = np.empty(p, np.float64)
+        prev = 0.0
+        for v in range(p):
+            if thr_len[v] == 0:
+                log_s[v] = -np.inf
+            elif var_cumsum.shape[0] == 0:
+                log_s[v] = -math.log(p) - math.log(thr_len[v])
+            else:
+                mass = var_cumsum[v] - prev
+                log_s[v] = (math.log(mass / var_cumsum[-1]) - math.log(thr_len[v])
+                            if mass > 0.0 else -np.inf)
+            if var_cumsum.shape[0] != 0:
+                prev = var_cumsum[v]
+        hoff = np.empty(p, np.int64)
+        H = 0
+        max_len = 1
+        for v in range(p):
+            hoff[v] = H
+            H += thr_len[v] + 1
+            max_len = max(max_len, thr_len[v] + 1)
+        h_cnt = np.empty(H, np.int64)
+        h_sum = np.empty(H, np.float64)
+        ratios = np.empty(max_len, np.float64)
 
     # Particles: their nodes in creation (= breadth-first) order and the
     # decision taken at each (0 pending, 1 leaf, 2 split).
@@ -162,11 +299,71 @@ def pg_tree_csmc(XT, resid, sigma2_t, f_sigma2, log_alpha, beta, quick_decay,
             split = False
             v = 0
             tau = thr_vals[0]
+            if optimal:
+                st = nd_start[node]
+                n = nd_n[node]
+                if np.isnan(nd_logz[node]):
+                    ps = _split_prob(nd_depth[node], log_alpha, beta, quick_decay)
+                    nd_mass[node, 0] = math.log(1.0 - ps) if ps < 1.0 else -np.inf
+                    log_ps = math.log(ps) if ps > 0.0 else -np.inf
+                    if log_ps > -np.inf and n >= 2:
+                        _hist_all(XB, buf, st, n, resid, hoff, H, h_cnt, h_sum)
+                    for vv in range(p):
+                        if log_s[vv] == -np.inf or log_ps == -np.inf or n < 2:
+                            nd_mass[node, vv + 1] = -np.inf
+                            continue
+                        _split_log_ratios(h_cnt, h_sum, hoff[vv], thr_len[vv], n, nd_sum[node],
+                                          nd_lt[node], sigma2_t, f_sigma2, ratios)
+                        nd_mass[node, vv + 1] = log_ps + log_s[vv] + _logsumexp(ratios, thr_len[vv])
+                    nd_logz[node] = _logsumexp(nd_mass[node], p + 1)
+                logz = nd_logz[node]
+                if logz == -np.inf:
+                    if c == 0:
+                        raise ValueError("reference tree has zero proposal mass")
+                    dead[c] = True
+                    logw[c] = -np.inf
+                    continue
+                logw[c] += logz
             if c == 0:
                 if h < L and ref_vars[h] >= 0:
                     split = True
                     v = ref_vars[h]
                     tau = ref_thr[h]
+            elif optimal:
+                # Pick stop or a variable by its mass, then a threshold of it.
+                u = np.random.random()
+                acc = 0.0
+                pick = p
+                for a in range(p + 1):
+                    acc += math.exp(nd_mass[node, a] - logz)
+                    if u < acc:
+                        pick = a
+                        break
+                while pick > 0 and nd_mass[node, pick] == -np.inf:
+                    pick -= 1  # rounding at the top end
+                if pick > 0:
+                    split = True
+                    v = pick - 1
+                    nlen = thr_len[v]
+                    _hist_one(XB, v, buf, st, n, resid, nlen, h_cnt, h_sum)
+                    _split_log_ratios(h_cnt, h_sum, 0, nlen, n, nd_sum[node], nd_lt[node],
+                                      sigma2_t, f_sigma2, ratios)
+                    m = -np.inf
+                    for t in range(nlen):
+                        m = max(m, ratios[t])
+                    tot = 0.0
+                    for t in range(nlen):
+                        tot += math.exp(ratios[t] - m)
+                    u = np.random.random() * tot
+                    acc = 0.0
+                    jj = -1
+                    for t in range(nlen):
+                        if ratios[t] > -np.inf:
+                            jj = t
+                            acc += math.exp(ratios[t] - m)
+                            if u < acc:
+                                break
+                    tau = thr_vals[thr_start[v] + jj]
             elif np.random.random() < _split_prob(nd_depth[node], log_alpha, beta, quick_decay):
                 split = True
                 if var_cumsum.shape[0] == 0:
@@ -178,58 +375,80 @@ def pg_tree_csmc(XT, resid, sigma2_t, f_sigma2, log_alpha, beta, quick_decay,
                 P_state[c, j] = 1
                 continue
 
-            st = nd_start[node]
-            n = nd_n[node]
-            row = XT[v]
-            n_left = 0
-            for q in range(st, st + n):
-                if row[buf[q]] <= tau:
-                    n_left += 1
-            if n_left == 0 or n_left == n:
-                if c == 0:
-                    raise ValueError("reference tree has an empty leaf")
-                dead[c] = True
-                logw[c] = -np.inf
-                continue
+            if nd_kid[node] >= 0 and nd_kid_v[node] == v and nd_kid_t[node] == tau:
+                # Another particle already made this split of this node.
+                left = nd_kid[node]
+                right = left + 1
+            else:
+                st = nd_start[node]
+                n = nd_n[node]
+                row = XT[v]
+                n_left = 0
+                for q in range(st, st + n):
+                    if row[buf[q]] <= tau:
+                        n_left += 1
+                if n_left == 0 or n_left == n:
+                    if c == 0:
+                        raise ValueError("reference tree has an empty leaf")
+                    dead[c] = True
+                    logw[c] = -np.inf
+                    continue
 
-            if buf_top + n > buf.shape[0]:
-                buf = _grow_1d(buf, max(2 * buf.shape[0], buf_top + n))
-            if n_nodes + 2 > cap_nodes:
-                cap_nodes *= 2
-                nd_start = _grow_1d(nd_start, cap_nodes)
-                nd_n = _grow_1d(nd_n, cap_nodes)
-                nd_heap = _grow_1d(nd_heap, cap_nodes)
-                nd_depth = _grow_1d(nd_depth, cap_nodes)
-                nd_lt = _grow_1d(nd_lt, cap_nodes)
-            li = buf_top
-            ri = buf_top + n_left
-            sum_left = 0.0
-            sum_right = 0.0
-            for q in range(st, st + n):
-                i = buf[q]
-                if row[i] <= tau:
-                    buf[li] = i
-                    li += 1
-                    sum_left += resid[i]
-                else:
-                    buf[ri] = i
-                    ri += 1
-                    sum_right += resid[i]
-            left = n_nodes
-            right = n_nodes + 1
-            nd_start[left] = buf_top
-            nd_n[left] = n_left
-            nd_start[right] = buf_top + n_left
-            nd_n[right] = n - n_left
-            buf_top += n
-            nd_heap[left] = 2 * h + 1
-            nd_heap[right] = 2 * h + 2
-            nd_depth[left] = nd_depth[node] + 1
-            nd_depth[right] = nd_depth[node] + 1
-            nd_lt[left] = _leaf_term(n_left, sum_left, sigma2_t, f_sigma2)
-            nd_lt[right] = _leaf_term(n - n_left, sum_right, sigma2_t, f_sigma2)
-            n_nodes += 2
-            logw[c] += nd_lt[left] + nd_lt[right] - nd_lt[node]
+                if buf_top + n > buf.shape[0]:
+                    buf = _grow_1d(buf, max(2 * buf.shape[0], buf_top + n))
+                if n_nodes + 2 > cap_nodes:
+                    cap_nodes *= 2
+                    nd_start = _grow_1d(nd_start, cap_nodes)
+                    nd_n = _grow_1d(nd_n, cap_nodes)
+                    nd_heap = _grow_1d(nd_heap, cap_nodes)
+                    nd_depth = _grow_1d(nd_depth, cap_nodes)
+                    nd_lt = _grow_1d(nd_lt, cap_nodes)
+                    old_cap = nd_logz.shape[0]
+                    nd_sum = _grow_1d(nd_sum, cap_nodes)
+                    nd_kid = _grow_1d(nd_kid, cap_nodes)
+                    nd_kid[old_cap:] = -1
+                    nd_kid_v = _grow_1d(nd_kid_v, cap_nodes)
+                    nd_kid_t = _grow_1d(nd_kid_t, cap_nodes)
+                    nd_logz = _grow_1d(nd_logz, cap_nodes)
+                    nd_logz[old_cap:] = np.nan
+                    nd_mass = _grow_rows(nd_mass, cap_nodes)
+                li = buf_top
+                ri = buf_top + n_left
+                sum_left = 0.0
+                sum_right = 0.0
+                for q in range(st, st + n):
+                    i = buf[q]
+                    if row[i] <= tau:
+                        buf[li] = i
+                        li += 1
+                        sum_left += resid[i]
+                    else:
+                        buf[ri] = i
+                        ri += 1
+                        sum_right += resid[i]
+                left = n_nodes
+                right = n_nodes + 1
+                nd_start[left] = buf_top
+                nd_n[left] = n_left
+                nd_start[right] = buf_top + n_left
+                nd_n[right] = n - n_left
+                buf_top += n
+                nd_heap[left] = 2 * h + 1
+                nd_heap[right] = 2 * h + 2
+                nd_depth[left] = nd_depth[node] + 1
+                nd_depth[right] = nd_depth[node] + 1
+                nd_lt[left] = _leaf_term(n_left, sum_left, sigma2_t, f_sigma2)
+                nd_lt[right] = _leaf_term(n - n_left, sum_right, sigma2_t, f_sigma2)
+                nd_sum[left] = sum_left
+                nd_sum[right] = sum_right
+                n_nodes += 2
+                if nd_kid[node] < 0:
+                    nd_kid[node] = left
+                    nd_kid_v[node] = v
+                    nd_kid_t[node] = tau
+
+            if not optimal:
+                logw[c] += nd_lt[left] + nd_lt[right] - nd_lt[node]
 
             P_state[c, j] = 2
             P_var[c, j] = v

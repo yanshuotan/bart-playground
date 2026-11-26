@@ -27,7 +27,8 @@ from pathlib import Path
 import numpy as np
 
 BETAS = {2: 1.0, 3: 0.5, 4: 0.4, 5: 0.3, 7: 0.25}
-SAMPLERS = ("cgm", "growprune", "pg")
+# pg: bootstrap proposal (2015 paper); pg_opt: one-step optimal proposal (2013 paper).
+SAMPLERS = ("cgm", "growprune", "pg", "pg_opt")
 
 
 def hypercube_data(D: int, seed: int, n_per_vertex: int = 10):
@@ -53,8 +54,9 @@ def make_model(sampler: str, D: int, n_iter: int, seed: int, n_particles: int, g
 
     common = dict(ndpost=n_iter, nskip=0, n_trees=1, tree_alpha=0.95, tree_beta=BETAS[D],
                   random_state=seed)
-    if sampler == "pg":
-        model = PGBART(n_particles=n_particles, **common)
+    if sampler in ("pg", "pg_opt"):
+        model = PGBART(n_particles=n_particles, proposal="optimal" if sampler == "pg_opt" else "prior",
+                       **common)
     else:
         probs = ({"grow": 0.25, "prune": 0.25, "change": 0.4, "swap": 0.1} if sampler == "cgm"
                  else {"grow": 0.5, "prune": 0.5})
@@ -90,7 +92,7 @@ def run_one(task):
     ess = float(az.ess(np.asarray(loglik[half:])[None, :]))
     return {
         "D": D, "data_seed": data_seed, "sampler": sampler, "n_iter": n_iter, "grid": grid,
-        "n_particles": n_particles if sampler == "pg" else None,
+        "n_particles": n_particles if sampler in ("pg", "pg_opt") else None,
         "seconds": seconds, "ess_loglik": ess, "ess_per_second": ess / seconds,
         "loglik": loglik, "leaves": leaves, "sigma2": sigma2, "test_mse": test_mse,
     }

@@ -2027,6 +2027,8 @@ class PGBART(BART):
     BART fitted with the Particle Gibbs sampler of Lakshminarayanan, Roy and
     Teh (2015): every tree is redrawn whole by conditional SMC with
     `n_particles` particles. Same model and prior as DefaultBART.
+    `proposal="optimal"` (default) uses the one-step optimal proposal of their
+    2013 paper, `proposal="prior"` the bootstrap proposal of the 2015 paper.
     """
     preprocessor_class = DefaultPreprocessor
 
@@ -2036,7 +2038,7 @@ class PGBART(BART):
                  random_state=42, temperature=1.0, n_particles: int = 10, max_stages: int = 5000,
                  dirichlet_prior=False, quick_decay: bool = False,
                  s_alpha: float = 1.0, fixed_eps_sigma2: Optional[float] = None,
-                 init_trees=None, init_sigma2=None):
+                 init_trees=None, init_sigma2=None, proposal: str = "optimal"):
         if max_bins is None:
             max_bins = 100
         preprocessor = self.preprocessor_class(max_bins=max_bins)
@@ -2046,7 +2048,8 @@ class PGBART(BART):
                              fixed_eps_sigma2=fixed_eps_sigma2, init_sigma2=init_sigma2)
         temp_schedule = self._check_temperature(temperature)
         sampler = PGSampler(prior=prior, generator=rng, temp_schedule=temp_schedule,
-                            n_particles=n_particles, max_stages=max_stages, init_trees=init_trees)
+                            n_particles=n_particles, max_stages=max_stages, init_trees=init_trees,
+                            proposal=proposal)
         super().__init__(preprocessor, sampler, ndpost, nskip)
 
     def get_params(self) -> Dict[str, Any]:
@@ -2066,6 +2069,7 @@ class PGBART(BART):
             "quick_decay": self.sampler.tree_prior.quick_decay,
             "n_particles": self.sampler.n_particles,
             "max_stages": self.sampler.max_stages,
+            "proposal": self.sampler.proposal,
             "fixed_eps_sigma2": self.sampler.prior.global_prior.fixed_eps_sigma2
         }
 

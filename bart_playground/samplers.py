@@ -593,6 +593,11 @@ class PGSampler(DefaultSampler):
     leaf values are then drawn from their conditional, and the sweep ends with
     the Default update of the global parameters. It targets the same posterior
     as `DefaultSampler`.
+
+    `proposal` picks how a particle decides a node: "optimal" draws the
+    decision from its conditional given the residual (the one-step optimal
+    proposal of Lakshminarayanan, Roy and Teh, 2013), "prior" from the tree
+    prior (the bootstrap proposal of the 2015 paper).
     """
     def __init__(
         self,
@@ -602,14 +607,18 @@ class PGSampler(DefaultSampler):
         n_particles: int = 10,
         max_stages: int = 5000,
         init_trees: Optional[list[Tree]] = None,
+        proposal: str = "optimal",
     ):
         if n_particles < 1:
             raise ValueError("n_particles must be at least 1")
+        if proposal not in ("optimal", "prior"):
+            raise ValueError("proposal must be 'optimal' or 'prior'")
         # The single "pg" entry keeps the move statistics: selected counts
         # tree updates, accepted counts those that changed the tree.
         super().__init__(prior, {"pg": 1.0}, generator, temp_schedule, tol=1, init_trees=init_trees)
         self.n_particles = int(n_particles)
         self.max_stages = int(max_stages)
+        self.proposal = proposal
         # Every sweep redraws the leaves of every tree, so every tree gets a new
         # `evals` array; keeping them in the trace costs n_trees * N floats per
         # stored state (15 GB for 10^4 draws of Superconduct).
@@ -630,6 +639,19 @@ class PGSampler(DefaultSampler):
         self._thr_start = np.zeros(len(grids), dtype=np.int64)
         np.cumsum(self._thr_len[:-1], out=self._thr_start[1:])
         self._thr_vals = np.concatenate(grids)
+        # XB[i, v]: first grid index j with X[i, v] <= grid_v[j], so row i
+        # goes left of threshold j exactly when XB[i, v] <= j. Repeated
+        # thresholds are allowed. Row-major, so one pass over a node's rows
+        # bins every variable.
+        if self.proposal == "optimal":
+            for g in grids:
+                if np.any(np.diff(g) < 0):
+                    raise ValueError("threshold grids must be sorted")
+            self._XB = np.ascontiguousarray(np.stack(
+                [np.searchsorted(g, self._XT[v], side="left") for v, g in enumerate(grids)], axis=1
+            ).astype(np.int32))
+        else:
+            self._XB = np.empty((0, 0), dtype=np.int32)
 
     def one_iter(self, current, temp, return_trace=False):
         """
@@ -653,6 +675,7 @@ class PGSampler(DefaultSampler):
                 var_cumsum, self._thr_vals, self._thr_start, self._thr_len,
                 old.vars.astype(np.int64), old.thresholds.astype(self._thr_vals.dtype),
                 self.n_particles, self.max_stages, int(self.generator.integers(0, 2**31 - 1)),
+                self.proposal == "optimal", self._XB,
             )
             # Keep the old tree's outputs as `evals`, so update_leaf_vals
             # moves the forest cache by the difference.

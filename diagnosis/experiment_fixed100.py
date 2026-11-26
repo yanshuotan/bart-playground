@@ -27,7 +27,9 @@ GLOBAL_BASE_CHAIN_SEED = 2024
 
 METHODS_SHORT = ["default", "default_pt", "mtmh", "mtmh_pt"]
 # Fitted only when asked for by name; not part of the paper's four-method runs.
-METHODS_EXTRA = ["pg"]
+# pg: Particle Gibbs with the bootstrap (prior) proposal of the 2015 paper;
+# pg_opt: the same with the one-step optimal proposal of the 2013 paper.
+METHODS_EXTRA = ["pg", "pg_opt"]
 METHODS_ALL = ["default", "default_pt", "mtmh", "mtmh_pt", "default_long"]
 
 
@@ -480,12 +482,13 @@ def run_short_method(
             **pt,
             **common,
         )
-    elif method == "pg":
+    elif method in ("pg", "pg_opt"):
         pg_common = {k: v for k, v in common.items() if k != "tol"}
         model = PGBART(
             tree_alpha=tree_alpha,
             tree_beta=tree_beta,
             n_particles=pg_particles,
+            proposal="optimal" if method == "pg_opt" else "prior",
             **pg_common,
         )
     else:
@@ -495,7 +498,7 @@ def run_short_method(
     fit_seconds = time.perf_counter() - fit_start
     result = summarize_model_outputs(model, X_test_fixed, y_test_fixed, store_preds=store_preds)
     result["fit_seconds"] = np.array([fit_seconds])
-    if method == "pg":
+    if method in ("pg", "pg_opt"):
         # Trees whose structure changed in each sweep, out of n_trees.
         result["tree_changes"] = np.asarray(model.sampler.changed_per_iter[nskip:], dtype=float)
     del model

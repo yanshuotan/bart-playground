@@ -68,12 +68,13 @@ def _common_arguments(parser):
                              "the same draws.")
     parser.add_argument(
         "--short-methods", nargs="+",
-        choices=("default", "default_pt", "mtmh", "mtmh_pt", "pg"), default=None,
+        choices=("default", "default_pt", "mtmh", "mtmh_pt", "pg", "pg_opt"), default=None,
         help="Short-chain methods to fit; each is seeded on its own, so a subset "
              "matches what a full run would have produced for those methods. "
-             "Particle Gibbs (pg) runs only when named.")
+             "Particle Gibbs runs only when named: pg with the bootstrap "
+             "proposal, pg_opt with the one-step optimal proposal.")
     parser.add_argument("--pg-particles", type=int, default=10,
-                        help="Particles per conditional SMC tree update of the pg method.")
+                        help="Particles per conditional SMC tree update of the pg methods.")
     parser.add_argument("--ladder-tmax", type=float, default=100.0)
     parser.add_argument("--ladder-init-size", type=int, default=10)
     parser.add_argument("--ladder-max-temperatures", type=int, default=60, help="Cap on the ladder size (default 60, the most a 64-core node can time with one worker per temperature; every ladder before the cap was added had at most 60); 0 leaves it uncapped.")

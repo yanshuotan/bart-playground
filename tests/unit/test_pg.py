@@ -1,6 +1,8 @@
 import math
 from functools import lru_cache
 
+import pytest
+
 import numpy as np
 from bart_playground import PGBART
 from bart_playground.params import Tree
@@ -64,15 +66,17 @@ def _exact_leaf_count_posterior(X, y, thresholds, f_sigma2):
     return {k: w / total for k, w in d.items()}
 
 
-def test_single_particle_returns_reference():
+@pytest.mark.parametrize("proposal", ["prior", "optimal"])
+def test_single_particle_returns_reference(proposal):
     X, y, thresholds = _toy_problem()
-    sampler = _sampler(PGSampler, X, y, thresholds, seed=0, n_particles=1)
+    sampler = _sampler(PGSampler, X, y, thresholds, seed=0, n_particles=1, proposal=proposal)
     tree = Tree.new(X)
     tree.split_leaf(0, 0, np.float32(thresholds[0][1]))
     out = pg_tree_csmc(
         sampler._XT, y, SIGMA2, 0.0625, math.log(ALPHA), BETA, False,
         np.empty(0), sampler._thr_vals, sampler._thr_start, sampler._thr_len,
         tree.vars.astype(np.int64), tree.thresholds.astype(np.float32), 1, 5000, 1,
+        proposal == "optimal", sampler._XB,
     )
     vars_, thr, n, leaf_ids, selected, changed, _ = out
     assert selected == 0 and not changed
@@ -81,9 +85,13 @@ def test_single_particle_returns_reference():
     np.testing.assert_array_equal(leaf_ids, tree.leaf_ids)
 
 
-def test_pg_matches_exact_tree_posterior():
+@pytest.mark.parametrize("proposal,repeat", [("prior", False), ("optimal", False), ("optimal", True)])
+def test_pg_matches_exact_tree_posterior(proposal, repeat):
     X, y, thresholds = _toy_problem()
-    sampler = _sampler(PGSampler, X, y, thresholds, seed=11, n_particles=5)
+    if repeat:
+        # A repeated threshold, as quantile grids of discrete columns have.
+        thresholds = {v: np.sort(np.append(g, g[1])) for v, g in thresholds.items()}
+    sampler = _sampler(PGSampler, X, y, thresholds, seed=11, n_particles=5, proposal=proposal)
     exact = _exact_leaf_count_posterior(X, y, thresholds, sampler.tree_prior.f_sigma2)
     trace = sampler.run(20000, quietly=True)
     counts = np.bincount([t.trees[0].n_leaves for t in trace[1000:]], minlength=max(exact) + 1)
@@ -93,11 +101,12 @@ def test_pg_matches_exact_tree_posterior():
     assert counts[max(exact) + 1:].sum() == 0
 
 
-def test_pg_tree_caches_match_rebuilt_tree():
+@pytest.mark.parametrize("proposal", ["prior", "optimal"])
+def test_pg_tree_caches_match_rebuilt_tree(proposal):
     rng = np.random.default_rng(0)
     X = rng.uniform(size=(300, 4))
     y = X[:, 0] * 3 + np.sin(6 * X[:, 1]) + 0.1 * rng.standard_normal(300)
-    model = PGBART(ndpost=20, nskip=5, n_trees=10, random_state=0, n_particles=6)
+    model = PGBART(ndpost=20, nskip=5, n_trees=10, random_state=0, n_particles=6, proposal=proposal)
     model.fit(X, y, quietly=True)
     state = model.trace[-1]
     total = np.zeros(X.shape[0], dtype=np.float32)
@@ -115,3 +124,30 @@ def test_pg_tree_caches_match_rebuilt_tree():
     assert model.sampler.move_accepted_counts["pg"] > 0
     preds = model.predict(X)
     assert np.corrcoef(preds, y)[0, 1] > 0.9
+
+
+def test_optimal_proposal_masses_match_enumeration():
+    """At the root, the per-variable masses and Z equal a direct enumeration."""
+    from bart_playground.pg_kernels import _hist_one, _split_log_ratios, _logsumexp
+    X, y, thresholds = _toy_problem()
+    sampler = _sampler(PGSampler, X, y, thresholds, seed=0, n_particles=2)
+    f_sigma2 = 0.0625
+    resid = y.astype(np.float64)
+    N = len(y)
+    buf = np.arange(N, dtype=np.int32)
+    lt = _leaf_term(N, resid.sum(), SIGMA2, f_sigma2)
+    cnt = np.empty(8, np.int64); sums = np.empty(8); out = np.empty(8)
+    for v in range(X.shape[1]):
+        nlen = int(sampler._thr_len[v])
+        _hist_one(sampler._XB, v, buf, 0, N, resid, nlen, cnt, sums)
+        _split_log_ratios(cnt, sums, 0, nlen, N, resid.sum(), lt, SIGMA2, f_sigma2, out)
+        grid = sampler._thr_vals[sampler._thr_start[v]:sampler._thr_start[v] + nlen]
+        for j, tau in enumerate(grid):
+            go_left = X[:, v] <= tau
+            if go_left.all() or not go_left.any():
+                assert out[j] == -np.inf
+                continue
+            direct = (_leaf_term(go_left.sum(), resid[go_left].sum(), SIGMA2, f_sigma2)
+                      + _leaf_term((~go_left).sum(), resid[~go_left].sum(), SIGMA2, f_sigma2) - lt)
+            assert math.isclose(out[j], direct, rel_tol=1e-10, abs_tol=1e-10)
+        assert np.isfinite(_logsumexp(out, nlen))
