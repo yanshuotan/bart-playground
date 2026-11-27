@@ -76,25 +76,25 @@ Table~\ref{tab:main} uses the last 7000 draws of each chain.
 \small
 \begin{tabular}{llcccccc}
 \toprule
- & & Default & Default+PT & MTMH & MTMH+PT & PG & PG-opt \
+ & & Default & Default+PT & MTMH & MTMH+PT & PG & PG-opt \\
 \midrule
-Abalone & $\hat R$ median & 1.097 & 1.029 & 1.031 & 1.013 & 1.034 & \textbf{1.005} \
- & $\hat R$ 90\% & 1.248 & 1.071 & 1.087 & 1.035 & 1.092 & \textbf{1.016} \
- & between/within & 0.139 & 0.046 & 0.048 & 0.016 & 0.052 & \textbf{0.007} \
- & test RMSE & 1.976 & 1.964 & 1.956 & 1.956 & 1.966 & 1.954 \
- & cost / Default & 1 & & & & 3.9 & 9.6 \
+Abalone & $\hat R$ median & 1.097 & 1.029 & 1.031 & 1.013 & 1.034 & \textbf{1.005} \\
+ & $\hat R$ 90\% & 1.248 & 1.071 & 1.087 & 1.035 & 1.092 & \textbf{1.016} \\
+ & between/within & 0.139 & 0.046 & 0.048 & 0.016 & 0.052 & \textbf{0.007} \\
+ & test RMSE & 1.976 & 1.964 & 1.956 & 1.956 & 1.966 & 1.954 \\
+ & cost / Default & 1 & & & & 3.9 & 9.6 \\
 \midrule
-SeoulBike & $\hat R$ median & 1.466 & \textbf{1.220} & 1.415 & 1.278 & 1.412 & 1.377 \
- & $\hat R$ 90\% & 1.913 & \textbf{1.462} & 1.842 & 1.570 & 1.896 & 1.857 \
- & between/within & 1.10 & \textbf{0.37} & 1.20 & 0.68 & 1.35 & 1.57 \
- & test RMSE & 233.5 & 233.1 & 245.2 & 248.0 & 248.2 & 267.4 \
- & cost / Default & 1 & & & & 4.6 & 16.0 \
+SeoulBike & $\hat R$ median & 1.466 & \textbf{1.220} & 1.415 & 1.278 & 1.412 & 1.377 \\
+ & $\hat R$ 90\% & 1.913 & \textbf{1.462} & 1.842 & 1.570 & 1.896 & 1.857 \\
+ & between/within & 1.10 & \textbf{0.37} & 1.20 & 0.68 & 1.35 & 1.57 \\
+ & test RMSE & 233.5 & 233.1 & 245.2 & 248.0 & 248.2 & 267.4 \\
+ & cost / Default & 1 & & & & 4.6 & 16.0 \\
 \midrule
-Friedman & $\hat R$ median & 1.233 & 1.052 & 1.108 & 1.028 & 1.108 & \textbf{1.026} \
- & $\hat R$ 90\% & 1.482 & 1.100 & 1.254 & \textbf{1.058} & 1.231 & 1.065 \
- & between/within & 0.345 & 0.061 & 0.146 & \textbf{0.032} & 0.162 & 0.033 \
- & test RMSE & 1.143 & 1.120 & 1.141 & 1.128 & 1.134 & 1.132 \
- & cost / Default & 1 & & & & 3.3 & 9.2 \
+Friedman & $\hat R$ median & 1.233 & 1.052 & 1.108 & 1.028 & 1.108 & \textbf{1.026} \\
+ & $\hat R$ 90\% & 1.482 & 1.100 & 1.254 & \textbf{1.058} & 1.231 & 1.065 \\
+ & between/within & 0.345 & 0.061 & 0.146 & \textbf{0.032} & 0.162 & 0.033 \\
+ & test RMSE & 1.143 & 1.120 & 1.141 & 1.128 & 1.134 & 1.132 \\
+ & cost / Default & 1 & & & & 3.3 & 9.2 \\
 \bottomrule
 \end{tabular}
 \caption{Means over 5 runs. $\hat R$ is the rank-normalised split $\hat R$ of the 100 test predictions. Between/within is the ratio of between-chain to within-chain spread of the prediction vector. Cost is fit time per chain relative to Default.}
