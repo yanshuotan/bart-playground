@@ -2,12 +2,15 @@
 """Particle Gibbs with the optimal proposal against bootstrap PG and the paper's methods.
 
 Reads the paper store (default, default_pt, mtmh, mtmh_pt, default_long) and
-the store of the pg_opt trial, which holds default, pg and pg_opt fitted on
-the same node. The Default draws there must equal the paper store's; Default's
-fit time is the cost baseline. Chain statistics are those of section 7, on the
-same post-burn draws.
+the stores of the PG runs, which hold default refitted in the same job as pg
+or pg_opt. The Default draws there must equal the paper store's; that
+Default's fit time is the cost baseline. Chain statistics are those of
+section 7, on the same post-burn draws.
 
-    python diagnosis/pg/compare_pg_opt.py --opt-store /scratch/$USER/bart_store_pgopt
+    python diagnosis/pg/compare_pg_opt.py --opt-store /scratch/$USER/bart_store_pgopt \
+        --extra pg=/scratch/$USER/bart_store_pg
+
+Each --extra METHOD=STORE adds a store to search for METHOD after --opt-store.
 """
 from __future__ import annotations
 
@@ -36,7 +39,7 @@ PG = ("pg", "pg_opt")
 NAMES = {"default": "Default", "default_pt": "Default+PT", "mtmh": "MTMH", "mtmh_pt": "MTMH+PT",
          "pg": "PG", "pg_opt": "PG-opt"}
 COLORS = {"default": "#1b9e77", "pg": "#7570b3", "pg_opt": "#000000"}
-DATASETS = ("fixed100_Abalone", "fixed100_SeoulBike")
+DATASETS = ("fixed100_Abalone", "fixed100_SeoulBike", "fixed100_Friedman")
 
 
 def stored(store: Path, dataset: str, run: int, method: str, kind: str) -> np.ndarray:
@@ -44,6 +47,14 @@ def stored(store: Path, dataset: str, run: int, method: str, kind: str) -> np.nd
     if not hits:
         raise FileNotFoundError(f"no {kind} for {method} in {store / dataset} run {run}")
     return load_with_shape(hits[0])
+
+
+def locate(args, dataset: str, run: int, method: str) -> Path:
+    """The first of the method's stores that holds this run."""
+    for store in args.stores.get(method, [args.store_root]):
+        if any((store / dataset / "preds").glob(f"*__run{run:03d}__{method}__preds.csv")):
+            return store
+    raise FileNotFoundError(f"no store holds {method} for {dataset} run {run}")
 
 
 def predictions(store: Path, dataset: str, run: int, method: str, burn: int = 0) -> np.ndarray:
@@ -75,20 +86,28 @@ def run_inputs(args, dataset: str, run: int):
     return truth, predictive_baselines(train, truth), float(np.max(train) - np.min(train))
 
 
-def timing_row(args, dataset: str, run: int) -> dict:
-    sec = {m: float(stored(args.opt_store, dataset, run, m, "fit_seconds").mean())
-           for m in ("default", *PG)}
-    same = (np.array_equal(residual_variances(args.opt_store, dataset, run, "default"),
+def seconds(store: Path, dataset: str, run: int, method: str) -> float:
+    return float(stored(store, dataset, run, method, "fit_seconds").mean())
+
+
+def default_matches_paper(args, store: Path, dataset: str, run: int) -> bool:
+    return (np.array_equal(residual_variances(store, dataset, run, "default"),
                            residual_variances(args.store_root, dataset, run, "default"))
-            and np.array_equal(predictions(args.opt_store, dataset, run, "default"),
+            and np.array_equal(predictions(store, dataset, run, "default"),
                                predictions(args.store_root, dataset, run, "default")))
-    row = {"dataset": dataset, "run": run, "default_identical_to_store": bool(same)}
+
+
+def timing_row(args, dataset: str, run: int) -> dict:
+    """Each PG variant's cost against the Default fitted in the same job."""
+    row = {"dataset": dataset, "run": run}
     for m in PG:
-        changes = stored(args.opt_store, dataset, run, m, "tree_changes")[:, args.short_burn:]
-        row[f"{m}_seconds"] = sec[m]
-        row[f"{m}_cost_ratio"] = sec[m] / sec["default"]
+        store = locate(args, dataset, run, m)
+        changes = stored(store, dataset, run, m, "tree_changes")[:, args.short_burn:]
+        row[f"{m}_seconds"] = seconds(store, dataset, run, m)
+        row[f"{m}_default_seconds"] = seconds(store, dataset, run, "default")
+        row[f"{m}_cost_ratio"] = row[f"{m}_seconds"] / row[f"{m}_default_seconds"]
         row[f"{m}_trees_changed"] = float(changes.mean())
-    row["default_seconds"] = sec["default"]
+        row[f"{m}_default_identical_to_store"] = default_matches_paper(args, store, dataset, run)
     return row
 
 
@@ -101,7 +120,7 @@ def sigma2_figure(args, path: Path):
         lo, hi = (long.mean() - long.std()) * 1e3, (long.mean() + long.std()) * 1e3
         top = hi + 10 * (hi - lo)
         for m in ("default", *PG):
-            trace = residual_variances(args.opt_store, dataset, 0, m).mean(axis=0)
+            trace = residual_variances(locate(args, dataset, 0, m), dataset, 0, m).mean(axis=0)
             values = [trace[a - 1:b].mean() * 1e3 for a, b in zip(edges[:-1], edges[1:])]
             # Show every curve from iteration 10 on.
             top = max(top, max(v for x, v in zip(centers, values) if x >= 10))
@@ -130,7 +149,13 @@ def main() -> int:
     parser.add_argument("--long-burn", type=int, default=3000)
     parser.add_argument("--ridge-fraction", type=float, default=1e-8)
     parser.add_argument("--dpi", type=int, default=200)
+    parser.add_argument("--extra", nargs="*", default=[], metavar="METHOD=STORE",
+                        help="A further store to search for pg or pg_opt.")
     args = parser.parse_args()
+    args.stores = {m: [args.opt_store] for m in PG}
+    for item in args.extra:
+        method, path = item.split("=", 1)
+        args.stores[method].append(Path(path))
     args.out.mkdir(parents=True, exist_ok=True)
 
     rows, timing = [], []
@@ -138,7 +163,7 @@ def main() -> int:
         for run in args.runs:
             inputs = run_inputs(args, dataset, run)
             for method in (*PAPER, *PG):
-                store = args.opt_store if method in PG else args.store_root
+                store = locate(args, dataset, run, method)
                 rows.append({"dataset": dataset, "run": run, "method": NAMES[method],
                              **chain_stats(args, store, dataset, run, method, *inputs)})
             timing.append(timing_row(args, dataset, run))
